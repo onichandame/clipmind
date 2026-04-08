@@ -1,12 +1,17 @@
+import { redirect } from "react-router";
 import type { Route } from "./+types/home";
+import { db } from "../db/client";
+import { projects } from "../db/schema";
 
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "ClipMind Stage 1" },
-    { name: "description", content: "ClipMind Stage 1 — Data Pipeline Active" },
-  ];
+export async function loader() {
+  const projectId = crypto.randomUUID();
+  await db.insert(projects).values({ id: projectId, title: "Untitled Project" });
+  return redirect(`/projects/${projectId}`);
 }
 
-export default function Home() {
-  return <div>ClipMind Stage 1 — Data Pipeline Active</div>;
+export function meta() {
+  return [
+    { title: "Redirecting..." },
+    { name: "description", content: "Creating new project..." },
+  ];
 }
