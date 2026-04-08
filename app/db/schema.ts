@@ -12,3 +12,11 @@ export const projectOutlines = mysqlTable('project_outlines', {
   contentMd: text('content_md').notNull(),
   version: int('version').notNull().default(1),
 });
+
+export const basketItems = mysqlTable('basket_items', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  projectId: varchar('project_id', { length: 36 }).notNull(),
+  assetChunkId: varchar('asset_chunk_id', { length: 36 }).notNull(),
+  sortRank: varchar('sort_rank', { length: 255 }).notNull(),
+  addedAt: timestamp('added_at').defaultNow().notNull(),
+});
