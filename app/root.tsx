@@ -29,8 +29,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+import { GlobalSidebar } from "./components/GlobalSidebar";
+
 export default function App() {
-  return <Outlet />;
+  return (
+    <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-200 font-sans tracking-wide">
+      <GlobalSidebar />
+      <div className="flex-1 min-w-0 h-full relative">
+        <Outlet />
+      </div>
+    </div>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
