@@ -3,3 +3,7 @@ node_modules
 build
 .react-router
 .DS_Store
+.sisyphus/
+plan/
+*.docx
+AGENTS.md
