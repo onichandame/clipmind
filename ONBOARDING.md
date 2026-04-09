@@ -83,6 +83,18 @@ _注：提醒用户在返回包含敏感信息（如 `.env`）的日志时，主
 
 ---
 
+### 4. 复杂卡片与列表的“整块点击”最佳实践 (Full-card/Row Clickability)
+
+在实现复杂的列表项或卡片（如包含多个操作按钮的 `ProjectCard` 或 `TableRow`）时，极易陷入层叠上下文 (Stacking Context) 和事件冒泡的坑：
+
+1. **绝对禁止 `<a>` 标签嵌套陷阱**：不要使用 `<Link>` 或 `<a>` 铺满底层，然后用 `z-index: 10` 的文字覆盖其上。这会导致文字层阻断鼠标事件 (`Pointer Events`)，造成“只有点边缘空隙才能跳转”的恶劣体验。如果强行对文字层使用 `pointer-events-none`，又会导致内部独立按钮无法点击。
+2. **编程式导航 (Programmatic Navigation) 为王**：彻底放弃用 `<a>` 包裹整个卡片。正确的做法是：
+   - 给最外层的 `<div>` 或 `<tr>` 加上 `cursor-pointer`，并绑定 `onClick={() => navigate('/path')}`。
+   - 这不仅让 HTML 结构极其干净，也彻底消灭了多层 `z-index` 带来的历史包袱。
+3. **精准的事件阻断 (Stop Propagation)**：对于卡片内部的独立操作按钮（如“删除”图标），必须在其 `onClick` 事件中调用 `e.stopPropagation()`。这是防止点击内部按钮时意外触发外层卡片跳转的唯一且最优雅的手段。
+4. **显式手型反馈**：对于所有用图标模拟的按钮 (IconButton)，务必显式加上 `cursor-pointer`，因为很多 CSS 框架在特定层叠下会丢失原生的按钮手型。
+
+
 ## 📦 第四阶段：版本控制与收尾 (Git Discipline)
 
 每一个功能闭环（Stage 验收通过）后，必须指导用户进行干净的 Git 提交。
