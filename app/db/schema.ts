@@ -32,19 +32,37 @@ export const projects = mysqlTable('projects', {
   id: varchar('id', { length: 36 }).primaryKey(),
   title: varchar('title', { length: 255 }).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().onUpdateNow().notNull(), // 用于 Dashboard 排序
 });
 
 export const projectOutlines = mysqlTable('project_outlines', {
   id: varchar('id', { length: 36 }).primaryKey(),
-  projectId: varchar('project_id', { length: 36 }).notNull().unique(),
+  projectId: varchar('project_id', { length: 36 })
+    .notNull()
+    .unique()
+    .references(() => projects.id, { onDelete: 'cascade' }), // 级联删除
   contentMd: text('content_md').notNull(),
-  version: int('version').notNull().default(1), // 乐观锁版本号
+  version: int('version').notNull().default(1),
+});
+
+export const projectMessages = mysqlTable('project_messages', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  projectId: varchar('project_id', { length: 36 })
+    .notNull()
+    .references(() => projects.id, { onDelete: 'cascade' }), // 级联删除
+  role: varchar('role', { length: 20 }).notNull(), // 'user' | 'assistant'
+  content: text('content').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
 export const basketItems = mysqlTable('basket_items', {
   id: varchar('id', { length: 36 }).primaryKey(),
-  projectId: varchar('project_id', { length: 36 }).notNull(),
-  assetChunkId: varchar('asset_chunk_id', { length: 36 }).notNull(),
-  sortRank: varchar('sort_rank', { length: 255 }).notNull(), // LexoRank 排序算法，防拖拽抖动
+  projectId: varchar('project_id', { length: 36 })
+    .notNull()
+    .references(() => projects.id, { onDelete: 'cascade' }), // 级联删除
+  assetChunkId: varchar('asset_chunk_id', { length: 36 })
+    .notNull()
+    .references(() => assetChunks.id, { onDelete: 'cascade' }), // 素材删了，篮子也清
+  sortRank: varchar('sort_rank', { length: 255 }).notNull(),
   addedAt: timestamp('added_at').defaultNow().notNull(),
 });
