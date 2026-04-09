@@ -57,32 +57,29 @@ _注：提醒用户在返回包含敏感信息（如 `.env`）的日志时，主
 
 ## 🐛 第三阶段：调试与避坑经验 (Lessons Learned)
 
-### 1. 核心逻辑排错
+### 1. Vercel AI SDK & React Router v7 状态联调防坑指南 (Critical)
 
-1. **索要完整报错**：让用户提供完整的终端 Stack Trace 或浏览器的 Console 报错。
-2. **警惕版本幻觉 (Critical)**：
-   - 前期我们在集成 **Vercel AI SDK** 时踩过大坑。请务必核实当前的库版本。
-   - **切记**：AI SDK v5 已经废弃了 `convertToCoreMessages`、`stopWhen` 和 `toDataStreamResponse`。必须使用最新的 `convertToModelMessages`、`maxSteps: 5` 和 `toUIMessageStreamResponse()`。
-   - 永远不要用你记忆中旧版本的 API 盲猜报错原因，遇到新库报错，去思考当前最新的用法。
-3. **提供具体的验证手段**：
-   - 修复后，告诉用户具体的验证动作（例如：“刷新页面，输入 X，观察 Y 处是否出现 Z”）。
+在实现持久化历史对话时，极易掉进“数据丢失”的幻觉中，请牢记以下三点：
+
+1. **破除 useChat SPA 缓存锁**：`useChat` 默认使用 `"chat"` 作为全局缓存 ID。在 SPA（如 RRv7）中切换项目时，如果不传入 `id: projectId` 强绑定作用域，它会固执地复用上一个空缓存，直接无视你传入的 `initialMessages`。
+2. **强制状态同步 (setMessages)**：`initialMessages` 仅在缓存首次创建时生效。为了抵御 Vite 热更新 (HMR) 或是路由软跳转带来的缓存污染，**必须通过 `useEffect` 监听服务端数据变化，并调用 `setMessages` 强行把数据库数据灌进 UI 中**，这绝不是 Hack，而是官方生态下的最佳实践。
+3. **警惕静默丢弃与 Payload 碎片化**：
+   - 传给 `initialMessages` 的对象，**`content` 字段是必填项 (Required)**，哪怕你用了 `parts` 渲染，如果没有 `content` 字符串，AI SDK 会直接静默丢弃这条记录！
+   - 后端在拦截对话存库时，千万不要相信 `lastMessage.content` 总是存在，它可能被 SDK 碎片化为 `text` 字段或嵌在 `parts[0].text` 中，必须做防御性抓取。
+4. **RRv7 Loader 截断问题**：在 Route 组件接收数据时，绝对**禁止使用旧版的 Props 解构 `export default function Component({ loaderData })`**，这会导致新加入的深层字段（如历史记录数组）在序列化时被丢弃。永远使用标准的 `const loaderData = useLoaderData<typeof loader>();`。
 
 ### 2. UI 重构与视觉升级经验 (Pure UI Refactoring)
 
-当你接到“纯 UI 优化”的任务时，请遵循以下血泪经验：
-
-1. **逻辑与视图绝对隔离 (Separation of Concerns)**：在美化组件时，绝对不要触碰已验证的核心业务逻辑（如 `useChat` 状态机、工具调用回调、全局 Store）。你的改动应该仅限于 Tailwind CSS 类名的调整和 HTML DOM 结构的优化。
-2. **敏捷视觉交付 (Incremental Visuals)**：不要一次性抛出多个组件的重构代码。按视觉区块拆解（如：全局 Layout -> 左侧 Chat -> 右侧 Canvas -> 悬浮组件），每交付一个文件，强制要求人类“刷新页面验收”，确认视觉无误后再推进下一步。
-3. **深色模式优先 (Dark Mode First)**：在构建 SaaS 级后台或创作者工具时，系统默认契合深色主题审美。优先采用 `bg-zinc-950` 等深灰/纯黑阶作为基调，摒弃生硬的边框线，多用毛玻璃 (`backdrop-blur`) 和克制的品牌高亮色，能用极低的成本拉升产品的次世代质感。
+1. **逻辑与视图绝对隔离 (Separation of Concerns)**：在美化组件时，绝对不要触碰已验证的核心业务逻辑。你的改动应该仅限于 Tailwind CSS 类名的调整和 HTML DOM 结构的优化。
+2. **敏捷视觉交付 (Incremental Visuals)**：不要一次性抛出多个组件的重构代码。按视觉区块拆解，每交付一个文件，强制要求人类“刷新页面验收”，确认视觉无误后再推进下一步。
+3. **深色模式优先 (Dark Mode First)**：优先采用 `bg-zinc-950` 等深灰/纯黑阶作为基调，摒弃生硬的边框线，多用毛玻璃 (`backdrop-blur`) 和克制的品牌高亮色。
 
 ### 3. 客户端直传与 OSS 联调血泪史 (Client-side Uploads & OSS)
 
-**极度重要：永远不要盲目相信前端上传成功的假象，查网络日志和 OSS 探针才是真理！**
-
-1. **CORS 预检 (Preflight) 陷阱**：前端使用 `PUT` 直传并携带 `Content-Type` 时，必定触发非简单请求的 `OPTIONS` 预检。阿里云 OSS 的 CORS 配置中，**允许 Headers (Allowed Headers) 必须明确设为 `*`**，留空必定导致预检被 403 掐死。
-2. **HTTPS 强制降级拦截**：`ali-oss` SDK 默认签发 `http://` 链接。现代浏览器极其注重隐私，会拦截向 HTTP 协议直传大文件的行为（报 HTTPS-Only Mode 警告并掐断回调）。必须在后端 OSS Client 初始化时硬编码 `secure: true`。
-3. **签名防伪不匹配 (SignatureDoesNotMatch)**：如果前端 `fetch` 获取临时签名时不上报准确的视频类型，而后端盲目生成通用签名，一旦前端拿这把“通用钥匙”去开带 `Content-Type: video/quicktime` 的锁，必定被 OSS 拦截并报 403。前后端的 Content-Type 必须纳入签名加密公式，绝对统一。
-4. **ORM 字段对齐检查**：不要信任直觉。在将数据落盘到前任遗留的数据库表时，务必先用命令探查 Schema 定义（如确认前任叫 `ossUrl` 而不是 `objectKey`），否则必然触发 `ER_NO_DEFAULT_FOR_FIELD` 的 500 报错。
+1. **CORS 预检 (Preflight) 陷阱**：前端使用 `PUT` 直传时，阿里云 OSS 的 CORS 配置中，**允许 Headers (Allowed Headers) 必须明确设为 `*`**。
+2. **HTTPS 强制降级拦截**：`ali-oss` SDK 默认签发 `http://` 链接，必须在后端初始化时硬编码 `secure: true`。
+3. **签名防伪不匹配 (SignatureDoesNotMatch)**：前后端的 Content-Type 必须纳入签名加密公式，绝对统一。
+4. **ORM 字段对齐检查**：存盘前务必核对真实的 Schema 字段名，否则必抛 `ER_NO_DEFAULT_FOR_FIELD`。
 
 ---
 
@@ -90,33 +87,15 @@ _注：提醒用户在返回包含敏感信息（如 `.env`）的日志时，主
 
 每一个功能闭环（Stage 验收通过）后，必须指导用户进行干净的 Git 提交。
 
-1. **排雷**：先让用户执行 `git status`，甄别哪些是此次任务的文件，哪些是不小心修改/未追踪的无关文档（如本地 PRD、`.docx`、设计图等）。
-2. **精准暂存**：**坚决杜绝让用户执行 `git add .`**，除非你百分百确认目录是干净的。请给出具体的命令：
-
-   ```bash
-   git add app/components/XXX.tsx
-   git add app/routes/XXX.ts
-   ```
-
-3. **写好 Commit Message**：提供格式规范、包含上下文的提交信息，直接让用户复制执行：
-
-   ```bash
-   git commit -m "feat(module): 🚀 finish stage X" -m "- implemented feature A\n- fixed issue B"
-   ```
-
-4. **教导撤销**：如果用户误 add 或误 commit，提供 `git reset HEAD~1` 或 `git restore --staged <file>` 的补救方案，安抚情绪。
-
----
-
-## 💡 给 AI 的终极建议
-
-- **步子迈小一点**：把一个大需求拆分成“建表”、“写后端接口”、“前端 UI 骨架”、“联调”几个小步，每一步都要通过 bash 验证后再进行下一步。
-- **保持自信与专业**：用户是你的物理外设，你是大脑。指令要清晰、明确，不要模棱两可。
+1. **排雷**：先让用户执行 `git status`，甄别文件。
+2. **精准暂存**：**坚决杜绝让用户执行 `git add .`**，给出具体路径。
+3. **写好 Commit Message**：提供规范的提交信息让用户复制。
+4. **教导撤销**：提供补救方案 (`git reset HEAD~1` 等)。
 
 ---
 
 ## 🏛️ 架构决策记录 (ADR) - UI & App Shell (Updated)
 
-1. **全局布局 (App Shell)**：已在 `root.tsx` 建立全局极窄侧边栏 (`GlobalSidebar`，宽 `w-16`/64px)。内部所有路由视图必须继承父级的滚动管理，使用 `h-full overflow-y-auto`，**严禁在子页面重新定义 `h-screen` 或 `100vh`**。
+1. **全局布局 (App Shell)**：已在 `root.tsx` 建立全局极窄侧边栏 (`GlobalSidebar`，宽 `w-16`/64px)。内部所有路由视图必须继承父级的滚动管理，使用 `h-full overflow-y-auto`。
 2. **图标库约束**：已废弃原生 SVG，全局统一使用 `lucide-react`。
 3. **品牌色彩基调**：深色模式 (`bg-zinc-950`) 为主，高亮主按钮与交互激活态严格使用 Zap-Purple (`#6D5DFB`)。禁止滥用其他高饱和度色彩。

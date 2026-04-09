@@ -1,62 +1,46 @@
 import type { Route } from "./+types/projects.$projectId";
 import { db } from "../db/client";
-import { projects, projectOutlines } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { projects, projectOutlines, projectMessages } from "../db/schema";
+import { eq, asc } from "drizzle-orm";
 import { WorkspaceLayout } from "../components/WorkspaceLayout";
+import { useLoaderData } from "react-router";
 
 export async function loader({ params }: Route.LoaderArgs) {
   const projectId = params.projectId;
 
-  const [existing] = await db
-    .select()
-    .from(projects)
-    .where(eq(projects.id, projectId));
+  const [existing] = await db.select().from(projects).where(eq(projects.id, projectId));
+  if (!existing) throw new Response("Project Not Found", { status: 404 });
 
-  if (existing) {
-    const [outline] = await db
-      .select()
-      .from(projectOutlines)
-      .where(eq(projectOutlines.projectId, projectId));
+  const [outline] = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, projectId));
 
-    return Response.json({
-      project: { id: existing.id, title: existing.title, createdAt: existing.createdAt },
-      outline: outline ? { contentMd: outline.contentMd, version: outline.version } : null,
-    });
-  }
+  const history = await db.select().from(projectMessages)
+    .where(eq(projectMessages.projectId, projectId))
+    .orderBy(asc(projectMessages.createdAt));
 
-  await db.insert(projects).values({
-    id: projectId,
-    title: "Untitled Project",
-  });
+  // 严格映射数据
+  const initialMessages = history.map((msg) => ({
+    id: msg.id,
+    role: msg.role,
+    content: msg.content || " ",
+    createdAt: msg.createdAt.toISOString(),
+  }));
 
-  const [created] = await db
-    .select()
-    .from(projects)
-    .where(eq(projects.id, projectId));
-
-  const [outline] = await db
-    .select()
-    .from(projectOutlines)
-    .where(eq(projectOutlines.projectId, projectId));
-
-  return Response.json({
-    project: { id: created.id, title: created.title, createdAt: created.createdAt },
+  // 直接返回原生对象
+  return {
+    project: { id: existing.id, title: existing.title, createdAt: existing.createdAt.toISOString() },
     outline: outline ? { contentMd: outline.contentMd, version: outline.version } : null,
-  });
-}
-
-interface LoaderData {
-  project: {
-    id: string;
-    title: string;
-    createdAt: Date | string;
+    initialMessages, // 核心：把历史记录装车
   };
-  outline: {
-    contentMd: string;
-    version: number;
-  } | null;
 }
 
-export default function ProjectWorkspace({ loaderData }: { loaderData: LoaderData }) {
-  return <WorkspaceLayout project={loaderData.project} outline={loaderData.outline} />;
+export default function ProjectWorkspace() {
+  const loaderData = useLoaderData<typeof loader>();
+
+  return (
+    <WorkspaceLayout
+      project={loaderData.project}
+      outline={loaderData.outline}
+      initialMessages={loaderData.initialMessages} // 核心：在这里把管子接上！
+    />
+  );
 }
