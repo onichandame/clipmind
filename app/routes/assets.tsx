@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { useLoaderData, useRevalidator } from "react-router";
 import { desc } from "drizzle-orm";
+import { Upload, Loader2, Film, CheckCircle2, Clock, AlertCircle } from "lucide-react";
 import { db } from "../db/client";
 import { assets } from "../db/schema";
 
@@ -123,10 +124,22 @@ export default function AssetsLibrary() {
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {assets.map((asset) => (
               <div key={asset.id} className="group bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-700 transition-all duration-200">
-                <div className="aspect-video bg-zinc-800 relative flex items-center justify-center">
-                  <svg className="w-8 h-8 text-zinc-600 group-hover:scale-110 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <div className="aspect-video bg-zinc-800 relative flex items-center justify-center overflow-hidden">
+                  <Film className="w-8 h-8 text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
                   <div className="absolute top-2 right-2">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">✅ 已就绪</span>
+                    {asset.status === 'ready' ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 backdrop-blur-sm">
+                        <CheckCircle2 className="w-3 h-3" /> 已就绪
+                      </span>
+                    ) : asset.status === 'error' ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 backdrop-blur-sm">
+                        <AlertCircle className="w-3 h-3" /> 解析失败
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 backdrop-blur-sm">
+                        <Clock className="w-3 h-3 animate-pulse" /> 解析中
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="p-4">
