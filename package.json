@@ -9,16 +9,24 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.52",
+    "@ai-sdk/react": "^3.0.156",
     "@react-router/node": "^7.14.0",
     "@react-router/serve": "^7.14.0",
+    "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.2.2",
+    "ai": "^6.0.154",
     "drizzle-orm": "^0.38.0",
     "isbot": "^5.1.0",
     "mysql2": "^3.11.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
     "react-router": "^7.14.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "^4.2.2",
+    "zod": "^4.3.6",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

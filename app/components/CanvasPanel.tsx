@@ -1,6 +1,18 @@
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { useCanvasStore } from "../store/useCanvasStore";
 
 type CanvasMode = "outline" | "footage" | "split";
+
+interface OutlineData {
+  contentMd: string;
+  version: number;
+}
+
+interface CanvasPanelProps {
+  outline: OutlineData | null;
+}
 
 const modeLabels: Record<CanvasMode, string> = {
   outline: "Outline",
@@ -8,13 +20,19 @@ const modeLabels: Record<CanvasMode, string> = {
   split: "Split View",
 };
 
-const modePlaceholders: Record<CanvasMode, string> = {
-  outline: "Markdown outline editor will appear here (Stage 3)",
-  footage: "Footage search results will appear here (Stage 6)",
-  split: "Split comparison view will appear here (Stage 7)",
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [...(defaultSchema.attributes?.code || []), "className"],
+  },
 };
 
-export function CanvasPanel() {
+const OUTLINE_PLACEHOLDER = "在左侧告诉我想做什么，画布将自动展开";
+const FOOTAGE_PLACEHOLDER = "Footage search results will appear here (Stage 6)";
+const SPLIT_PLACEHOLDER = "Split comparison view will appear here (Stage 7)";
+
+export function CanvasPanel({ outline }: CanvasPanelProps) {
   const { activeMode, setActiveMode } = useCanvasStore();
 
   return (
@@ -36,10 +54,39 @@ export function CanvasPanel() {
         ))}
       </div>
 
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-gray-500 text-sm text-center px-8">
-          {modePlaceholders[activeMode]}
-        </p>
+      <div className="flex-1 overflow-auto">
+        {activeMode === "outline" ? (
+          outline ? (
+            <div className="p-6">
+              <div className="prose prose-sm prose-slate max-w-none">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
+                >
+                  {outline.contentMd}
+                </ReactMarkdown>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <p className="text-gray-500 text-sm text-center px-8">
+                {OUTLINE_PLACEHOLDER}
+              </p>
+            </div>
+          )
+        ) : activeMode === "footage" ? (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-gray-500 text-sm text-center px-8">
+              {FOOTAGE_PLACEHOLDER}
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-gray-500 text-sm text-center px-8">
+              {SPLIT_PLACEHOLDER}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

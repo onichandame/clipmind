@@ -9,23 +9,29 @@ interface Project {
   createdAt: string | Date;
 }
 
-interface WorkspaceLayoutProps {
-  project: Project;
+interface OutlineData {
+  contentMd: string;
+  version: number;
 }
 
-export function WorkspaceLayout({ project }: WorkspaceLayoutProps) {
+interface WorkspaceLayoutProps {
+  project: Project;
+  outline: OutlineData | null;
+}
+
+export function WorkspaceLayout({ project, outline }: WorkspaceLayoutProps) {
   const [isBasketOpen, setIsBasketOpen] = useState(false);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       <div className="w-[40%] h-full flex-shrink-0">
-        <ChatPanel />
+        <ChatPanel projectId={project.id} />
       </div>
 
       <div className="w-px bg-gray-300 h-full flex-shrink-0" />
 
       <div className="flex-1 h-full min-w-0">
-        <CanvasPanel />
+        <CanvasPanel outline={outline} />
       </div>
 
       <BasketSidebar isOpen={isBasketOpen} onToggle={() => setIsBasketOpen(!isBasketOpen)} />
