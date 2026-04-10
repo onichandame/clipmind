@@ -3,7 +3,7 @@ import { db } from "../db/client";
 import { projectOutlines, projectMessages } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai.server";
-import { streamText, tool, convertToModelMessages } from "ai";
+import { streamText, tool, convertToModelMessages, stepCountIs } from "ai";
 import { z } from "zod";
 
 export async function action({ request }: Route.ActionArgs) {
@@ -51,9 +51,10 @@ export async function action({ request }: Route.ActionArgs) {
       }));
 
       const result = streamText({
-        model, system: dynamicSystemPrompt, messages: safeMessages as any, 
-        
-        onFinish: async ({ text, toolCalls }) => {
+        model, system: dynamicSystemPrompt, messages: safeMessages as any,
+            stopWhen: stepCountIs(5), // 开启高自由度 ReAct 循环引擎
+
+            onFinish: async ({ text, toolCalls }) => {
               try {
                 // 防御：只存纯文本，千万不要把 Tool JSON 存成文本漏给前端
                 let cleanContent = text || "";

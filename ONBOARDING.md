@@ -50,6 +50,16 @@
 
 ---
 
+
+### 3. Vercel AI SDK 5.0+ 的 ReAct 循环机制 (Multi-step)
+- **废弃 `maxSteps`**：最新版必须引入 `stepCountIs` 并使用 `stopWhen: stepCountIs(N)` 来控制最大循环次数。
+- **生命周期防碎片化**：在多步循环中，`onFinish` **仅在整个循环彻底结束时触发唯一一次**。这是执行“中间流式展示，最终合并落库”的完美拦截点。
+- **前端渲染滞后预警**：即便后端正常流式推送了工具状态，前端 `useChat` 依然需要开发者显式地在遍历消息时，将 `message.toolInvocations` 渲染为正在加载的 UI 状态。
+
+### 4. 架构师手术刀的跨平台与 ESM 避坑
+- **Bash 替换的脆弱性**：基于 `awk` 或 `sed` 的多行代码块精确替换，对 CRLF (`\r\n`) 和行尾隐形空格极其敏感，容易导致静默匹配失败。
+- **Node.js ESM 脚本降维打击**：在现代化前端工程（`package.json` 开启 `"type": "module"`）中，**严禁使用 CommonJS 的 `require('fs')` 编写修补脚本**。必须动态生成 `.mjs` 脚本，通过 `import fs from 'node:fs'` 结合正则进行灵活的 AST 级注入。
+
 ## 🏛️ 架构决策记录 (ADR)
 
 ### 1. UI & Layout
