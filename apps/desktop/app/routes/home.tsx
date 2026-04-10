@@ -1,4 +1,5 @@
-import { redirect, useFetcher, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
   Trash2,
@@ -13,17 +14,50 @@ import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
 import { IconButton } from "../components/IconButton";
 
 export default function Home() {
-  const allProjects: any[] = []; // Mocked state
-  const fetcher = useFetcher();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  // [端云水合]: 通过 React Query 直连 Hono 后端
+  const { data, isLoading } = useQuery({
+    queryKey: ['projects'],
+    queryFn: async () => {
+      const res = await fetch('http://localhost:8787/api/projects');
+      if (!res.ok) throw new Error('Network response was not ok');
+      return res.json();
+    }
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('http://localhost:8787/api/projects', { method: 'POST' });
+      if (!res.ok) throw new Error('Network error');
+      return res.json();
+    },
+    onSuccess: (newData) => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      navigate(`/projects/${newData.id}`);
+    }
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`http://localhost:8787/api/projects/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Network error');
+      return res.json();
+    },
+    onSuccess: () => {
+      setDeleteId(null);
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+    }
+  });
+
+  const allProjects: any[] = data?.projects || [];
   const recentProjects = allProjects.slice(0, 3);
-  const isCreating = fetcher.formData?.get("intent") === "create";
+  const isCreating = createMutation.isPending;
 
   const confirmDelete = (id: string) => {
-    fetcher.submit({ intent: "delete", projectId: id }, { method: "post" });
-    setDeleteId(null);
+    deleteMutation.mutate(id);
   };
 
   if (allProjects.length === 0) {
@@ -37,7 +71,7 @@ export default function Home() {
           告诉 AI 你的创作灵感，我们将为你自动生成大纲并匹配库中的高光素材。
         </p>
         <button
-          onClick={() => fetcher.submit({ intent: "create" }, { method: "post" })}
+          onClick={() => createMutation.mutate()}
           disabled={isCreating}
           className="px-8 py-3 bg-zinc-100 text-zinc-950 rounded-lg font-bold hover:bg-white transition-all disabled:opacity-50 cursor-pointer"
         >
@@ -55,7 +89,7 @@ export default function Home() {
           <p className="text-zinc-500 mt-1">早安，创作者。</p>
         </div>
         <button
-          onClick={() => fetcher.submit({ intent: "create" }, { method: "post" })}
+          onClick={() => createMutation.mutate()}
           disabled={isCreating}
           className="flex items-center gap-2 px-6 py-2.5 bg-zinc-100 text-zinc-950 rounded-lg font-bold hover:bg-white transition-all shadow-lg shadow-zinc-950/20 cursor-pointer"
         >
