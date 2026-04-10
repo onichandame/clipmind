@@ -1,6 +1,5 @@
 import { useRef, useEffect } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, getToolName, isToolOrDynamicToolUIPart } from "ai";
 import type { UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -25,39 +24,35 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const revalidator = useRevalidator();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const transport = new DefaultChatTransport({
-    api: "/api/chat",
-    body: { projectId },
-  });
 
   // 1. 标准化组装初始消息
-  const startingMessages = [
-    { id: "greeting", role: "assistant" as const, content: GREETING, parts: [{ type: "text", text: GREETING }] },
+  const startingMessages: any[] = [
+    { id: "greeting", role: "assistant", content: GREETING },
     ...initialMessages.map(msg => ({
-      id: msg.id, 
-      role: msg.role as "user" | "assistant", 
-      content: msg.content || " ",
-      parts: [{ type: "text", text: msg.content || " " }]
+      id: msg.id,
+      role: msg.role as "user" | "assistant",
+      content: msg.content || " "
     }))
-  ] as any[];
+  ];
 
-        // 2. 规范调用
-  const { messages, setMessages, sendMessage, status, error, stop } = useChat({
+  // 2. 规范调用
+  const { messages, setMessages, append, status, error, stop } = (useChat as any)({
     id: projectId,
-    transport,
-    initialMessages: startingMessages,
-    onResponse: (response) => {
+    api: "/api/chat", body: { projectId }, initialMessages: startingMessages as any,
+    onResponse: (response: any) => {
       console.log("📥 [网络层探针] 收到 Headers! HTTP 状态码:", response.status);
     },
-    onError: (err) => {
+    onError: (err: any) => {
       console.error("❌ [网络层探针] SDK 底层流解析抛错:", err);
     },
-    onFinish: ({ message }) => {
+    onFinish: (event: any) => {
       console.log("🛑 [网络层探针] 触发 onFinish，流被正常解析并结束！");
-                // 彻底修复：同时兼容 Vercel AI SDK 原生结构和当前 Transport 的扁平化结构 (tool-updateOutline)
-        const hasOutline = message.parts.some(p => p.type === 'tool-updateOutline' || (p.type === 'tool-invocation' && p.toolInvocation?.toolName === 'updateOutline'));
-        const hasFootage = message.parts.some(p => p.type === 'tool-searchFootage' || (p.type === 'tool-invocation' && p.toolInvocation?.toolName === 'searchFootage'));
         
+        // 修复：使用最新的 SDK toolInvocations 数组解析
+        const msg = event.message || event; const invocations = msg.toolInvocations || [];
+        const hasOutline = invocations.some((tool: any) => tool.toolName === 'updateOutline');
+        const hasFootage = invocations.some((tool: any) => tool.toolName === 'searchFootage');
+
         if (hasOutline) {
           setActiveMode("outline");
           revalidator.revalidate(); // 强制 Loader 重新抓取数据库最新大纲
@@ -66,14 +61,13 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
           revalidator.revalidate();
         }
       },
-        onError: (err) => console.error("Chat error:", err),
   });
 
   // [DEBUG INJECTION] 实时监控大模型的流式分发状态 (放在 useChat 后面)
   useEffect(() => {
     if (status === "streaming" && messages.length > 0) {
       const last = messages[messages.length - 1];
-      console.log("🚀 [Stream Debug] 流状态:", status, "| 最新消息的 Parts 类型:", last.parts.map(p => p.type).join(", "));
+      console.log("🚀 [Stream Debug] 流状态:", status, "| 最新消息的 Parts 类型:", last.parts.map((p: any) => p.type).join(", "));
     }
   }, [messages, status]);
 
@@ -95,7 +89,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     const formData = new FormData(e.currentTarget);
     const content = formData.get("content") as string;
     if (content.trim()) {
-      sendMessage({ text: content });
+      append({ role: "user", content } as any);
       e.currentTarget.reset();
     }
   };
@@ -114,7 +108,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
-        {messages.map((message) => {
+        {messages.map((message: any) => {
           const isUser = (message.role as string) === "user";
           return (
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -124,35 +118,30 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 </div>
               )}
               <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "bg-zinc-800 text-zinc-100 rounded-2xl rounded-tr-sm border border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-300"}`}>
-                {message.parts.map((part, index) => {
-                                    if (part.type === "text") {
-                    // [防御性渲染] 拦截模型漏水的 JSON，防止污染前端对话气泡
-                    if (part.text.includes('{"toolCalls":') || part.text.includes('"toolCallId":')) {
-                      return null;
-                    }
-                    return (
-                      <div key={index} className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{part.text}</ReactMarkdown>
-                      </div>
-                    );
-                  }
-                                    if (part.type === "tool-invocation" || part.type === "tool-updateOutline") {
-                    // 兼容第三方 Transport 扁平化结构
-                    const isCalling = part.toolInvocation ? (part.toolInvocation.state === "partial-call" || part.toolInvocation.state === "call") : !part.result;
-                    return (
-                      <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2">
-                        {isCalling ? (
-                          <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
-                        ) : (
-                          <div className="text-lg leading-none">✨</div>
-                        )}
-                        <span className="text-sm font-medium">
-                          {isCalling ? "正在为您撰写大纲..." : "大纲已更新"}
-                        </span>
-                      </div>
-                    );
-                  }
-                  return null;
+                {/* 1. 纯文本渲染 (拦截模型漏水的 JSON) */}
+                {(message as any).content && !(message as any).content.includes('{"toolCalls":') && !(message as any).content.includes('"toolCallId":') && (
+                  <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{(message as any).content}</ReactMarkdown>
+                  </div>
+                )}
+                
+                {/* 2. Tool Invocations 状态渲染 */}
+                {(message as any).toolInvocations?.map((toolInvocation: any, index: any) => {
+                  const isCalling = toolInvocation.state === 'call' || toolInvocation.state === 'partial-call';
+                  const isOutline = toolInvocation.toolName === 'updateOutline' || toolInvocation.toolName === 'patch_outline';
+                  
+                  return (
+                    <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3">
+                      {isCalling ? (
+                        <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                      ) : (
+                        <div className="text-lg leading-none">✨</div>
+                      )}
+                      <span className="text-sm font-medium">
+                        {isCalling ? (isOutline ? "正在构思大纲..." : "正在检索素材...") : (isOutline ? "大纲已更新" : "素材检索完成")}
+                      </span>
+                    </div>
+                  );
                 })}
               </div>
             </div>

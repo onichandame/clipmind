@@ -32,8 +32,8 @@ export async function action({ request }: Route.ActionArgs) {
       const model = createAIModel();
       const result = streamText({
         model, system: SYSTEM_PROMPT, messages: await convertToModelMessages(messages), 
-        maxSteps: 1, // 核心修复：基于日志实锤，禁止多步回调，拿到 Tool 结果后立刻关闭流，释放前端状态机
-        onFinish: async ({ text, toolCalls, toolResults }) => {
+        
+        onFinish: async ({ text, toolCalls }) => {
               try {
                 // 防御：只存纯文本，千万不要把 Tool JSON 存成文本漏给前端
                 let cleanContent = text || "";
