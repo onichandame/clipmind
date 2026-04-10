@@ -59,7 +59,15 @@ _注：提醒用户在返回包含敏感信息（如 `.env`）的日志时，主
 
 ### 1. Vercel AI SDK & React Router v7 状态联调防坑指南 (Critical)
 
-在实现持久化历史对话时，极易掉进“数据丢失”的幻觉中，请牢记以下三点：
+在实现持久化历史对话时，极易掉进“数据丢失”和“流挂起”的深渊，请务必牢记以下核心经验：
+
+**【关于 Tool Calling 工具调用与流式解析的血泪史】**
+1. **多步回调死锁 (Multi-Step Deadlock)**：在使用非官方或第三方大模型代理时，如果设置 `maxSteps > 1`，模型极有可能无法正确处理 `tool_result` 角色，导致服务端虽然执行完毕，但由于等不到模型的最终回复，HTTP 流被永远挂起。前端会一直卡在 `streaming` 状态。**对策：强制设置 `maxSteps: 1`，拿到工具结果后立刻结束流，将控制权交还前端状态机。**
+2. **Transport 层类型扁平化陷阱**：使用自定义的 Chat Transport 时，标准 AI SDK 的 `part.type === 'tool-invocation'` 可能会被底层拦截重写为 `tool-{toolName}`（例如 `tool-updateOutline`）。前端在拦截工具状态、渲染动画或触发页面 `revalidate()` 刷新时，**必须同时兼容两种类型的判断**，否则会导致 UI 彻底“装聋作哑”。
+3. **LLM 强制猜 ID (Schema Hallucination)**：绝对不要把内部系统 ID（如 `projectId`）写进大模型的 `inputSchema` 中让它去猜。它必定会捏造假 ID 导致数据库外键约束报错。正确的做法是从外部请求上下文 (`request.json()`) 中直接获取真实 ID 传入后端 Tool 执行闭包。
+4. **脏数据泄漏 (JSON Leakage)**：部分模型会将 Tool Call 的 JSON 结构错误地塞进普通 `text` 增量块中。前端渲染 `text` part 时，必须加入防御性拦截（如屏蔽 `{"toolCalls":`），防止原始代码暴露在用户对话气泡中。
+
+**【关于基础状态同步】**
 
 1. **破除 useChat SPA 缓存锁**：`useChat` 默认使用 `"chat"` 作为全局缓存 ID。在 SPA（如 RRv7）中切换项目时，如果不传入 `id: projectId` 强绑定作用域，它会固执地复用上一个空缓存，直接无视你传入的 `initialMessages`。
 2. **强制状态同步 (setMessages)**：`initialMessages` 仅在缓存首次创建时生效。为了抵御 Vite 热更新 (HMR) 或是路由软跳转带来的缓存污染，**必须通过 `useEffect` 监听服务端数据变化，并调用 `setMessages` 强行把数据库数据灌进 UI 中**，这绝不是 Hack，而是官方生态下的最佳实践。

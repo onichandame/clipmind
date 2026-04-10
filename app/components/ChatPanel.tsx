@@ -41,29 +41,41 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     }))
   ] as any[];
 
-  // 2. 规范调用
+        // 2. 规范调用
   const { messages, setMessages, sendMessage, status, error, stop } = useChat({
     id: projectId,
     transport,
-    initialMessages: startingMessages, 
-    onFinish: ({ message }) => {
-      for (const part of message.parts) {
-        if (isToolOrDynamicToolUIPart(part) && part.type !== "tool-result") {
-          const toolName = getToolName(part);
-          if (toolName === "updateOutline") {
-            setActiveMode("outline");
-            revalidator.revalidate();
-            break;
-          }
-          if (toolName === "searchFootage") {
-            setActiveMode("footage");
-            break;
-          }
-        }
-      }
+    initialMessages: startingMessages,
+    onResponse: (response) => {
+      console.log("📥 [网络层探针] 收到 Headers! HTTP 状态码:", response.status);
     },
-    onError: (err) => console.error("Chat error:", err),
+    onError: (err) => {
+      console.error("❌ [网络层探针] SDK 底层流解析抛错:", err);
+    },
+    onFinish: ({ message }) => {
+      console.log("🛑 [网络层探针] 触发 onFinish，流被正常解析并结束！");
+                // 彻底修复：同时兼容 Vercel AI SDK 原生结构和当前 Transport 的扁平化结构 (tool-updateOutline)
+        const hasOutline = message.parts.some(p => p.type === 'tool-updateOutline' || (p.type === 'tool-invocation' && p.toolInvocation?.toolName === 'updateOutline'));
+        const hasFootage = message.parts.some(p => p.type === 'tool-searchFootage' || (p.type === 'tool-invocation' && p.toolInvocation?.toolName === 'searchFootage'));
+        
+        if (hasOutline) {
+          setActiveMode("outline");
+          revalidator.revalidate(); // 强制 Loader 重新抓取数据库最新大纲
+        } else if (hasFootage) {
+          setActiveMode("footage");
+          revalidator.revalidate();
+        }
+      },
+        onError: (err) => console.error("Chat error:", err),
   });
+
+  // [DEBUG INJECTION] 实时监控大模型的流式分发状态 (放在 useChat 后面)
+  useEffect(() => {
+    if (status === "streaming" && messages.length > 0) {
+      const last = messages[messages.length - 1];
+      console.log("🚀 [Stream Debug] 流状态:", status, "| 最新消息的 Parts 类型:", last.parts.map(p => p.type).join(", "));
+    }
+  }, [messages, status]);
 
   // 3. 状态强制同步 (SPA 刚需)
   // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，
@@ -113,10 +125,30 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
               )}
               <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "bg-zinc-800 text-zinc-100 rounded-2xl rounded-tr-sm border border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-300"}`}>
                 {message.parts.map((part, index) => {
-                  if (part.type === "text") {
+                                    if (part.type === "text") {
+                    // [防御性渲染] 拦截模型漏水的 JSON，防止污染前端对话气泡
+                    if (part.text.includes('{"toolCalls":') || part.text.includes('"toolCallId":')) {
+                      return null;
+                    }
                     return (
                       <div key={index} className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
                         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{part.text}</ReactMarkdown>
+                      </div>
+                    );
+                  }
+                                    if (part.type === "tool-invocation" || part.type === "tool-updateOutline") {
+                    // 兼容第三方 Transport 扁平化结构
+                    const isCalling = part.toolInvocation ? (part.toolInvocation.state === "partial-call" || part.toolInvocation.state === "call") : !part.result;
+                    return (
+                      <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2">
+                        {isCalling ? (
+                          <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                        ) : (
+                          <div className="text-lg leading-none">✨</div>
+                        )}
+                        <span className="text-sm font-medium">
+                          {isCalling ? "正在为您撰写大纲..." : "大纲已更新"}
+                        </span>
                       </div>
                     );
                   }
