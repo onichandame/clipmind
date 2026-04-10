@@ -1,7 +1,8 @@
 // FIX: 右侧画布重构，沉浸式深色体验与高级空状态
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import { useEffect } from "react";
+import { EditorRoot, EditorContent, type EditorInstance } from "novel";
+import StarterKit from "@tiptap/starter-kit";
+import { Markdown } from "tiptap-markdown";
 import { useCanvasStore } from "../store/useCanvasStore";
 
 type CanvasMode = "outline" | "footage" | "split";
@@ -22,16 +23,16 @@ const modeLabels: Record<CanvasMode, string> = {
   split: "✨ 交付视图",
 };
 
-const sanitizeSchema = {
-  ...defaultSchema,
-  attributes: {
-    ...defaultSchema.attributes,
-    code: [...(defaultSchema.attributes?.code || []), "className"],
-  },
-};
 
 export function CanvasPanel({ outline }: CanvasPanelProps) {
-  const { activeMode, setActiveMode } = useCanvasStore();
+  const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
+
+  // 核心逻辑：服务端数据更新时，静默同步到全局 store
+  useEffect(() => {
+    if (outline?.contentMd) {
+      setOutlineContent(outline.contentMd, "system");
+    }
+  }, [outline?.contentMd, setOutlineContent]);
 
   return (
     // FIX: 移除灰白色背景，改为深色底 bg-zinc-950
@@ -63,12 +64,24 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
             // FIX: 大纲渲染区适配暗黑模式，限制最大宽度提升阅读体验
             <div className="w-full max-w-4xl p-8 pb-32">
               <div className="prose prose-zinc prose-invert max-w-none prose-headings:text-zinc-100 prose-p:text-zinc-300 prose-p:leading-relaxed prose-li:text-zinc-300 prose-strong:text-indigo-400 prose-a:text-indigo-400 prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
-                >
-                  {outline.contentMd}
-                </ReactMarkdown>
+                <EditorRoot>
+                  <EditorContent
+                    key={outline.version} // 核心：版本变化时强制重刷内容，解决人机协同状态覆盖
+                    extensions={[StarterKit, Markdown]}
+                    immediatelyRender={false} // 核心：注入基础文档 Schema，防止 doc 节点缺失报错
+                    initialContent={outline.contentMd as any} // 绕过 JSONContent 强校验，利用底层 Markdown 兼容
+                    onUpdate={({ editor }) => {
+                      if (editor) {
+                        // 获取最新的 Markdown 内容并标记为 user 修改
+                        const markdown = editor.storage.markdown.getMarkdown();
+                        setOutlineContent(markdown, "user");
+                      }
+                    }}
+                    className="relative min-h-[500px] w-full"
+                    // @ts-ignore - 兼容旧版属性残留
+                    disableLocalStorage={true}
+                  />
+                </EditorRoot>
               </div>
             </div>
           ) : (
