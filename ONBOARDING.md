@@ -66,6 +66,10 @@ _注：提醒用户在返回包含敏感信息（如 `.env`）的日志时，主
 3. **警惕静默丢弃与 Payload 碎片化**：
    - 传给 `initialMessages` 的对象，**`content` 字段是必填项 (Required)**，哪怕你用了 `parts` 渲染，如果没有 `content` 字符串，AI SDK 会直接静默丢弃这条记录！
    - 后端在拦截对话存库时，千万不要相信 `lastMessage.content` 总是存在，它可能被 SDK 碎片化为 `text` 字段或嵌在 `parts[0].text` 中，必须做防御性抓取。
+5. **时间戳碰撞与数据库排序 (Timestamp Collision)**：
+   - **现象**：刷新页面后对话顺序错乱（如提问出现在回答下方）。
+   - **成因**：MySQL `timestamp` 精度通常为秒。如果在 `onFinish` 回调中同时插入用户提问和 AI 回答，两条记录的时间戳完全一致，导致 `ORDER BY createdAt` 失效。
+   - **对策**：采用“前置入库”策略。用户请求到达后端后立即执行提问入库，再启动流式响应。这样提问与回答之间会有明显的物理时间差，且能防止因 AI 报错导致的用户提问丢失。
 4. **RRv7 Loader 截断问题**：在 Route 组件接收数据时，绝对**禁止使用旧版的 Props 解构 `export default function Component({ loaderData })`**，这会导致新加入的深层字段（如历史记录数组）在序列化时被丢弃。永远使用标准的 `const loaderData = useLoaderData<typeof loader>();`。
 
 ### 2. UI 重构与视觉升级经验 (Pure UI Refactoring)

@@ -10,13 +10,9 @@ export async function action({ request }: Route.ActionArgs) {
   const body = await request.json();
   const { messages, projectId } = body as { messages: any[]; projectId: string; };
 
-  const model = createAIModel();
-  const result = streamText({
-    model, system: SYSTEM_PROMPT, messages: await convertToModelMessages(messages), maxSteps: 5,
-    onFinish: async ({ text, toolCalls, toolResults }) => {
+  // 1. 提问前置入库：拉开时间差，彻底解决对话排序倒置问题
       try {
         const lastUserMessage = messages[messages.length - 1];
-        
         let userContent = "";
         if (typeof lastUserMessage.content === "string") {
           userContent = lastUserMessage.content;
@@ -25,12 +21,20 @@ export async function action({ request }: Route.ActionArgs) {
         } else {
           userContent = lastUserMessage.text || JSON.stringify(lastUserMessage);
         }
-        
         await db.insert(projectMessages).values({
           id: crypto.randomUUID(), projectId, role: "user", content: userContent || "[Empty]",
         });
+      } catch (error) {
+        console.error("Failed to persist user message:", error);
+      }
 
-        let aiContent = text || "";
+      // 2. 启动流式响应
+      const model = createAIModel();
+      const result = streamText({
+        model, system: SYSTEM_PROMPT, messages: await convertToModelMessages(messages), maxSteps: 5,
+        onFinish: async ({ text, toolCalls, toolResults }) => {
+          try {
+            let aiContent = text || "";
         if (toolCalls && toolCalls.length > 0) aiContent += "\n\n" + JSON.stringify({ toolCalls, toolResults });
 
         await db.insert(projectMessages).values({
