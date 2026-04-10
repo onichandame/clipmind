@@ -36,9 +36,15 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   ];
 
   // 2. 规范调用
-  const { messages, setMessages, append, status, error, stop } = (useChat as any)({
+  const outlineContent = useCanvasStore((s) => s.outlineContent);
+  const isDirty = useCanvasStore((s) => s.isDirty);
+  const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
+
+  const { messages, setMessages, sendMessage, status, error, stop } = (useChat as any)({
     id: projectId,
-    api: "/api/chat", body: { projectId }, initialMessages: startingMessages as any,
+    api: "/api/chat", 
+    body: { projectId, currentOutline: outlineContent, isDirty }, 
+    initialMessages: startingMessages as any,
     onResponse: (response: any) => {
       console.log("📥 [网络层探针] 收到 Headers! HTTP 状态码:", response.status);
     },
@@ -64,12 +70,22 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   });
 
   // [DEBUG INJECTION] 实时监控大模型的流式分发状态 (放在 useChat 后面)
+  const setOutlineContent = useCanvasStore((s) => s.setOutlineContent);
   useEffect(() => {
-    if (status === "streaming" && messages.length > 0) {
+    if (messages.length > 0) {
       const last = messages[messages.length - 1];
-      console.log("🚀 [Stream Debug] 流状态:", status, "| 最新消息的 Parts 类型:", last.parts.map((p: any) => p.type).join(", "));
+      if (status === "streaming" && last.parts) {
+        console.log("🚨 [Deep Probe] 拦截到的流式 parts 结构:", JSON.stringify(last.parts, null, 2));
+          }
+      
+      // 架构师干预：基于深层探针截获的真实结构，精准提取流式大纲
+      const outlinePart = last.parts?.find((p: any) => p.type === 'tool-updateOutline');
+      if (outlinePart && outlinePart.input && outlinePart.input.contentMd) {
+        setOutlineContent(outlinePart.input.contentMd, "agent");
+        if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
+      }
     }
-  }, [messages, status]);
+  }, [messages, status, setOutlineContent, setActiveMode]);
 
   // 3. 状态强制同步 (SPA 刚需)
   // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，
@@ -77,6 +93,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   // 因此，使用 setMessages 强制同步外部服务端状态，是正确的同步模式。
   useEffect(() => {
     setMessages(startingMessages);
+    // 架构师干预：斩草除根。切换项目时强行清空全局大纲内存，防止幽灵状态。
+    useCanvasStore.getState().setOutlineContent("", "system");
+    useCanvasStore.getState().clearDirtyState();
   }, [projectId, initialMessages.length]);
 
   // 4. 自动滚动到底部
@@ -89,7 +108,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     const formData = new FormData(e.currentTarget);
     const content = formData.get("content") as string;
     if (content.trim()) {
-      append({ role: "user", content } as any);
+      // 架构师干预：根据官方最新规范，动态挂载最新业务状态，拒绝陈旧闭包
+      sendMessage(
+        { role: "user", content } as any,
+        { body: { projectId, currentOutline: outlineContent, isDirty } }
+      );
+      if (isDirty) clearDirtyState();
       e.currentTarget.reset();
     }
   };
@@ -118,12 +142,26 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 </div>
               )}
               <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "bg-zinc-800 text-zinc-100 rounded-2xl rounded-tr-sm border border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-300"}`}>
-                {/* 1. 纯文本渲染 (拦截模型漏水的 JSON) */}
-                {(message as any).content && !(message as any).content.includes('{"toolCalls":') && !(message as any).content.includes('"toolCallId":') && (
-                  <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{(message as any).content}</ReactMarkdown>
-                  </div>
-                )}
+                {/* 1. 纯文本渲染 & 工具状态回显 (拦截空炮消息) */}
+                {(() => {
+                  const msg = message as any;
+                  let textToRender = msg.text || (msg.parts ? msg.parts.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') : "") || msg.content || "";
+                  
+                  // 架构师干预：如果大模型只调工具不说话，我们强行注入系统台词，避免气泡空白
+                  const hasOutlineTool = msg.parts?.some((p: any) => p.type === 'tool-updateOutline') || msg.toolInvocations?.some((t: any) => t.toolName === 'updateOutline');
+                  
+                  if (!textToRender && hasOutlineTool) {
+                    textToRender = "✨ **大纲已同步至右侧画板！**\n\n您可以直接在右侧手动修改，或者继续在这里告诉我需要往哪里调整。";
+                  }
+
+                  if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
+                  
+                  return (
+                    <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
+                    </div>
+                  );
+                })()}
                 
                 {/* 2. Tool Invocations 状态渲染 */}
                 {(message as any).toolInvocations?.map((toolInvocation: any, index: any) => {

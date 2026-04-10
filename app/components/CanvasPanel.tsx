@@ -22,7 +22,7 @@ const modeLabels: Record<CanvasMode, string> = {
 };
 
 export function CanvasPanel({ outline }: CanvasPanelProps) {
-  const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
+  const { activeMode, setActiveMode, setOutlineContent, outlineContent } = useCanvasStore();
 
   const editor = useEditor({
     extensions: [
@@ -48,12 +48,17 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
 
   // 当外部数据（如 AI 生成）更新时，同步编辑器内容
   useEffect(() => {
-    if (editor && outline?.contentMd && (editor.storage as any).markdown.getMarkdown() !== outline.contentMd) {
-      editor.commands.setContent(outline.contentMd);
-      // 同步到 store，标记为 system 更新以避免循环触发
-      setOutlineContent(outline.contentMd, "system");
+    if (!editor) return;
+    // 架构师干预：优先渲染实时流灌入的 outlineContent，彻底消除 Loader 延迟带来的白屏
+    const targetContent = outlineContent || outline?.contentMd || "";
+    const currentContent = (editor.storage as any).markdown.getMarkdown();
+    
+    // 只要有差异（包括切换到空项目时 targetContent 为空），就强制同步并清空脏状态
+    if (currentContent !== targetContent) {
+      editor.commands.setContent(targetContent);
+      if (!outlineContent) setOutlineContent(targetContent, "system");
     }
-  }, [outline?.contentMd, editor, setOutlineContent]);
+  }, [outline?.contentMd, outlineContent, editor, setOutlineContent]);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-950">
@@ -82,7 +87,7 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
       {/* 主画布区 */}
       <div className="flex-1 overflow-auto w-full flex justify-center">
         {activeMode === "outline" ? (
-          outline ? (
+          (outline || outlineContent) ? (
             <div className="w-full max-w-4xl p-8 pb-32">
               <EditorContent editor={editor} />
             </div>

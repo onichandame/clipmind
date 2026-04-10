@@ -8,7 +8,20 @@ import { z } from "zod";
 
 export async function action({ request }: Route.ActionArgs) {
   const body = await request.json();
-  const { messages, projectId } = body as { messages: any[]; projectId: string; };
+  console.log("\n🚨 [Server Probe] 后端接收到的完整网络请求 Body:", JSON.stringify(body, null, 2), "\n");
+  const { messages, projectId, currentOutline, isDirty } = body as { messages: any[]; projectId: string; currentOutline?: string; isDirty?: boolean; };
+
+  // 动态注入上下文，解决防冲撞与幻觉覆盖问题
+  let dynamicSystemPrompt = SYSTEM_PROMPT;
+  if (currentOutline) {
+    dynamicSystemPrompt += `\n\n## Current Project State\n\n`;
+    dynamicSystemPrompt += `The user has an existing outline on the canvas. `;
+    if (isDirty) {
+      dynamicSystemPrompt += `**CRITICAL: The user has manually edited this outline since you last saw it.** You MUST base any future modifications on this exact current content, not your previous memory of it.\n\n`;
+    }
+    dynamicSystemPrompt += `=== CURRENT OUTLINE CONTENT ===\n${currentOutline}\n===============================\n\n`;
+    dynamicSystemPrompt += `When calling \`updateOutline\`, you must provide the FULL updated markdown content, combining the user's manual edits with your new additions.`;
+  }
 
   // 1. 提问前置入库：拉开时间差，彻底解决对话排序倒置问题
       try {
@@ -30,8 +43,15 @@ export async function action({ request }: Route.ActionArgs) {
 
                               // 2. 启动流式响应
       const model = createAIModel();
+      
+      // 架构师干预：根据官方安全规范，手动进行安全的向下兼容映射，防止 SDK 内部崩溃
+      const safeMessages = (messages || []).map((m: any) => ({
+        role: m.role || "user",
+        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content || ""),
+      }));
+
       const result = streamText({
-        model, system: SYSTEM_PROMPT, messages: await convertToModelMessages(messages), 
+        model, system: dynamicSystemPrompt, messages: safeMessages as any, 
         
         onFinish: async ({ text, toolCalls }) => {
               try {
