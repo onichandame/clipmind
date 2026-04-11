@@ -29,15 +29,28 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 import { GlobalSidebar } from "./components/GlobalSidebar";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+// [架构师决断]: Tauri SPA 环境下安全的全局单例，规避 React 树卸载导致的缓存丢失
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false, // 桌面端无需频繁 refetch
+      retry: 1,
+    },
+  },
+});
 
 export default function App() {
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-200 font-sans tracking-wide">
-      <GlobalSidebar />
-      <div className="flex-1 min-w-0 h-full relative">
-        <Outlet />
+    <QueryClientProvider client={queryClient}>
+      <div className="flex h-screen w-screen overflow-hidden bg-zinc-950 text-zinc-200 font-sans tracking-wide">
+        <GlobalSidebar />
+        <div className="flex-1 min-w-0 h-full relative">
+          <Outlet />
+        </div>
       </div>
-    </div>
+    </QueryClientProvider>
   );
 }
 

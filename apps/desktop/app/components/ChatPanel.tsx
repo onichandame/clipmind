@@ -1,11 +1,23 @@
 import { useRef, useEffect } from "react";
 import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import { useRevalidator } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCanvasStore } from "../store/useCanvasStore";
+
+
+if (typeof window !== 'undefined' && !(window).__EDD_PATCHED) {
+  (window).__EDD_PATCHED = true;
+  console.log("🚨 [EDD_PROBE] ChatPanel 物理文件已成功加载到浏览器内存！");
+  const origFetch = window.fetch;
+  window.fetch = async function(...args) {
+    console.log("🕵️ [Fetch Probe] 底层网络引擎捕获到请求 -> URL:", args[0]);
+    return origFetch.apply(this, args);
+  };
+}
 
 interface ChatPanelProps {
   projectId: string;
@@ -21,7 +33,7 @@ const GREETING = "你好！我是你的创作助理 ClipMind。今天打算怎�
 
 export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const setActiveMode = useCanvasStore((s) => s.setActiveMode);
-  const revalidator = useRevalidator();
+  const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
 
@@ -40,11 +52,17 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const isDirty = useCanvasStore((s) => s.isDirty);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
 
+  console.log("🚨 [EDD_PROBE] ChatPanel 正在执行渲染！");
   const { messages, setMessages, sendMessage, status, error, stop } = (useChat as any)({
     id: projectId,
-    api: "/api/chat", 
-    body: { projectId, currentOutline: outlineContent, isDirty }, 
+    
+         
+     
     initialMessages: startingMessages as any,
+        transport: new DefaultChatTransport({
+          api: "http://localhost:8787/api/chat",
+          body: { projectId, currentOutline: outlineContent, isDirty }
+        }),
     onResponse: (response: any) => {
       console.log("📥 [网络层探针] 收到 Headers! HTTP 状态码:", response.status);
     },
@@ -61,10 +79,10 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
         if (hasOutline) {
           setActiveMode("outline");
-          revalidator.revalidate(); // 强制 Loader 重新抓取数据库最新大纲
+          queryClient.invalidateQueries({ queryKey: ['project', projectId] }); // 强制 Loader 重新抓取数据库最新大纲
         } else if (hasFootage) {
           setActiveMode("footage");
-          revalidator.revalidate();
+          queryClient.invalidateQueries({ queryKey: ['project', projectId] });
         }
       },
   });

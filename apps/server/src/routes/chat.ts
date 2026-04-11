@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { db, projectOutlines, projectMessages } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
-import { streamText, tool, convertToModelMessages, stepCountIs } from "ai";
+import { streamText, tool, convertToModelMessages} from "ai";
 import { z } from "zod";
 
 const app = new Hono();
@@ -51,9 +51,10 @@ app.post("/", async (c) => {
         content: typeof m.content === "string" ? m.content : JSON.stringify(m.content || ""),
       }));
 
-      const result = streamText({
+      const result = await streamText({
         model, system: dynamicSystemPrompt, messages: safeMessages as any,
-            stopWhen: stepCountIs(5), // 开启高自由度 ReAct 循环引擎
+            maxSteps: 5,
+      onChunk: (event) => console.log("🔍 [Stream Probe] 截获到底层 Chunk:", JSON.stringify(event)), // 开启高自由度 ReAct 循环引擎
 
             onFinish: async ({ text, toolCalls }) => {
               try {
@@ -74,7 +75,7 @@ app.post("/", async (c) => {
             tools: {
                     updateOutline: tool({
             description: "生成、覆盖或局部修改当前的视频 Markdown 大纲。",
-            inputSchema: z.object({ contentMd: z.string().describe('最新版本的完整 Markdown 内容') }),
+            parameters: z.object({ contentMd: z.string().describe('最新版本的完整 Markdown 内容') }),
                                     execute: async ({ contentMd }) => {
               try {
                 // 核心修复：直接使用外部 request.json() 解构出来的真实 projectId，禁止 LLM 瞎猜
@@ -94,13 +95,15 @@ app.post("/", async (c) => {
           }),
           searchFootage: tool({
         description: "Search footage",
-        inputSchema: z.object({ query: z.string() }),
+        parameters: z.object({ query: z.string() }),
         execute: async ({ query }) => { return { clips: [], total: 0, message: "Mock" }; }
       }),
     },
   });
 
-  return result.toUIMessageStreamResponse();
+  
+  return result.toDataStreamResponse();
+
 });
 
 export default app;

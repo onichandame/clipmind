@@ -1,85 +1,48 @@
-# AI 架构师盲操接手指南 (v2.0 协同进化版)
+# 🚀 ClipMind 开发者入职与架构指南
 
-## 🎯 背景与目标
+欢迎加入 ClipMind 桌面端研发团队。本项目采用 **端云解耦 + 容器化** 的现代架构，致力于打造极致流畅的 AI 驱动视频创作体验。
 
-你好，接班人。你面对的是一个基于 **React Router v7 + Tailwind v4 + AI SDK v3** 的现代化视频创作工作台。
-**核心约束**：你没有终端权限，用户是你的“眼”和“手”。你必须通过精确的 Bash 和 Patch 指令驱动开发。
-
----
-
-## 🛠️ 第一阶段：现状探测 (The Probes)
-
-接手新模块时，**永远不要盲目相信文档中的“已完成”状态**。
-
-1. **查环境与入口**：
-
-   ```bash
-   cat package.json | grep -E '"(react-router|ai|novel|@tiptap/react)"'
-   # 核心 ADR：CSS 入口是 app/app.css，不是 tailwind.css
-   cat app/app.css | head -n 10
-   ```
-
-2. **查状态机定义**：
-
-   ```bash
-   cat app/store/useCanvasStore.ts
-   ```
+## 🏗️ 核心架构基座
+- **桌面容器**: Tauri v2 (Rust) - 提供跨平台原生系统级访问权限。
+- **前端视图**: React Router v7 + Vite - 纯粹的 SPA 渲染层。
+- **云端大脑**: Hono (Node Server) - 处理高并发网络请求与 AI 对接。
+- **数据流**: @tanstack/react-query (前端缓存) + Drizzle ORM (后端 MySQL 驱动)。
+- **AI 底层**: Vercel AI SDK (v3.4+) - 负责流式解析与 Tool Calling。
 
 ---
 
-## 📝 第二阶段：手术刀修改规范 (Surgical Edit)
+## 🩸 架构师的血泪教训 (避坑指南)
 
-1. **禁止全量重写**：超过 30 行的文件必须使用 `.architect/apply_patch.sh`。
-2. **SEARCH/REPLACE 协议**：SEARCH 块必须在原文件中唯一，缩进必须与 `cat -n` 结果字节级对齐。
-3. **Any 逃生舱**：在处理 AI SDK 等泛型极深的库时，若遇到 TS 类型塌方（Generic Collapse），应果断使用 `(useChat as any)` 强转，优先保证业务交付，而非在类型泥潭中消耗 Token。
+在演进到当前架构的过程中，我们踩过无数深坑。请每一位新入职的开发者务必将以下原则刻在 DNA 里：
 
----
+### 1. EDD (证据驱动调试) 原则：禁止盲猜
+当出现幽灵 Bug 时（如路由 404、网络请求去向不明），**绝对禁止凭借经验修改代码盲试**。
+必须在链路底层下放探针（Probe）：
+- 监听 `window.fetch` 拦截真实发出的网络请求。
+- 在组件顶层和 SDK `onChunk` 钩子里注入 `console.log`。
+- 只有看到确凿的堆栈或 URL 证据，才能下刀修改。
 
-## 🐛 第三阶段：核心避坑与经验教训 (Lessons Learned)
+### 2. Vercel AI SDK 的版本“毒区”
+本项目深度依赖 Vercel AI SDK，但其在 v3.4+ 版本的更迭中包含了大量未充分文档化的 Breaking Changes：
+- **异步陷阱**：`streamText` 已经变为异步函数，**必须加 `await`**，否则返回空 `Promise`，前端无法解析（表现为静默失败）。
+- **字段更名**：Tool 的入参规范必须使用 `parameters`，禁止使用旧版的 `inputSchema`，否则 Zod 解析器会直接崩溃。
+- **方法演进**：流式返回请严格使用 `toDataStreamResponse()`，禁止使用早期的 `toUIMessageStreamResponse`。
 
-### 1. 人机协同：脏状态与补丁协议 (Critical)
+### 3. Vite 与 RRv7 的多重缓存幽灵
+如果修改了组件代码但浏览器表现依然怪异，极有可能是 Vite 的强缓存（`.vite` 目录）或 React Router v7 的 loader 缓存作祟。
+**解法**：`rm -rf node_modules/.vite` -> 重启开发服务器 -> **使用无痕窗口 (Incognito)** 测试。
 
-- **防冲撞机制**：用户手动编辑编辑器时，`useCanvasStore` 会将 `isDirty` 设为 `true`。Agent 在修改大纲前 **必须** 调用 `read_outline` 重新感知最新上下文。
-- **Block Index Mapping**：禁止让 Agent 猜 Tiptap 的绝对坐标。系统应将文档序列化为带 `[Block n]` 前缀的 Markdown，Agent 通过 `patch_outline(index: n)` 进行定向爆破式修改，以保护用户光标。
-
-### 2. Novel/Tiptap 无头架构与 SSR 适配
-
-- **无头约束**：Novel v0.2+ 不再内置 Schema。必须配套 `@tiptap/starter-kit` 和 `tiptap-markdown`。
-- **水合防护**：在全栈 SSR 框架（如 RRv7）中，`useEditor` 必须声明 `immediatelyRender: false`，否则必报 React 水合错误。
-- **Vite 依赖链**：若 Novel 插件（如 Tweet）抛出样式加载错误，须在 `vite.config.ts` 的 `ssr.noExternal` 中同时包含父组件及其所有涉及样式的子依赖。
-
----
-
-
-### 3. Vercel AI SDK 5.0+ 的 ReAct 循环机制 (Multi-step)
-- **废弃 `maxSteps`**：最新版必须引入 `stepCountIs` 并使用 `stopWhen: stepCountIs(N)` 来控制最大循环次数。
-- **生命周期防碎片化**：在多步循环中，`onFinish` **仅在整个循环彻底结束时触发唯一一次**。这是执行“中间流式展示，最终合并落库”的完美拦截点。
-- **前端渲染滞后预警**：即便后端正常流式推送了工具状态，前端 `useChat` 依然需要开发者显式地在遍历消息时，将 `message.toolInvocations` 渲染为正在加载的 UI 状态。
-
-### 4. 架构师手术刀的跨平台与 ESM 避坑
-- **Bash 替换的脆弱性**：基于 `awk` 或 `sed` 的多行代码块精确替换，对 CRLF (`\r\n`) 和行尾隐形空格极其敏感，容易导致静默匹配失败。
-- **Node.js ESM 脚本降维打击**：在现代化前端工程（`package.json` 开启 `"type": "module"`）中，**严禁使用 CommonJS 的 `require('fs')` 编写修补脚本**。必须动态生成 `.mjs` 脚本，通过 `import fs from 'node:fs'` 结合正则进行灵活的 AST 级注入。
-
-## 🏛️ 架构决策记录 (ADR)
-
-### 1. UI & Layout
-
-- **App Shell**: 全局极窄侧边栏 (`w-16`)，深色基调 (`bg-zinc-950`)。
-- **图标库**: 全局统一使用 `lucide-react`。
-
-### 2. 交互引擎 (AI SDK)
-
-- **状态同步**: 必须通过 `useEffect` 监听 `projectId` 并调用 `setMessages` 强制灌入服务端数据，以破解 SPA 缓存锁。
-- **流解析**: 拦截模型漏水的 JSON（如 `{"toolCalls":`），防止原始代码暴露在聊天气泡中。
-
-### 3. 编辑器 (Canvas)
-
-- **选型**: 放弃 BlockNote（React 19 严格模式不兼容），采用 **Novel (Tiptap Headless)**。
-- **样式**: 深度绑定 Tailwind v4 的 `@plugin "@tailwindcss/typography"`，通过 `prose-invert` 适配深色模式。
+### 4. Bash 脚本的安全防线
+在编写自动化重构或探针脚本时，**严禁使用带双引号的 `node -e "..."`**（Bash 会将字符串内的 `!` 强行解析为历史记录替换，导致语法错误崩溃）。
+**解法**：永远使用 Here-Doc 语法 (`cat << 'EOF' | node`) 隔离 Bash 环境。
 
 ---
 
-## 📦 第四阶段：版本控制规范
+## 📝 遗留技术债工单 (Tech Debt)
 
-1. **显式暂存**: 坚决杜绝 `git add .`。必须指定文件。
-2. **语义化 Commit**: 遵循 Conventional Commits，Body 部分必须解释 **Why** (架构动机) 而非仅重复 **What** (代码改动)。
+**[High Priority] 恢复 AI SDK 的 ReAct 多步循环能力**
+- **现状**：目前后端的 AI 流式响应被强制锁定在单步模式（移除了 `maxSteps` 配置）。
+- **病因**：在当前的 `@ai-sdk/core` (v3.4.33) 中，开启 `maxSteps: 5` 会导致底层 `run-tools-transformation.ts` 转换器无法识别内部遥测事件，引发致命报错 `Error: Unhandled chunk type: stream-start`，从而导致整个流式进程崩溃。
+- **Action Item**：
+  1. 持续跟踪 Vercel AI SDK 官方 Github Issues，等待修复 `stream-start` chunk 的上游补丁。
+  2. 修复后，在 `apps/server/src/routes/chat.ts` 的 `streamText` 中恢复 `maxSteps: 5`，以完全释放 AI 在 Tool Calling 后的持续对话能力（多轮循环思考）。
