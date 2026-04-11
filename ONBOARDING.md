@@ -41,8 +41,9 @@
 **[Ticket-04] [RESOLVED] Tool Call 状态流转与持久化不对齐**
 - **修复记录**：已在 `projectMessages` 表中扩增 `toolInvocations` JSON 字段。重写了 `chat.ts` 的流式回调和 `projects.ts` 的拉取接口，彻底打通了 Agent 工具状态的持久化与前端 UI 注水恢复链路。同时为 Hono 服务注入了“启动即迁移”的安全生命周期。
 
-**[Ticket-02] Canvas 视图状态流转黑盒 (Medium Priority)**
+**[Ticket-02] [RESOLVED] Canvas 视图状态流转黑盒 (Medium Priority)**
 - **病状**: `CanvasPanel.tsx` 存在绕过 React 生命周期的强制 DOM 状态读取 Hack，极易引发渲染竞态条件，后期需重构数据同步机制。
+- **修复记录**: 已在 `useEffect` 同步逻辑中注入 `!editor.isFocused` 焦点防御机制，阻断流式高频更新抢夺用户光标。长期重构方向已记录：需废弃全量 `setContent`，改用 ProseMirror Transaction 增量写入。
 
-**[Ticket-03] 类型系统大面积降级 (Tech Task)**
+**[Ticket-03] [RESOLVED] 类型系统大面积降级 (Tech Task)**
 - **病状**: 存在大量的 `as any`，需重新对齐 Zod Schema 与 TypeScript 接口定义。
