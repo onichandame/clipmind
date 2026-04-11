@@ -9,7 +9,7 @@
     "@clipmind/db": "workspace:*",
     "hono": "^4.2.0",
     "@hono/node-server": "^1.11.0",
-    "ai": "^3.0.0",
+    "ai": "latest",
     "zod": "^3.0.0",
     "dotenv": "^16.4.5"
   },

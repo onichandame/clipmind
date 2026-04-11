@@ -53,7 +53,7 @@ app.post("/", async (c) => {
       const result = await streamText({
         model, system: dynamicSystemPrompt, messages: safeMessages as any,
         // TODO: [High Priority] 恢复 maxSteps: 5 (当前注销以规避 Vercel AI SDK 3.4+ stream-start 上游崩溃 bug)
-        // maxSteps: 5,
+        maxSteps: 5,
 
             onFinish: async ({ text, toolCalls }) => {
               try {
