@@ -11,10 +11,8 @@ import { useCanvasStore } from "../store/useCanvasStore";
 
 if (typeof window !== 'undefined' && !(window).__EDD_PATCHED) {
   (window).__EDD_PATCHED = true;
-  console.log("🚨 [EDD_PROBE] ChatPanel 物理文件已成功加载到浏览器内存！");
   const origFetch = window.fetch;
   window.fetch = async function(...args) {
-    console.log("🕵️ [Fetch Probe] 底层网络引擎捕获到请求 -> URL:", args[0]);
     return origFetch.apply(this, args);
   };
 }
@@ -52,7 +50,6 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const isDirty = useCanvasStore((s) => s.isDirty);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
 
-  console.log("🚨 [EDD_PROBE] ChatPanel 正在执行渲染！");
   const { messages, setMessages, sendMessage, status, error, stop } = (useChat as any)({
     id: projectId,
     
@@ -92,10 +89,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   useEffect(() => {
     if (messages.length > 0) {
       const last = messages[messages.length - 1];
-      if (status === "streaming" && last.parts) {
-        console.log("🚨 [Deep Probe] 拦截到的流式 parts 结构:", JSON.stringify(last.parts, null, 2));
-          }
-      
+
       // 架构师干预：基于深层探针截获的真实结构，精准提取流式大纲
       const outlinePart = last.parts?.find((p: any) => p.type === 'tool-updateOutline');
       if (outlinePart && outlinePart.input && outlinePart.input.contentMd) {

@@ -8,9 +8,9 @@
   "scripts": {
     "dev:desktop": "pnpm --filter desktop dev",
     "build:desktop": "pnpm --filter desktop build",
-    "tauri:dev": "pnpm --filter desktop tauri dev",
-    "tauri:build": "pnpm --filter desktop tauri build",
-    "dev": "concurrently -c \"cyan,magenta\" -n \"🖥️ UI,🧠 API\" \"pnpm --filter desktop dev\" \"pnpm --filter server dev\""
+    "tauri:dev": "pnpm --filter desktop exec tauri dev",
+    "tauri:build": "pnpm --filter desktop exec tauri build",
+    "dev": "concurrently -k -c \"cyan,magenta\" -n \"🚀 Tauri,🧠 API\" \"pnpm run tauri:dev\" \"pnpm --filter server dev\""
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

@@ -9,7 +9,6 @@ const app = new Hono();
 
 app.post("/", async (c) => {
   const body = await c.req.json();
-  console.log("\n🚨 [Server Probe] 后端接收到的完整网络请求 Body:", JSON.stringify(body, null, 2), "\n");
   const { messages, projectId, currentOutline, isDirty } = body as { messages: any[]; projectId: string; currentOutline?: string; isDirty?: boolean; };
 
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
@@ -53,8 +52,8 @@ app.post("/", async (c) => {
 
       const result = await streamText({
         model, system: dynamicSystemPrompt, messages: safeMessages as any,
-            maxSteps: 5,
-      onChunk: (event) => console.log("🔍 [Stream Probe] 截获到底层 Chunk:", JSON.stringify(event)), // 开启高自由度 ReAct 循环引擎
+        // TODO: [High Priority] 恢复 maxSteps: 5 (当前注销以规避 Vercel AI SDK 3.4+ stream-start 上游崩溃 bug)
+        // maxSteps: 5,
 
             onFinish: async ({ text, toolCalls }) => {
               try {
