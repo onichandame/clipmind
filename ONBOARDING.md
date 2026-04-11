@@ -18,9 +18,12 @@
 ### 1. EDD (证据驱动调试) 原则：禁止盲猜
 当出现幽灵 Bug 时，绝对禁止凭借经验修改代码盲试。必须在链路底层下放探针（Probe），拿到确凿的堆栈或 URL 证据，才能下刀修改。
 
-### 2. Vercel AI SDK V6 迁移与 Agent 协议
-- **同步流对象**：`streamText` 现在同步返回流对象，严禁加 `await`。
-- **状态注水 (Rehydration)**：在持久化消息历史时，绝对不能将 Tool Call 降维压缩为纯文本。必须在 `onFinish` 中拦截 `toolInvocations` 并存入 JSON 字段，读取时反序列化，才能保证前端 UI 组件从历史记录中无缝复活。
+### 2. Vercel AI SDK V6 迁移与 Agent 协议 (Blood Trial 补充)
+- **多模态与异步清洗陷阱 (Critical)**：V6 中由于引入了对多模态附件的支持，`convertToModelMessages` 已变更为**异步函数**。调用时**必须**加 `await`，否则会导致下游 `streamText` 触发难以排查的 Zod 崩溃 (`expected array, received Promise`)。且必须确保前端传入的格式最终能够映射到严格的 `parts` 数组。
+- **ReAct 多步循环断裂**：在后端调用 `streamText` 时，**必须显式声明 `maxSteps` 参数**（如 `maxSteps: 5`）。如果遗漏，大模型在调用工具后会直接结束生命周期，无法将工具结果作为上下文进行第二轮推导，导致前端出现“空炮消息”。
+- **UI 状态机与 Parts 协议**：前端 `UIMessage` 已彻底废弃旧版的 `toolInvocations` 数组和 `call` 状态。所有工具调用状态已打平合并至 `message.parts` 数组中。新的流式状态机变更为 `input-streaming` -> `input-available` -> `output-available`，渲染层必须基于 `parts` 进行重构。
+- **同步流对象**：`streamText` 本身同步返回流对象，严禁加 `await`。
+- **状态注水 (Rehydration)**：在持久化消息历史时，绝对不能将 Tool Call 降维压缩为纯文本。必须在 `onFinish` 中拦截对应状态并存入 JSON 字段，读取时反序列化，才能保证前端 UI 组件复活。
 
 ### 3. Monorepo 环境下的模块提升与迁移陷阱 (Critical)
 - **环境变量防线**：在 Node Server 入口处，`import 'dotenv/config'` 必须是物理位置的绝对第一行！否则在 TypeScript/ESM 的模块提升机制下，数据库初始化模块会抢先执行，导致 `DATABASE_URL` 丢失崩溃。

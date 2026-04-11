@@ -2,14 +2,14 @@ import { Hono } from "hono";
 import { db, projectOutlines, projectMessages } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
-import { streamText, tool, convertToModelMessages } from "ai";
+import { streamText, tool, convertToModelMessages, UIMessage } from "ai";
 import { z } from "zod";
 
 const app = new Hono();
 
 app.post("/", async (c) => {
   const body = await c.req.json();
-  const { messages, projectId, currentOutline, isDirty } = body as { messages: any[]; projectId: string; currentOutline?: string; isDirty?: boolean; };
+  const { messages, projectId, currentOutline, isDirty } = body as { messages: UIMessage[]; projectId: string; currentOutline?: string; isDirty?: boolean; };
 
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
   let dynamicSystemPrompt = SYSTEM_PROMPT;
@@ -44,25 +44,22 @@ app.post("/", async (c) => {
   // 2. 启动流式响应
   const model = createAIModel();
 
-  // 架构师干预：根据官方安全规范，手动进行安全的向下兼容映射，防止 SDK 内部崩溃
-  const safeMessages = (messages || []).map((m: any) => {
-    let textContent = typeof m.content === "string" ? m.content : "";
-
-    // 核心修复：解析 V6 的 parts 结构
-    if (Array.isArray(m.parts) && m.parts.length > 0) {
-      textContent = m.parts.map((p: any) => p.text || "").join("");
-    } else if (!textContent && m.content) {
-      textContent = JSON.stringify(m.content);
+  // 架构师干预：彻底修复 v6 异步边界与 parts 强制结构 (向下兼容处理)
+  const normalizedMessages = (messages || []).map((msg: any) => {
+    if (!msg.parts || !Array.isArray(msg.parts)) {
+      return {
+        ...msg,
+        parts: [{ type: 'text', text: msg.content || "" }]
+      };
     }
+    return msg;
+  }) as UIMessage[];
 
-    return {
-      role: m.role || "user",
-      content: textContent
-    };
-  });
+  const safeMessages = await convertToModelMessages(normalizedMessages);
 
   const result = streamText({
-    model, system: dynamicSystemPrompt, messages: safeMessages as any,
+    model, system: dynamicSystemPrompt, messages: safeMessages,
+    maxSteps: 5, // 恢复 ReAct Agent 循环，允许大模型在调用工具后继续输出总结文本
     // TODO: [High Priority] 恢复 maxSteps: 5 (当前注销以规避 Vercel AI SDK 3.4+ stream-start 上游崩溃 bug)
     maxSteps: 5,
 

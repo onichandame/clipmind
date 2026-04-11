@@ -41,7 +41,7 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
     },
     onUpdate: ({ editor }) => {
       // 获取 Markdown 并标记为用户修改
-      const md = (editor.storage as any).markdown.getMarkdown();
+      const md = editor.storage.markdown.getMarkdown();
       setOutlineContent(md, "user");
     },
   });
@@ -51,8 +51,8 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
     if (!editor) return;
     // 架构师干预：优先渲染实时流灌入的 outlineContent，彻底消除 Loader 延迟带来的白屏
     const targetContent = outlineContent || outline?.contentMd || "";
-    const currentContent = (editor.storage as any).markdown.getMarkdown();
-    
+    const currentContent = editor.storage.markdown.getMarkdown();
+
     // 只要有差异（包括切换到空项目时 targetContent 为空），就强制同步并清空脏状态
     if (currentContent !== targetContent) {
       editor.commands.setContent(targetContent);

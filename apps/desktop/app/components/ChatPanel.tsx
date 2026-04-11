@@ -50,12 +50,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const isDirty = useCanvasStore((s) => s.isDirty);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
 
-  const { messages, setMessages, sendMessage, status, error, stop } = (useChat as any)({
+  const { messages, setMessages, sendMessage, status, error, stop } = useChat({
     id: projectId,
-    
-         
-     
-    initialMessages: startingMessages as any,
+
+
+
+    initialMessages: startingMessages as UIMessage[],
         transport: new DefaultChatTransport({
           api: "http://localhost:8787/api/chat",
           body: { projectId, currentOutline: outlineContent, isDirty }
@@ -122,7 +122,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     if (content.trim()) {
       // 架构师干预：根据官方最新规范，动态挂载最新业务状态，拒绝陈旧闭包
       sendMessage(
-        { role: "user", content } as any,
+        { role: "user", content },
         { body: { projectId, currentOutline: outlineContent, isDirty } }
       );
       if (isDirty) clearDirtyState();
@@ -156,15 +156,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
               <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "bg-zinc-800 text-zinc-100 rounded-2xl rounded-tr-sm border border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-300"}`}>
                 {/* 1. 纯文本渲染 & 工具状态回显 (拦截空炮消息) */}
                 {(() => {
-                  const msg = message as any;
-                  let textToRender = msg.text || (msg.parts ? msg.parts.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') : "") || msg.content || "";
-                  
-                  // 架构师干预：如果大模型只调工具不说话，我们强行注入系统台词，避免气泡空白
-                  const hasOutlineTool = msg.parts?.some((p: any) => p.type === 'tool-updateOutline') || msg.toolInvocations?.some((t: any) => t.toolName === 'updateOutline');
-                  
-                  if (!textToRender && hasOutlineTool) {
-                    textToRender = "✨ **大纲已同步至右侧画板！**\n\n您可以直接在右侧手动修改，或者继续在这里告诉我需要往哪里调整。";
-                  }
+                  const msg = message;
+                  let textToRender = msg.content || (msg.parts ? msg.parts.filter(p => p.type === 'text').map(p => p.text).join('') : "") || "";
 
                   if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
                   
@@ -175,11 +168,13 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                   );
                 })()}
                 
-                {/* 2. Tool Invocations 状态渲染 */}
-                {(message as any).toolInvocations?.map((toolInvocation: any, index: any) => {
-                  const isCalling = toolInvocation.state === 'call' || toolInvocation.state === 'partial-call';
-                  const isOutline = toolInvocation.toolName === 'updateOutline' || toolInvocation.toolName === 'patch_outline';
-                  
+                {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) */}
+                {message.parts?.filter((p: any) => p.toolCallId || (p.type && p.type.startsWith('tool-'))).map((toolPart: any, index: number) => {
+                  const state = toolPart.state;
+                  // 适配 v6 的流式状态机
+                  const isCalling = state === 'streaming' || state === 'input-streaming' || state === 'input-available';
+                  const isOutline = toolPart.type?.includes('updateOutline') || toolPart.toolName === 'updateOutline';
+
                   return (
                     <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3">
                       {isCalling ? (
