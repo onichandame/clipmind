@@ -40,9 +40,18 @@
 
 ## 📝 遗留技术债工单 (Tech Debt)
 
-**[High Priority] 恢复 AI SDK 的 ReAct 多步循环能力**
-- **现状**：目前后端的 AI 流式响应被强制锁定在单步模式（移除了 `maxSteps` 配置）。
-- **病因**：在当前的 `@ai-sdk/core` (v3.4.33) 中，开启 `maxSteps: 5` 会导致底层 `run-tools-transformation.ts` 转换器无法识别内部遥测事件，引发致命报错 `Error: Unhandled chunk type: stream-start`，从而导致整个流式进程崩溃。
-- **Action Item**：
-  1. 持续跟踪 Vercel AI SDK 官方 Github Issues，等待修复 `stream-start` chunk 的上游补丁。
-  2. 修复后，在 `apps/server/src/routes/chat.ts` 的 `streamText` 中恢复 `maxSteps: 5`，以完全释放 AI 在 Tool Calling 后的持续对话能力（多轮循环思考）。
+**[Ticket-01] 恢复 AI SDK 的 ReAct 多步循环能力 (High Priority)**
+- **位置**: `apps/server/src/routes/chat.ts`
+- **现状**：目前后端的 AI 流式响应被强制锁定在单步模式（注销了 `maxSteps: 5` 配置）。
+- **病因**：在当前的 `@ai-sdk/core` (v3.4.33) 中，开启多步循环会导致底层 `run-tools-transformation.ts` 转换器无法识别内部遥测事件，引发致命报错 `Error: Unhandled chunk type: stream-start`，导致流式进程直接崩溃。
+- **Action Item**：持续跟踪 Vercel AI SDK 官方上游补丁。修复后在 `streamText` 中恢复 `maxSteps: 5`，释放 AI 的多次 Tool Calling 思考能力。
+
+**[Ticket-02] Canvas 视图状态流转黑盒 (Medium Priority)**
+- **位置**: `apps/desktop/app/components/CanvasPanel.tsx`
+- **病状**: 存在通过 `(editor.storage as any).markdown.getMarkdown()` 强行绕过 React 生命周期获取状态的 Hack 代码。
+- **诊断**: 这种强制介入破坏了单向数据流。在 AI 高频并发写入大纲（Outline）时，极易引发 UI 撕裂或渲染竞态条件，后期需重构数据同步机制。
+
+**[Ticket-03] 类型系统大面积降级 (Tech Task)**
+- **位置**: 跨前后端通信层（如 `ChatPanel.tsx` 和 `chat.ts`）
+- **病状**: 存在大量的 `as any` 和 `: any` 断言。
+- **诊断**: 主要是由于 Vercel SDK 字段更名（如 `toolInvocations` 替代旧版字段）导致的临时妥协。后续需要重新对齐 Zod Schema 与 TypeScript 接口定义，恢复严格类型校验。
