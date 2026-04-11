@@ -55,7 +55,10 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
 
     // 只要有差异（包括切换到空项目时 targetContent 为空），就强制同步并清空脏状态
     if (currentContent !== targetContent) {
-      editor.commands.setContent(targetContent);
+      // 防止高频流式更新导致的光标丢失：仅在未聚焦时执行全量覆盖
+      if (!editor.isFocused) {
+        editor.commands.setContent(targetContent);
+      }
       if (!outlineContent) setOutlineContent(targetContent, "system");
     }
   }, [outline?.contentMd, outlineContent, editor, setOutlineContent]);
