@@ -7,7 +7,7 @@
 - **前端视图**: React Router v7 + Vite - 纯粹的 SPA 渲染层。
 - **云端大脑**: Hono (Node Server) - 处理高并发网络请求与 AI 对接。
 - **数据流**: @tanstack/react-query (前端缓存) + Drizzle ORM (后端 MySQL 驱动)。
-- **AI 底层**: Vercel AI SDK (v3.4+) - 负责流式解析与 Tool Calling。
+- **AI 底层**: Vercel AI SDK (v6.0+) - 负责 Agentic 工作流与多步 Tool Calling。
 
 ---
 
@@ -22,11 +22,12 @@
 - 在组件顶层和 SDK `onChunk` 钩子里注入 `console.log`。
 - 只有看到确凿的堆栈或 URL 证据，才能下刀修改。
 
-### 2. Vercel AI SDK 的版本“毒区”
-本项目深度依赖 Vercel AI SDK，但其在 v3.4+ 版本的更迭中包含了大量未充分文档化的 Breaking Changes：
-- **异步陷阱**：`streamText` 已经变为异步函数，**必须加 `await`**，否则返回空 `Promise`，前端无法解析（表现为静默失败）。
-- **字段更名**：Tool 的入参规范必须使用 `parameters`，禁止使用旧版的 `inputSchema`，否则 Zod 解析器会直接崩溃。
-- **方法演进**：流式返回请严格使用 `toDataStreamResponse()`，禁止使用早期的 `toUIMessageStreamResponse`。
+### 2. Vercel AI SDK V6 迁移与 Agent 协议
+本项目已全面升级至 AI SDK v6.0+。请务必遵守以下 V6 特有规范：
+- **同步流对象**：`streamText` 现在同步返回流对象。**严禁在调用前加 `await`**，否则会导致流被阻塞降级为静态对象，引发 `toUIMessageStreamResponse is not a function` 报错。
+- **响应方法更名**：流式返回请统一使用 `toUIMessageStreamResponse()`。原 `toDataStreamResponse` 已废弃。
+- **上下文对齐 (Critical)**：V6 的消息结构使用 `parts` 数组存储文本。在后端处理历史记录时，必须解析 `m.parts`，否则会导致 AI 丢失上一轮对话内容（表现为“失忆”或“对话错位”）。
+- **多步循环能力**：现已原生支持 `maxSteps: 5`。升级到 V6 后，已修复早期版本在多步调用时触发 `stream-start` 块导致的崩溃问题。
 
 ### 3. Vite 与 RRv7 的多重缓存幽灵
 如果修改了组件代码但浏览器表现依然怪异，极有可能是 Vite 的强缓存（`.vite` 目录）或 React Router v7 的 loader 缓存作祟。
@@ -40,11 +41,8 @@
 
 ## 📝 遗留技术债工单 (Tech Debt)
 
-**[Ticket-01] 恢复 AI SDK 的 ReAct 多步循环能力 (High Priority)**
-- **位置**: `apps/server/src/routes/chat.ts`
-- **现状**：目前后端的 AI 流式响应被强制锁定在单步模式（注销了 `maxSteps: 5` 配置）。
-- **病因**：在当前的 `@ai-sdk/core` (v3.4.33) 中，开启多步循环会导致底层 `run-tools-transformation.ts` 转换器无法识别内部遥测事件，引发致命报错 `Error: Unhandled chunk type: stream-start`，导致流式进程直接崩溃。
-- **Action Item**：持续跟踪 Vercel AI SDK 官方上游补丁。修复后在 `streamText` 中恢复 `maxSteps: 5`，释放 AI 的多次 Tool Calling 思考能力。
+**[Ticket-01] [RESOLVED] 恢复 AI SDK 的 ReAct 多步循环能力**
+- **修复记录**：已将 workspace 的 `ai` 依赖升级至 latest，彻底解决了 Vercel 官方 `run-tools-transformation.ts` 无法解析 `stream-start` chunk 的上游 Bug，并在 `chat.ts` 中恢复了 `maxSteps: 5`。AI 现已具备单回合多次调用 Tool 的 ReAct 能力。
 
 **[Ticket-02] Canvas 视图状态流转黑盒 (Medium Priority)**
 - **位置**: `apps/desktop/app/components/CanvasPanel.tsx`

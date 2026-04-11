@@ -45,12 +45,23 @@ app.post("/", async (c) => {
       const model = createAIModel();
       
       // 架构师干预：根据官方安全规范，手动进行安全的向下兼容映射，防止 SDK 内部崩溃
-      const safeMessages = (messages || []).map((m: any) => ({
-        role: m.role || "user",
-        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content || ""),
-      }));
+      const safeMessages = (messages || []).map((m: any) => {
+            let textContent = typeof m.content === "string" ? m.content : "";
+            
+            // 核心修复：解析 V6 的 parts 结构
+            if (Array.isArray(m.parts) && m.parts.length > 0) {
+                textContent = m.parts.map((p: any) => p.text || "").join("");
+            } else if (!textContent && m.content) {
+                textContent = JSON.stringify(m.content);
+            }
+            
+            return {
+                role: m.role || "user",
+                content: textContent
+            };
+          });
 
-      const result = await streamText({
+          const result = streamText({
         model, system: dynamicSystemPrompt, messages: safeMessages as any,
         // TODO: [High Priority] 恢复 maxSteps: 5 (当前注销以规避 Vercel AI SDK 3.4+ stream-start 上游崩溃 bug)
         maxSteps: 5,
@@ -101,7 +112,7 @@ app.post("/", async (c) => {
   });
 
   
-  return result.toDataStreamResponse();
+  return result.toUIMessageStreamResponse();
 
 });
 
