@@ -15,6 +15,13 @@
       "when": 1775744700888,
       "tag": "0001_condemned_vengeance",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1775903854092,
+      "tag": "0002_large_cobalt_man",
+      "breakpoints": true
     }
   ]
 }

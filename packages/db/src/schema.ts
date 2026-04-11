@@ -1,5 +1,5 @@
 // app/db/schema.ts
-import { mysqlTable, varchar, text, int, timestamp } from 'drizzle-orm/mysql-core';
+import { mysqlTable, varchar, text, int, timestamp, json } from 'drizzle-orm/mysql-core';
 
 // ==========================================
 // 模块 A：全局资产库 (The Asset Data Layer)
@@ -52,6 +52,7 @@ export const projectMessages = mysqlTable('project_messages', {
     .references(() => projects.id, { onDelete: 'cascade' }), // 级联删除
   role: varchar('role', { length: 20 }).notNull(), // 'user' | 'assistant'
   content: text('content').notNull(),
+  toolInvocations: json('tool_invocations'), // [Ticket-04] 扩容：持久化 Agent 工作流状态
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

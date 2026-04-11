@@ -66,13 +66,18 @@ app.get('/:id', async (c) => {
     const messagesRes = await db.select().from(projectMessages).where(eq(projectMessages.projectId, id));
     
     // 按时间顺序对历史消息进行升序排序
-    const sortedMessages = messagesRes.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    // 按时间顺序对历史消息进行升序排序并格式化为 AI SDK Message 结构
+        const sortedMessages = messagesRes.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()).map(msg => ({
+          ...msg,
+          // 反序列化 toolInvocations，无缝对接前端 ChatPanel
+          toolInvocations: msg.toolInvocations ? (typeof msg.toolInvocations === 'string' ? JSON.parse(msg.toolInvocations) : msg.toolInvocations) : undefined
+        }));
 
-    return c.json({
-      project: projectRes[0],
-      outline: outlineRes.length > 0 ? outlineRes[0] : null,
-      initialMessages: sortedMessages
-    });
+        return c.json({
+          project: projectRes[0],
+          outline: outlineRes.length > 0 ? outlineRes[0] : null,
+          initialMessages: sortedMessages
+        });
   } catch (error) {
     console.error("Failed to fetch project details:", error);
     return c.json({ error: "Server error" }, 500);

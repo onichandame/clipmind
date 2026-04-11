@@ -1,0 +1,1 @@
+ALTER TABLE `project_messages` ADD `tool_invocations` json;

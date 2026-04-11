@@ -66,18 +66,31 @@ app.post("/", async (c) => {
     // TODO: [High Priority] 恢复 maxSteps: 5 (当前注销以规避 Vercel AI SDK 3.4+ stream-start 上游崩溃 bug)
     maxSteps: 5,
 
-    onFinish: async ({ text, toolCalls }) => {
-      try {
-        // 防御：只存纯文本，千万不要把 Tool JSON 存成文本漏给前端
-        let cleanContent = text || "";
+    // 提取完整的 event 对象以获取 toolResults，用于构建前端所需标准的 toolInvocations
+            onFinish: async (event) => {
+              try {
+                const { text, toolCalls, toolResults } = event;
+                let cleanContent = text || "";
 
-        await db.insert(projectMessages).values({
-          id: crypto.randomUUID(),
-          projectId,
-          role: "assistant",
-          // 如果有内容存内容，如果完全是纯 Tool 调用（如静默更新大纲），则存一个友好提示
-          content: cleanContent || (toolCalls && toolCalls.length > 0 ? "大纲已更新完成。" : "[Empty]")
-        });
+                // 构建 Vercel AI SDK 兼容的 toolInvocations
+                const invocations = toolCalls?.map(call => {
+                  const res = toolResults?.find(r => r.toolCallId === call.toolCallId);
+                  return {
+                    state: res ? 'result' : 'call',
+                    toolCallId: call.toolCallId,
+                    toolName: call.toolName,
+                    args: call.args,
+                    result: res?.result
+                  };
+                });
+
+                await db.insert(projectMessages).values({
+                  id: crypto.randomUUID(),
+                  projectId,
+                  role: "assistant",
+                  content: cleanContent,
+                  toolInvocations: invocations && invocations.length > 0 ? invocations : null
+                });
       } catch (error) {
         console.error("Chat persistence error:", error);
       }
