@@ -62,22 +62,13 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
         queryClient.invalidateQueries({ queryKey: ['project', projectId] });
       }
 
+      // Persist messages: send complete array, replacing entire uiMessages
       const persistUrl = `http://localhost:8787/api/projects/${projectId}/messages`;
-      const lastUserMsg = [...event.messages].reverse().find(m => m.role === 'user');
-      if (lastUserMsg) {
-        fetch(persistUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: lastUserMsg }),
-        }).catch(console.error);
-      }
-      if (event.message) {
-        fetch(persistUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: event.message }),
-        }).catch(console.error);
-      }
+      fetch(persistUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uiMessages: event.messages }),
+      }).catch(console.error);
     },
   });
 
