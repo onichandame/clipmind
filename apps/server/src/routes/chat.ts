@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { db, projectOutlines, projectMessages } from "@clipmind/db";
+import { db, projectOutlines } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
 import { z } from "zod";
@@ -22,20 +22,6 @@ app.post("/", async (c) => {
     dynamicSystemPrompt += `When calling \`updateOutline\`, you must provide the FULL updated markdown content, combining the user's manual edits with your new additions.`;
   }
 
-  // 1. 提问前置入库：拉开时间差，彻底解决对话排序倒置问题
-  // Store raw UIMessage — no transformation needed
-  try {
-    const lastUserMessage = [...messages].reverse().find(msg => msg.role === `user`);
-    if (lastUserMessage) {
-      await db.insert(projectMessages).values({
-        id: crypto.randomUUID(), projectId, message: lastUserMessage,
-      });
-    }
-  } catch (error) {
-    console.error("Failed to persist user message:", error);
-  }
-
-  // 2. 启动流式响应
   const model = createAIModel();
 
   const safeMessages = await convertToModelMessages(messages);
@@ -67,21 +53,6 @@ app.post("/", async (c) => {
       return {};
     },
 
-    // Store raw UIMessage — no transformation needed
-    onFinish: async (event) => {
-      try {
-        const assistantMessage = event.text;
-        if (assistantMessage) {
-          await db.insert(projectMessages).values({
-            id: crypto.randomUUID(),
-            projectId,
-            message: assistantMessage,
-          });
-        }
-      } catch (error) {
-        console.error("Chat persistence error:", error);
-      }
-    },
     tools: {
       updateOutline: tool({
         description: "生成、覆盖或修改当前的视频 Markdown 大纲。注意：你必须提供 contentMd 参数。",
@@ -99,7 +70,7 @@ app.post("/", async (c) => {
             // 核心修复：直接使用外部 request.json() 解构出来的真实 projectId，禁止 LLM 瞎猜
             await db.insert(projectOutlines).values({
               id: crypto.randomUUID(),
-              projectId: projectId,
+              projectId: pro jectId,
               contentMd: safeContent
             }).onDuplicateKeyUpdate({
               set: { contentMd: safeContent }

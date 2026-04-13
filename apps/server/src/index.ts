@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
 import chatRoute from './routes/chat';
+import messagesRoute from './routes/messages';
 import ossCallbackRoute from './routes/oss-callback';
 import uploadTokenRoute from './routes/upload-token';
 import projectsRoute from './routes/projects';
@@ -23,6 +24,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'ClipMind Hono API'
 
 // 挂载独立业务路由
 app.route('/api/projects', projectsRoute);
+app.route('/api/projects', messagesRoute);
 app.route('/api/chat', chatRoute);
 app.route('/api/oss-callback', ossCallbackRoute);
 app.route('/api/upload-token', uploadTokenRoute);
