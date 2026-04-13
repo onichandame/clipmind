@@ -12,6 +12,7 @@ export const assets = mysqlTable('assets', {
   ossUrl: varchar('oss_url', { length: 1024 }).notNull(), // 视频主轨道 URL
   audioOssUrl: varchar('audio_oss_url', { length: 1024 }), // NEW: 降维音频轨道 URL
   fileSize: int('file_size').notNull(), // 上传时直传获取(Byte)
+  duration: int('duration'), // NEW: 视频总时长(秒)
   status: varchar('status', { length: 20 }).default('processing'), // processing | ready | error
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });

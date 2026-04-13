@@ -11,8 +11,17 @@ interface Asset {
   filename: string;
   objectKey: string;
   fileSize: number;
+  duration: number;
   status: 'ready' | 'processing' | 'error';
   createdAt: string;
+}
+
+// 辅助函数：格式化时长 (秒 -> MM:SS)
+function formatDuration(seconds?: number) {
+  if (!seconds) return '00:00';
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
 }
 
 // React Router v7 客户端加载器：负责从 Hono 后端获取真实资产列表
@@ -66,12 +75,13 @@ export default function AssetsLibrary() {
   const processJob = async (job: UploadJob) => {
     try {
       updateJob(job.id, { status: 'compressing', progress: 0 });
+
       // 生成本地临时输出路径
       const videoOut = `${job.sourcePath}.min.mp4`;
       const audioOut = `${job.sourcePath}.audio.aac`;
 
-      // 阶段 1：交由 Rust 层挂载的 FFmpeg Sidecar 极速处理
-      await invoke('process_asset', { input: job.sourcePath, outputVideo: videoOut, outputAudio: audioOut });
+      // 阶段 1：交由 Rust 层解析 Duration 并执行 FFmpeg Sidecar 极速处理
+      const duration = await invoke<number>('process_asset', { input: job.sourcePath, outputVideo: videoOut, outputAudio: audioOut });
 
       updateJob(job.id, { status: 'uploading', progress: 0 });
       // 阶段 2：获取云端并发签发 URL (指定当前运行的 Hono 后端端口)
@@ -81,31 +91,25 @@ export default function AssetsLibrary() {
       });
       const { videoUploadUrl, audioUploadUrl, videoObjectKey } = await tokenRes.json();
 
-      // 阶段 3：移交 Rust 底层引擎直传，彻底绕开 WebKit CORS 限制与内存序列化损耗
-      const uploadTrack = async (localPath: string, url: string, type: string) => {
-        await invoke('upload_asset', { jobId: job.id, path: localPath, url: url, contentType: type });
+      // 阶段 3：移交 Rust 底层引擎直传，并获取真实上传的文件大小
+      const uploadTrack = async (localPath: string, url: string, type: string): Promise<number> => {
+        return await invoke<number>('upload_asset', { jobId: job.id, path: localPath, url: url, contentType: type });
       };
 
       // 音视频双轨并发直传
-      await Promise.all([
+      const [videoSize, audioSize] = await Promise.all([
         uploadTrack(videoOut, videoUploadUrl, 'video/mp4'),
         uploadTrack(audioOut, audioUploadUrl, 'audio/aac')
       ]);
 
-      // 阶段 4：核心闭环 - 跨域通知 Hono 后端将资产写入 Drizzle/Neon 数据库
-      console.log(`[Stage 4: 闭环落盘] 通知 Node Server 记录资产数据...`);
-      const callbackRes = await fetch('http://localhost:8787/api/oss-callback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: job.filename,
-          objectKey: videoObjectKey // 💡 核心修复：将钥匙交还给后端以通过 400 校验
-        })
+      // 阶段 4：核心闭环 - 委托 Rust 发起底层 Webhook，免疫 WebKit 路由切换导致的丢数据风波
+      console.log(`[Stage 4: 闭环落盘] 委托 Rust 侧发送 Webhook...`);
+      await invoke('notify_webhook', {
+        filename: job.filename,
+        objectKey: videoObjectKey,
+        fileSize: videoSize, // 记录实际上传的压缩后视频大小
+        duration: duration
       });
-
-      if (!callbackRes.ok) {
-        console.warn("落盘警告: 文件已上传 OSS，但后端数据库记录失败！");
-      }
 
       updateJob(job.id, { status: 'ready', progress: 100 });
       revalidator.revalidate(); // 触发 React Router loader 重新拉取数据库最新列表
@@ -188,7 +192,11 @@ export default function AssetsLibrary() {
                   <h3 className="text-sm font-medium text-zinc-200 truncate" title={asset.filename}>{asset.filename}</h3>
                   <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
                     {/* 确保字段名与 Drizzle 返回的一致 */}
-                    <span>{((asset.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB</span>
+                    <div className="flex gap-2">
+                      <span className="font-medium text-zinc-400">{formatDuration(asset.duration)}</span>
+                      <span>•</span>
+                      <span>{((asset.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB</span>
+                    </div>
                     <span>{asset.createdAt ? new Date(asset.createdAt).toLocaleDateString() : '刚刚'}</span>
                   </div>
                 </div>

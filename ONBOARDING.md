@@ -47,11 +47,16 @@
 
 当出现幽灵 Bug 时，绝对禁止凭借经验修改代码盲试。必须在链路底层下放探针（Probe），拿到确凿的堆栈、日志或 URL 证据，才能下刀修改。
 
-### 🛑 2. WebKit CORS 封锁与大文件 IO 降级 (IPC 内存灾难)
+### 🛑 2. WebKit 封锁、IPC 风暴与“幽灵资产” (让底层的归底层)
 
-- **血泪教训**：WebKitGTK 等前端沙盒严格禁止原生 `fetch` 跨域读取本地协议。同时，直接将底层高频事件（如 FFmpeg stderr 字节流）无脑跨进程转发给前端，会引发可怕的 **IPC 通信风暴**，瞬间撑爆 V8 引擎导致 `NeedDebuggerBreak trap` 崩溃。
-- **架构规范**：**让 UI 的归 UI，让底层的归底层。** - 任何大文件的读取、流式处理和 HTTP 推送，必须 100% 留在 Rust 侧。
-  - Rust 后端向前端发送进度事件时，必须注入**节流阀 (Throttle)**（如 150ms 推送一次），彻底将性能毒瘤按死在底层。
+- **血泪教训 1 (CORS 封锁 & Metadata 提取)**：WebKitGTK 等前端沙盒不仅禁止原生 `fetch` 跨域读取本地协议，同时，试图用隐式 `<video src="asset://...">` 在前端沙盒去读取本地大文件时长是非常脆弱的做法，极易引发 "The URL can’t be shown" 拦截。
+  - **DON'T DO**: 严禁在前端强行解析本地大文件元数据。
+  - **规范**: 必须在 Rust 层直接解析 FFmpeg stderr 输出流，提取真实的 `Duration` 传递给前端。
+- **血泪教训 2 (IPC 通信风暴)**：直接将底层高频事件（如 FFmpeg stderr 字节流）无脑跨进程转发给前端，瞬间会撑爆 V8 引擎导致 `NeedDebuggerBreak trap` 崩溃。
+  - **规范**: Rust 后端向前端发送进度事件时，必须强制注入 **节流阀 (Throttle)**（如 150ms 推送一次），按死性能毒瘤。
+- **血泪教训 3 (幽灵资产与 Webhook 移交)**：如果让前端在上传完毕后去 `fetch` 调用后端的落盘 API，一旦用户在进度 99% 时切换路由或刷新页面，回调就会灰飞烟灭。文件上了 OSS，但数据库记录丢失，产生“幽灵资产”。
+  - **DON'T DO**: 严禁在前端 `assets.tsx` 发起跨域 Webhook 通知 Node Server。
+  - **规范**: 必须由执行直传的 Rust 底层 (`lib.rs`)，在推流成功后，直接使用 `reqwest::Client` (开启 `json` feature) 向后端发起落盘通知。
 
 ### 🛑 3. Tauri v2 插件的“双端一致性”原则
 

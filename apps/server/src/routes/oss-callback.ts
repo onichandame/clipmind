@@ -6,7 +6,7 @@ const app = new Hono();
 app.post("/", async (c) => {
   try {
     const body = await c.req.json();
-    const { filename, objectKey, fileSize } = body;
+    const { filename, objectKey, fileSize, duration } = body;
 
     if (!filename || !objectKey) {
       return new Response(JSON.stringify({ error: 'Missing parameters' }), { status: 400 });
@@ -16,8 +16,9 @@ app.post("/", async (c) => {
     await db.insert(assets).values({
       id: crypto.randomUUID(),
       filename: filename,
-      ossUrl: objectKey, // 👉 核心修复：对齐前任的数据库 Schema，使用 ossUrl 字段！
+      ossUrl: objectKey,
       fileSize: fileSize || 0,
+      duration: duration || 0, // 💡 新增：记录总时长
       status: 'ready',
     });
 
