@@ -33,14 +33,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
 
-  // 1. 标准化组装初始消息
-  const startingMessages: any[] = [
-    ...initialMessages.map(msg => ({
-      id: msg.id,
-      role: msg.role as "user" | "assistant",
-      content: msg.content || " "
-    }))
-  ];
+  // 1. Raw UIMessage passthrough — no transformation needed
+  const startingMessages = initialMessages;
 
   // 2. 规范调用
   const outlineContent = useCanvasStore((s) => s.outlineContent);
