@@ -41,7 +41,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const isDirty = useCanvasStore((s) => s.isDirty);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
 
-  const { messages, setMessages, sendMessage, status, error, stop } = useChat({
+  const { messages, setMessages, sendMessage, status, } = useChat({
     id: projectId,
 
 
@@ -65,10 +65,27 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
       if (hasOutline) {
         setActiveMode("outline");
-        queryClient.invalidateQueries({ queryKey: ['project', projectId] }); // 强制 Loader 重新抓取数据库最新大纲
+        queryClient.invalidateQueries({ queryKey: ['project', projectId] });
       } else if (hasFootage) {
         setActiveMode("footage");
         queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      }
+
+      const persistUrl = `http://localhost:8787/api/projects/${projectId}/messages`;
+      const lastUserMsg = [...event.messages].reverse().find(m => m.role === 'user');
+      if (lastUserMsg) {
+        fetch(persistUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: lastUserMsg }),
+        }).catch(console.error);
+      }
+      if (event.message) {
+        fetch(persistUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: event.message }),
+        }).catch(console.error);
       }
     },
   });
@@ -109,7 +126,6 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     const formData = new FormData(e.currentTarget);
     const content = formData.get("content") as string;
     if (content.trim()) {
-      // 架构师干预：根据官方最新规范，动态挂载最新业务状态，拒绝陈旧闭包
       sendMessage(
         { text: content },
         { body: { projectId, currentOutline: outlineContent, isDirty } }

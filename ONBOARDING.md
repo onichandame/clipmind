@@ -23,7 +23,7 @@
 - **ReAct 多步循环断裂**：在后端调用 `streamText` 时，**必须显式声明 `maxSteps` 参数**（如 `maxSteps: 5`）。如果遗漏，大模型在调用工具后会直接结束生命周期，无法将工具结果作为上下文进行第二轮推导，导致前端出现"空炮消息"。
 - **UI 状态机与 Parts 协议**：前端 `UIMessage` 已彻底废弃旧版的 `toolInvocations` 数组和 `call` 状态。所有工具调用状态已打平合并至 `message.parts` 数组中。新的流式状态机变更为 `input-streaming` -> `input-available` -> `output-available`，渲染层必须基于 `parts` 进行重构。
 - **同步流对象**：`streamText` 本身同步返回流对象，严禁加 `await`。
-- **消息持久化零转换原则 (Critical)**：`projectMessages` 表使用单一 `message json NOT NULL` 列直接存储 AI SDK 的 `UIMessage` 原始对象。**严禁**在写入时手工提取字段（如 `role`、`content`、`toolInvocations`），也**严禁**在读取时重建 `parts[]` 数组。写入路径：`message: lastUserMessage` / `message: assistantMessage`；读取路径：`m.message` 直接透传。任何字段映射都是技术债。
+- **消息持久化前端发起原则 (Critical)**：`streamText` 的 `onFinish` 回调拿到的 `event` 不是 `UIMessage` 格式（只有 `event.text` 纯字符串和 `CoreMessage[]`），无法直接存入 `projectMessages` 表。因此**所有消息持久化必须由前端发起**：前端 `useChat` 的 `onFinish` 回调能拿到完整的 `{ message, messages }`（均为 `UIMessage` 格式），通过 `POST /api/projects/:projectId/messages` 端点零转换入库。后端 `chat.ts` **严禁**包含任何 `projectMessages` 写入逻辑。`projectMessages` 表仍使用单一 `message json NOT NULL` 列直接存储 `UIMessage` 原始对象，读取路径 `m.message` 直接透传，任何字段映射都是技术债。
 
 ### 3. Monorepo 环境下的模块提升与迁移陷阱 (Critical)
 - **环境变量防线**：在 Node Server 入口处，`import 'dotenv/config'` 必须是物理位置的绝对第一行！否则在 TypeScript/ESM 的模块提升机制下，数据库初始化模块会抢先执行，导致 `DATABASE_URL` 丢失崩溃。
@@ -44,6 +44,10 @@
 **[Ticket-05] [RESOLVED] projectMessages 结构僵硬导致序列化开销过大**
 - **病状**：`projectMessages` 表使用 `role`、`content`、`toolInvocations` 三个独立列存储 AI SDK 消息，写入时需要手工从 `UIMessage` 提取字段并重命名（`input→args`、`output→result`），读取时需要 19 行代码重建 `parts[]` 数组。前端 `ChatPanel` 又立即把重建结果 strip 回 `{id, role, content}`，整个链路是"压缩→解压→再压缩"的无效循环。
 - **修复记录**：将 `role`、`content`、`toolInvocations` 三列替换为单一 `message json NOT NULL` 列，直接存储 AI SDK 的 `UIMessage` 原始对象。写入路径从手工构建 invocations 简化为 `message: lastUserMessage` / `message: assistantMessage`；读取路径从 19 行 parts 重建简化为 `m.message` 直接透传；前端 `startingMessages` 从 strip 逻辑简化为 `initialMessages` 直接赋值。Greeting 消息也改为标准 UIMessage 格式。迁移文件：`0003_faulty_giant_man.sql`。
+
+**[Ticket-06] [RESOLVED] 后端 onFinish 消息格式不对齐导致持久化失败**
+- **病状**：`streamText` 的 `onFinish` 回调只提供 `event.text`（纯字符串）和 `response.messages`（`CoreMessage[]`），均非 `UIMessage` 格式。后端直接将 `event.text` 存入 `projectMessages.message` 列，导致前端加载历史时拿到的是纯字符串而非 `UIMessage` 对象，`parts` 数组丢失，工具调用状态无法恢复。
+- **修复记录**：将所有消息持久化从后端迁移至前端发起。后端 `chat.ts` 移除了全部 `projectMessages` 写入逻辑（用户消息前置入库 + `onFinish` 助手消息入库）。新增 `POST /api/projects/:projectId/messages` 端点，接收前端传来的完整 `UIMessage` 对象零转换入库（支持幂等 `ON DUPLICATE KEY UPDATE`）。前端 `ChatPanel.tsx` 在 `useChat` 的 `onFinish` 回调中 fire-and-forget 持久化用户消息和助手消息。后端 `chat.ts` 现在是纯 AI 流式转发管道，不碰数据库。
 
 **[Ticket-02] [RESOLVED] Canvas 视图状态流转黑盒 (Medium Priority)**
 - **病状**: `CanvasPanel.tsx` 存在绕过 React 生命周期的强制 DOM 状态读取 Hack，极易引发渲染竞态条件，后期需重构数据同步机制。
