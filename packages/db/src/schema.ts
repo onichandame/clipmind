@@ -33,6 +33,7 @@ export const projects = mysqlTable('projects', {
   title: varchar('title', { length: 255 }).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().onUpdateNow().notNull(), // 用于 Dashboard 排序
+  uiMessages: json('ui_messages').default([]), // UI 消息历史（简化结构）
 });
 
 export const projectOutlines = mysqlTable('project_outlines', {

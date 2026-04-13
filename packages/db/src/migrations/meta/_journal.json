@@ -29,6 +29,13 @@
       "when": 1776064735600,
       "tag": "0003_faulty_giant_man",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1776079739728,
+      "tag": "0004_charming_iron_monger",
+      "breakpoints": true
     }
   ]
 }
