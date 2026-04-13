@@ -6,6 +6,12 @@
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "shell:allow-spawn",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [{ "cmd": "ffmpeg", "sidecar": true, "args": true }]
+    },
+    "dialog:default"
   ]
 }

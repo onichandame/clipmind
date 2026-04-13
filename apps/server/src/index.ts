@@ -23,9 +23,12 @@ app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'ClipMind Hono API'
 
 // 挂载独立业务路由
 app.route('/api/projects', projectsRoute);
+import assetsRoute from './routes/assets';
+
 app.route('/api/chat', chatRoute);
 app.route('/api/oss-callback', ossCallbackRoute);
 app.route('/api/upload-token', uploadTokenRoute);
+app.route('/api/assets', assetsRoute);
 
 const startServer = async () => {
   try {

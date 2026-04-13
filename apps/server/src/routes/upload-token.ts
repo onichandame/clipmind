@@ -6,18 +6,22 @@ const app = new Hono();
 app.post("/", async (c) => {
   try {
     const body = await c.req.json();
-    // 👉 核心修改 1：同时接收前端传来的文件类型
-    const { filename, contentType } = body; 
-    
-    if (!filename) return new Response(JSON.stringify({ error: 'Filename is required' }), { status: 400 });
+    const { filename } = body; 
+
+    if (!filename) {
+      return c.json({ error: 'filename is required' }, 400);
+    }
 
     if (!process.env.ALIYUN_OSS_REGION || !process.env.ALIYUN_ACCESS_KEY_ID || !process.env.ALIYUN_ACCESS_KEY_SECRET || !process.env.ALIYUN_OSS_BUCKET) {
       throw new Error('❌ OSS 环境变量未配置齐全');
     }
 
     const uniqueId = crypto.randomUUID();
-    const ext = filename.split('.').pop() || 'mp4';
-    const objectKey = `clipmind/assets/${uniqueId}.${ext}`;
+    const videoExt = filename.split('.').pop() || 'mp4';
+    
+    // 架构升级：资产作为顶级实体，直接存放在全局 assets 目录下
+    const videoObjectKey = `assets/${uniqueId}/video.${videoExt}`;
+    const audioObjectKey = `assets/${uniqueId}/audio.aac`;
 
     const client = new OSS({
       region: process.env.ALIYUN_OSS_REGION,
@@ -27,17 +31,21 @@ app.post("/", async (c) => {
       secure: true,
     });
 
-    // 👉 核心修改 2：把 Content-Type 纳入签名加密计算！
-    const url = client.signatureUrl(objectKey, {
-      expires: 3600,
-      method: 'PUT',
-      'Content-Type': contentType || 'application/octet-stream', 
+    // 并发生成两条上传轨道 (明确限定 Content-Type 防止直传被拦截)
+    const videoUploadUrl = client.signatureUrl(videoObjectKey, {
+      expires: 3600, method: 'PUT', 'Content-Type': 'video/' + (videoExt === 'mov' ? 'quicktime' : 'mp4')
+    });
+    const audioUploadUrl = client.signatureUrl(audioObjectKey, {
+      expires: 3600, method: 'PUT', 'Content-Type': 'audio/aac'
     });
 
-    return new Response(JSON.stringify({ uploadUrl: url, objectKey }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return c.json({ 
+      assetId: uniqueId,
+      videoUploadUrl, 
+      videoObjectKey,
+      audioUploadUrl,
+      audioObjectKey
+    }, 200);
 
   } catch (error) {
     console.error('❌ OSS 签名生成失败:', error);
