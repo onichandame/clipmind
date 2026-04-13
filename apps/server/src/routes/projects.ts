@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { db } from '@clipmind/db';
-import { projects, basketItems, projectOutlines, projectMessages } from '@clipmind/db/schema';
-import { desc, eq, sql, asc } from 'drizzle-orm';
+import { projects, basketItems, projectOutlines } from '@clipmind/db/schema';
+import { desc, eq, sql } from 'drizzle-orm';
 
 const app = new Hono();
 
@@ -31,23 +31,18 @@ app.get('/', async (c) => {
 app.post('/', async (c) => {
   try {
     const newId = crypto.randomUUID();
-    // 1. 物理创建项目记录
+    const GREETING = "你好！我是你的创作助理 ClipMind。今天打算怎么开启工作？是想先聊聊灵感、策划一个新短视频大纲，还是脑子里已经有确切的画面，直接去库里精准找素材片段？";
+
+    // 1. 物理创建项目记录（包含初始 Greeting 消息）
     await db.insert(projects).values({
       id: newId,
       title: "未命名大纲",
-    });
-
-    // 2. 物理入库初始 Greeting 消息，确保历史一致性
-    const GREETING = "你好！我是你的创作助理 ClipMind。今天打算怎么开启工作？是想先聊聊灵感、策划一个新短视频大纲，还是脑子里已经有确切的画面，直接去库里精准找素材片段？";
-    await db.insert(projectMessages).values({
-      id: crypto.randomUUID(),
-      projectId: newId,
-      message: {
+      uiMessages: [{
         id: crypto.randomUUID(),
         role: 'assistant',
         content: GREETING,
         parts: [{ type: 'text', text: GREETING }],
-      },
+      }],
     });
 
     return c.json({ success: true, id: newId });
@@ -77,17 +72,14 @@ app.get('/:id', async (c) => {
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
-    const messagesRes = await db.select().from(projectMessages).where(eq(projectMessages.projectId, id)).orderBy(asc(projectMessages.createdAt));
 
-    console.log(JSON.stringify(messagesRes, null, 2))
-    // Store raw UIMessage — no transformation needed
-    const initialMessages = messagesRes.map(m => {
+    const initialMessages = (() => {
       try {
-        return m.message;
+        return projectRes[0].uiMessages || [];
       } catch {
-        return { id: m.id, role: 'assistant', content: ' ', parts: [{ type: 'text', text: ' ' }] };
+        return [{ id: 'fallback', role: 'assistant', content: ' ', parts: [{ type: 'text', text: ' ' }] }];
       }
-    });
+    })();
 
     return c.json({
       project: projectRes[0],
@@ -97,6 +89,27 @@ app.get('/:id', async (c) => {
   } catch (error) {
     console.error("Failed to fetch project details:", error);
     return c.json({ error: "Server error" }, 500);
+  }
+});
+
+// 5. 更新项目消息（替换整个 uiMessages 数组）
+app.put('/:id/messages', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const { uiMessages } = body as { uiMessages: unknown[] };
+
+  if (!Array.isArray(uiMessages)) {
+    return c.json({ error: 'uiMessages must be an array' }, 400);
+  }
+
+  try {
+    await db.update(projects)
+      .set({ uiMessages, updatedAt: new Date() })
+      .where(eq(projects.id, id));
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('Failed to update messages:', error);
+    return c.json({ error: 'Failed to update messages' }, 500);
   }
 });
 
