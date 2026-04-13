@@ -50,9 +50,7 @@ export const projectMessages = mysqlTable('project_messages', {
   projectId: varchar('project_id', { length: 36 })
     .notNull()
     .references(() => projects.id, { onDelete: 'cascade' }), // 级联删除
-  role: varchar('role', { length: 20 }).notNull(), // 'user' | 'assistant'
-  content: text('content').notNull(),
-  toolInvocations: json('tool_invocations'), // [Ticket-04] 扩容：持久化 Agent 工作流状态
+  message: json('message').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
