@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { db } from '@clipmind/db';
 import { projects, basketItems, projectOutlines, projectMessages } from '@clipmind/db/schema';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, sql, asc } from 'drizzle-orm';
 
 const app = new Hono();
 
@@ -42,8 +42,12 @@ app.post('/', async (c) => {
     await db.insert(projectMessages).values({
       id: crypto.randomUUID(),
       projectId: newId,
-      role: "assistant",
-      content: GREETING,
+      message: {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: GREETING,
+        parts: [{ type: 'text', text: GREETING }],
+      },
     });
 
     return c.json({ success: true, id: newId });
@@ -73,35 +77,21 @@ app.get('/:id', async (c) => {
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
-    const messagesRes = await db.select().from(projectMessages).where(eq(projectMessages.projectId, id)).orderBy(desc(projectMessages.createdAt));
+    const messagesRes = await db.select().from(projectMessages).where(eq(projectMessages.projectId, id)).orderBy(asc(projectMessages.createdAt));
 
-    // 按时间顺序对历史消息进行升序排序
-    // 按时间顺序对历史消息进行升序排序并格式化为 AI SDK Message 结构
-    const sortedMessages = messagesRes.map(msg => {
-      const parsedInvocations = msg.toolInvocations ? (typeof msg.toolInvocations === 'string' ? JSON.parse(msg.toolInvocations) : msg.toolInvocations) : undefined;
-
-      // 核心修复：严格对齐 Vercel AI SDK 最新版的 parts 协议，防止前端注水时丢失状态
-      const parts: any[] = [];
-      if (msg.content) {
-        parts.push({ type: 'text', text: msg.content });
+    // Store raw UIMessage — no transformation needed
+    const initialMessages = messagesRes.map(m => {
+      try {
+        return m.message;
+      } catch {
+        return { id: m.id, role: 'assistant', content: ' ', parts: [{ type: 'text', text: ' ' }] };
       }
-      if (parsedInvocations && Array.isArray(parsedInvocations)) {
-        parsedInvocations.forEach(inv => {
-          parts.push({ type: 'tool-invocation', toolInvocation: inv });
-        });
-      }
-
-      return {
-        ...msg,
-        toolInvocations: parsedInvocations, // 保持向下兼容
-        parts: parts.length > 0 ? parts : undefined
-      };
     });
 
     return c.json({
       project: projectRes[0],
       outline: outlineRes.length > 0 ? outlineRes[0] : null,
-      initialMessages: sortedMessages
+      initialMessages: initialMessages
     });
   } catch (error) {
     console.error("Failed to fetch project details:", error);
