@@ -1,21 +1,12 @@
 import { useRef, useEffect } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart } from "ai";
-import type { UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCanvasStore } from "../store/useCanvasStore";
 
-
-if (typeof window !== 'undefined' && !(window).__EDD_PATCHED) {
-  (window).__EDD_PATCHED = true;
-  const origFetch = window.fetch;
-  window.fetch = async function (...args) {
-    return origFetch.apply(this, args);
-  };
-}
 
 interface ChatPanelProps {
   projectId: string;
