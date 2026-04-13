@@ -20,10 +20,10 @@
 
 ### 2. Vercel AI SDK V6 迁移与 Agent 协议 (Blood Trial 补充)
 - **多模态与异步清洗陷阱 (Critical)**：V6 中由于引入了对多模态附件的支持，`convertToModelMessages` 已变更为**异步函数**。调用时**必须**加 `await`，否则会导致下游 `streamText` 触发难以排查的 Zod 崩溃 (`expected array, received Promise`)。且必须确保前端传入的格式最终能够映射到严格的 `parts` 数组。
-- **ReAct 多步循环断裂**：在后端调用 `streamText` 时，**必须显式声明 `maxSteps` 参数**（如 `maxSteps: 5`）。如果遗漏，大模型在调用工具后会直接结束生命周期，无法将工具结果作为上下文进行第二轮推导，导致前端出现“空炮消息”。
+- **ReAct 多步循环断裂**：在后端调用 `streamText` 时，**必须显式声明 `maxSteps` 参数**（如 `maxSteps: 5`）。如果遗漏，大模型在调用工具后会直接结束生命周期，无法将工具结果作为上下文进行第二轮推导，导致前端出现"空炮消息"。
 - **UI 状态机与 Parts 协议**：前端 `UIMessage` 已彻底废弃旧版的 `toolInvocations` 数组和 `call` 状态。所有工具调用状态已打平合并至 `message.parts` 数组中。新的流式状态机变更为 `input-streaming` -> `input-available` -> `output-available`，渲染层必须基于 `parts` 进行重构。
 - **同步流对象**：`streamText` 本身同步返回流对象，严禁加 `await`。
-- **状态注水 (Rehydration)**：在持久化消息历史时，绝对不能将 Tool Call 降维压缩为纯文本。必须在 `onFinish` 中拦截对应状态并存入 JSON 字段，读取时反序列化，才能保证前端 UI 组件复活。
+- **消息持久化零转换原则 (Critical)**：`projectMessages` 表使用单一 `message json NOT NULL` 列直接存储 AI SDK 的 `UIMessage` 原始对象。**严禁**在写入时手工提取字段（如 `role`、`content`、`toolInvocations`），也**严禁**在读取时重建 `parts[]` 数组。写入路径：`message: lastUserMessage` / `message: assistantMessage`；读取路径：`m.message` 直接透传。任何字段映射都是技术债。
 
 ### 3. Monorepo 环境下的模块提升与迁移陷阱 (Critical)
 - **环境变量防线**：在 Node Server 入口处，`import 'dotenv/config'` 必须是物理位置的绝对第一行！否则在 TypeScript/ESM 的模块提升机制下，数据库初始化模块会抢先执行，导致 `DATABASE_URL` 丢失崩溃。
@@ -39,7 +39,11 @@
 **[Ticket-01] [RESOLVED] 恢复 AI SDK 的 ReAct 多步循环能力**
 
 **[Ticket-04] [RESOLVED] Tool Call 状态流转与持久化不对齐**
-- **修复记录**：已在 `projectMessages` 表中扩增 `toolInvocations` JSON 字段。重写了 `chat.ts` 的流式回调和 `projects.ts` 的拉取接口，彻底打通了 Agent 工具状态的持久化与前端 UI 注水恢复链路。同时为 Hono 服务注入了“启动即迁移”的安全生命周期。
+- **修复记录**：已在 `projectMessages` 表中扩增 `toolInvocations` JSON 字段。重写了 `chat.ts` 的流式回调和 `projects.ts` 的拉取接口，彻底打通了 Agent 工具状态的持久化与前端 UI 注水恢复链路。同时为 Hono 服务注入了"启动即迁移"的安全生命周期。
+
+**[Ticket-05] [RESOLVED] projectMessages 结构僵硬导致序列化开销过大**
+- **病状**：`projectMessages` 表使用 `role`、`content`、`toolInvocations` 三个独立列存储 AI SDK 消息，写入时需要手工从 `UIMessage` 提取字段并重命名（`input→args`、`output→result`），读取时需要 19 行代码重建 `parts[]` 数组。前端 `ChatPanel` 又立即把重建结果 strip 回 `{id, role, content}`，整个链路是"压缩→解压→再压缩"的无效循环。
+- **修复记录**：将 `role`、`content`、`toolInvocations` 三列替换为单一 `message json NOT NULL` 列，直接存储 AI SDK 的 `UIMessage` 原始对象。写入路径从手工构建 invocations 简化为 `message: lastUserMessage` / `message: assistantMessage`；读取路径从 19 行 parts 重建简化为 `m.message` 直接透传；前端 `startingMessages` 从 strip 逻辑简化为 `initialMessages` 直接赋值。Greeting 消息也改为标准 UIMessage 格式。迁移文件：`0003_faulty_giant_man.sql`。
 
 **[Ticket-02] [RESOLVED] Canvas 视图状态流转黑盒 (Medium Priority)**
 - **病状**: `CanvasPanel.tsx` 存在绕过 React 生命周期的强制 DOM 状态读取 Hack，极易引发渲染竞态条件，后期需重构数据同步机制。
