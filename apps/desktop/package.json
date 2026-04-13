@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "tsx scripts/download-ffmpeg.ts",
+    "prebuild": "tsx scripts/download-ffmpeg.ts",
     "build": "react-router build",
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",

@@ -4,11 +4,24 @@
 
 ## 🏗️ 核心架构基座
 
+### 🛠️ Sidecar 二进制管理 (FFmpeg)
+- **存放路径**: `apps/desktop/src-tauri/bin/`
+- **自动化**: 通过 `apps/desktop/package.json` 中的 `predev` 脚本自动探测三元组后缀并提示下载。
+- **规范**: 严禁将 `ffmpeg-*` 二进制提交至 Git。新增平台支持时，必须确保 `tauri.conf.json` 中的 `externalBin` 路径与物理文件名严格匹配。
+
+## 🏗️ 核心架构基座
+
 - **桌面容器**: Tauri v2 (Rust) - 提供跨平台原生系统级访问权限与极速文件 IO。
 - **前端视图**: React Router v7 + Vite - 纯粹的 SPA 渲染层，仅负责 UI 与状态流转。
 - **云端大脑**: Hono (Node Server) - 处理高并发网络请求、数据库交互与 AI 对接。
 - **数据流**: @tanstack/react-query (前端缓存) + React Router Loader + Drizzle ORM (后端 MySQL 驱动)。
 - **AI 底层**: Vercel AI SDK (v6.0+) - 负责 Agentic 工作流与多步 Tool Calling。
+
+### 🛠️ Sidecar 二进制管理 (FFmpeg)
+- **存放路径**: `apps/desktop/src-tauri/bin/`。
+- **自动化**: 由 `apps/desktop/package.json` 的 `predev`/`prebuild` 钩子驱动。
+- **更新机制**: 脚本会自动探测系统三元组（Target Triple）并从 GitHub Releases 获取免解压的单体二进制文件。
+- **禁令**: 严禁将 `bin/ffmpeg-*` 提交至 Git。
 
 ---
 
