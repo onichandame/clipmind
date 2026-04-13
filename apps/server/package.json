@@ -7,15 +7,16 @@
   },
   "dependencies": {
     "@clipmind/db": "workspace:*",
-    "hono": "^4.2.0",
     "@hono/node-server": "^1.11.0",
     "ai": "latest",
-    "zod": "^3.0.0",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.2.0",
+    "zod": "^3.0.0"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "tsx": "^4.7.1",
-    "typescript": "^5.4.5",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.4.5"
   }
 }

@@ -1,6 +1,6 @@
 import { useRef, useEffect } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import { DefaultChatTransport, isToolUIPart } from "ai";
 import type { UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,7 +12,7 @@ import { useCanvasStore } from "../store/useCanvasStore";
 if (typeof window !== 'undefined' && !(window).__EDD_PATCHED) {
   (window).__EDD_PATCHED = true;
   const origFetch = window.fetch;
-  window.fetch = async function(...args) {
+  window.fetch = async function (...args) {
     return origFetch.apply(this, args);
   };
 }
@@ -27,8 +27,6 @@ const sanitizeSchema = {
   attributes: { ...defaultSchema.attributes, code: [...(defaultSchema.attributes?.code || []), "className"] },
 };
 
-const GREETING = "你好！我是你的创作助理 ClipMind。今天打算怎么开启工作？是想先聊聊灵感、策划一个新短视频大纲，还是脑子里已经有确切的画面，直接去库里精准找素材片段？";
-
 export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const setActiveMode = useCanvasStore((s) => s.setActiveMode);
   const queryClient = useQueryClient();
@@ -37,7 +35,6 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   // 1. 标准化组装初始消息
   const startingMessages: any[] = [
-    { id: "greeting", role: "assistant", content: GREETING },
     ...initialMessages.map(msg => ({
       id: msg.id,
       role: msg.role as "user" | "assistant",
@@ -55,33 +52,31 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
 
 
-    initialMessages: startingMessages as UIMessage[],
-        transport: new DefaultChatTransport({
-          api: "http://localhost:8787/api/chat",
-          body: { projectId, currentOutline: outlineContent, isDirty }
-        }),
-    onResponse: (response: any) => {
-      console.log("📥 [网络层探针] 收到 Headers! HTTP 状态码:", response.status);
+    messages: startingMessages,
+    transport: new DefaultChatTransport({
+      api: "http://localhost:8787/api/chat",
+      body: { projectId, currentOutline: outlineContent, isDirty }
+    }),
+    onData: (data) => {
+      console.log("📥 [网络层探针] 收到 data! :", data.type, JSON.stringify(data.data));
     },
-    onError: (err: any) => {
+    onError: (err) => {
       console.error("❌ [网络层探针] SDK 底层流解析抛错:", err);
     },
-    onFinish: (event: any) => {
-      console.log("🛑 [网络层探针] 触发 onFinish，流被正常解析并结束！");
-        
-        // 修复：使用最新的 SDK toolInvocations 数组解析
-        const msg = event.message || event; const invocations = msg.toolInvocations || [];
-        const hasOutline = invocations.some((tool: any) => tool.toolName === 'updateOutline');
-        const hasFootage = invocations.some((tool: any) => tool.toolName === 'searchFootage');
+    onFinish: (event) => {
+      console.log("🛑 [网络层探针] 触发 onFinish，流被正常解析并结束！", JSON.stringify(event));
 
-        if (hasOutline) {
-          setActiveMode("outline");
-          queryClient.invalidateQueries({ queryKey: ['project', projectId] }); // 强制 Loader 重新抓取数据库最新大纲
-        } else if (hasFootage) {
-          setActiveMode("footage");
-          queryClient.invalidateQueries({ queryKey: ['project', projectId] });
-        }
-      },
+      const hasOutline = event.messages.some((msg) => msg.parts.some(p => isToolUIPart(p) && p.type === `tool-updateOutline`));
+      const hasFootage = event.messages.some((msg) => msg.parts.some(p => isToolUIPart(p) && p.type === `tool-searchFootage`));
+
+      if (hasOutline) {
+        setActiveMode("outline");
+        queryClient.invalidateQueries({ queryKey: ['project', projectId] }); // 强制 Loader 重新抓取数据库最新大纲
+      } else if (hasFootage) {
+        setActiveMode("footage");
+        queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      }
+    },
   });
 
   // [DEBUG INJECTION] 实时监控大模型的流式分发状态 (放在 useChat 后面)
@@ -141,11 +136,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
           <h1 className="text-sm font-medium text-zinc-200">AI 助理</h1>
         </div>
       </div>
-      
+
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
-        {messages.map((message: any) => {
-          const isUser = (message.role as string) === "user";
+        {messages.map((message) => {
+          const isUser = message.role === "user";
           return (
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               {!isUser && (
@@ -157,17 +152,18 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 {/* 1. 纯文本渲染 & 工具状态回显 (拦截空炮消息) */}
                 {(() => {
                   const msg = message;
-                  let textToRender = msg.content || (msg.parts ? msg.parts.filter(p => p.type === 'text').map(p => p.text).join('') : "") || "";
+                  let textToRender = msg.parts?.filter(p => p.type === 'text').map(p => p.text).join('') || ``
+                  console.log(`text to render: `, textToRender)
 
                   if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
-                  
+
                   return (
                     <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
                     </div>
                   );
                 })()}
-                
+
                 {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) */}
                 {message.parts?.filter((p: any) => p.toolCallId || (p.type && p.type.startsWith('tool-'))).map((toolPart: any, index: number) => {
                   const state = toolPart.state;
