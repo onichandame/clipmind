@@ -60,8 +60,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     onFinish: (event) => {
       console.log("🛑 [网络层探针] 触发 onFinish，流被正常解析并结束！", JSON.stringify(event));
 
-      const hasOutline = event.messages.some((msg) => msg.parts.some(p => isToolUIPart(p) && p.type === `tool-updateOutline`));
-      const hasFootage = event.messages.some((msg) => msg.parts.some(p => isToolUIPart(p) && p.type === `tool-searchFootage`));
+      const hasOutline = event.messages.some((msg) => msg?.parts.some(p => isToolUIPart(p) && p.type === `tool-updateOutline`));
+      const hasFootage = event.messages.some((msg) => msg?.parts.some(p => isToolUIPart(p) && p.type === `tool-searchFootage`));
 
       if (hasOutline) {
         setActiveMode("outline");
@@ -80,7 +80,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       const last = messages[messages.length - 1];
 
       // 架构师干预：基于深层探针截获的真实结构，精准提取流式大纲
-      const outlinePart = last.parts?.find((p: any) => p.type === 'tool-updateOutline');
+      const outlinePart = last?.parts?.find((p: any) => p.type === 'tool-updateOutline');
       if (outlinePart && outlinePart.input && outlinePart.input.contentMd) {
         setOutlineContent(outlinePart.input.contentMd, "agent");
         if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
@@ -111,7 +111,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     if (content.trim()) {
       // 架构师干预：根据官方最新规范，动态挂载最新业务状态，拒绝陈旧闭包
       sendMessage(
-        { role: "user", content },
+        { text: content },
         { body: { projectId, currentOutline: outlineContent, isDirty } }
       );
       if (isDirty) clearDirtyState();
@@ -133,8 +133,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
-        {messages.map((message) => {
-          const isUser = message.role === "user";
+        {messages.filter(Boolean).map((message) => {
+          const isUser = message?.role === "user";
           return (
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               {!isUser && (
@@ -146,7 +146,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 {/* 1. 纯文本渲染 & 工具状态回显 (拦截空炮消息) */}
                 {(() => {
                   const msg = message;
-                  let textToRender = msg.parts?.filter(p => p.type === 'text').map(p => p.text).join('') || ``
+                  let textToRender = msg?.parts?.filter(p => p.type === 'text').map(p => p.text).join('') || ``
                   console.log(`text to render: `, textToRender)
 
                   if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
@@ -159,7 +159,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 })()}
 
                 {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) */}
-                {message.parts?.filter((p: any) => p.toolCallId || (p.type && p.type.startsWith('tool-'))).map((toolPart: any, index: number) => {
+                {message?.parts?.filter((p: any) => p.toolCallId || (p.type && p.type.startsWith('tool-'))).map((toolPart: any, index: number) => {
                   const state = toolPart.state;
                   // 适配 v6 的流式状态机
                   const isCalling = state === 'streaming' || state === 'input-streaming' || state === 'input-available';

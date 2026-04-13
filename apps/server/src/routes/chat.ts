@@ -70,7 +70,7 @@ app.post("/", async (c) => {
     // Store raw UIMessage — no transformation needed
     onFinish: async (event) => {
       try {
-        const assistantMessage = event.messages[event.messages.length - 1];
+        const assistantMessage = event.text;
         if (assistantMessage) {
           await db.insert(projectMessages).values({
             id: crypto.randomUUID(),

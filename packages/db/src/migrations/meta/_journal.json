@@ -22,6 +22,13 @@
       "when": 1775903854092,
       "tag": "0002_large_cobalt_man",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1776064735600,
+      "tag": "0003_faulty_giant_man",
+      "breakpoints": true
     }
   ]
 }
