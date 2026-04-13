@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { db, projectOutlines, projectMessages } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
-import { streamText, tool, convertToModelMessages, UIMessage, isTextUIPart, stepCountIs, SystemModelMessage } from "ai";
+import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
 import { z } from "zod";
 
 const app = new Hono();
@@ -23,13 +23,14 @@ app.post("/", async (c) => {
   }
 
   // 1. 提问前置入库：拉开时间差，彻底解决对话排序倒置问题
+  // Store raw UIMessage — no transformation needed
   try {
     const lastUserMessage = [...messages].reverse().find(msg => msg.role === `user`);
-    let userContent = lastUserMessage?.parts ?
-      lastUserMessage.parts.filter(p => isTextUIPart(p)).map((p) => p.text).join("") : ``
-    await db.insert(projectMessages).values({
-      id: crypto.randomUUID(), projectId, role: "user", content: userContent,
-    });
+    if (lastUserMessage) {
+      await db.insert(projectMessages).values({
+        id: crypto.randomUUID(), projectId, message: lastUserMessage,
+      });
+    }
   } catch (error) {
     console.error("Failed to persist user message:", error);
   }
@@ -66,42 +67,17 @@ app.post("/", async (c) => {
       return {};
     },
 
-    // 提取完整的 event 对象以获取 toolResults，用于构建前端所需标准的 toolInvocations
+    // Store raw UIMessage — no transformation needed
     onFinish: async (event) => {
       try {
-        const { text, toolCalls, toolResults } = event;
-        let cleanContent = text || "";
-
-        console.log("\n================ [🌊 STREAM FINISH EVENT] ================");
-        console.log("-> 1. RAW text:", JSON.stringify(text));
-        console.log("-> 2. RAW toolCalls:", JSON.stringify(toolCalls, null, 2));
-        console.log("-> 3. RAW toolResults:", JSON.stringify(toolResults, null, 2));
-
-        // 构建 Vercel AI SDK 兼容的 toolInvocations
-        // 核心修复 1：填平 AI SDK 运行时字段 (input/output) 与前端注水规范 (args/result) 的断层
-        const invocations = toolCalls?.map(call => {
-          const res = toolResults?.find(r => r.toolCallId === call.toolCallId);
-          return {
-            state: res ? 'result' : 'call',
-            toolCallId: call.toolCallId,
-            toolName: call.toolName,
-            args: call.input,
-            result: res?.output
-          };
-        });
-
-        console.log("\n================ [💾 DB PERSISTENCE INTENT] ================");
-        console.log("-> 4. db.content:", JSON.stringify(cleanContent));
-        console.log("-> 5. db.toolInvocations:", JSON.stringify(invocations, null, 2));
-        console.log("==============================================================\n");
-
-        await db.insert(projectMessages).values({
-          id: crypto.randomUUID(),
-          projectId,
-          role: "assistant",
-          content: cleanContent,
-          toolInvocations: invocations && invocations.length > 0 ? invocations : null
-        });
+        const assistantMessage = event.messages[event.messages.length - 1];
+        if (assistantMessage) {
+          await db.insert(projectMessages).values({
+            id: crypto.randomUUID(),
+            projectId,
+            message: assistantMessage,
+          });
+        }
       } catch (error) {
         console.error("Chat persistence error:", error);
       }
