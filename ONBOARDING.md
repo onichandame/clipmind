@@ -41,13 +41,13 @@
 **[Ticket-04] [RESOLVED] Tool Call 状态流转与持久化不对齐**
 - **修复记录**：已在 `projectMessages` 表中扩增 `toolInvocations` JSON 字段。重写了 `chat.ts` 的流式回调和 `projects.ts` 的拉取接口，彻底打通了 Agent 工具状态的持久化与前端 UI 注水恢复链路。同时为 Hono 服务注入了"启动即迁移"的安全生命周期。
 
-**[Ticket-05] [RESOLVED] projectMessages 结构僵硬导致序列化开销过大**
-- **病状**：`projectMessages` 表使用 `role`、`content`、`toolInvocations` 三个独立列存储 AI SDK 消息，写入时需要手工从 `UIMessage` 提取字段并重命名（`input→args`、`output→result`），读取时需要 19 行代码重建 `parts[]` 数组。前端 `ChatPanel` 又立即把重建结果 strip 回 `{id, role, content}`，整个链路是"压缩→解压→再压缩"的无效循环。
-- **修复记录**：将 `role`、`content`、`toolInvocations` 三列替换为单一 `message json NOT NULL` 列，直接存储 AI SDK 的 `UIMessage` 原始对象。写入路径从手工构建 invocations 简化为 `message: lastUserMessage` / `message: assistantMessage`；读取路径从 19 行 parts 重建简化为 `m.message` 直接透传；前端 `startingMessages` 从 strip 逻辑简化为 `initialMessages` 直接赋值。Greeting 消息也改为标准 UIMessage 格式。迁移文件：`0003_faulty_giant_man.sql`。
-
-**[Ticket-06] [RESOLVED] 后端 onFinish 消息格式不对齐导致持久化失败**
-- **病状**：`streamText` 的 `onFinish` 回调只提供 `event.text`（纯字符串）和 `response.messages`（`CoreMessage[]`），均非 `UIMessage` 格式。后端直接将 `event.text` 存入 `projectMessages.message` 列，导致前端加载历史时拿到的是纯字符串而非 `UIMessage` 对象，`parts` 数组丢失，工具调用状态无法恢复。
-- **修复记录**：将所有消息持久化从后端迁移至前端发起。后端 `chat.ts` 移除了全部 `projectMessages` 写入逻辑（用户消息前置入库 + `onFinish` 助手消息入库）。新增 `POST /api/projects/:projectId/messages` 端点，接收前端传来的完整 `UIMessage` 对象零转换入库（支持幂等 `ON DUPLICATE KEY UPDATE`）。前端 `ChatPanel.tsx` 在 `useChat` 的 `onFinish` 回调中 fire-and-forget 持久化用户消息和助手消息。后端 `chat.ts` 现在是纯 AI 流式转发管道，不碰数据库。
+**[Ticket-05/06] [RESOLVED] 彻底废弃独立消息表，拥抱 Project JSON 聚合**
+- **病状**：过去我们在独立的 `project_messages` 表中维护 AI 对话历史，导致无休止的读写开销和多表 Join 的性能损耗。同时，前端的流式写入由于高频触发，极易引发状态错位。
+- **修复记录 (架构重大变更)**：
+  1. **彻底删除了 `project_messages` 表**，将整个历史对话数组直接聚合到 `projects` 表的新增列 `uiMessages: json('ui_messages').default([])` 中。
+  2. 后端废弃了局部的增量 `POST`，升级为 **`PUT /api/projects/:id/messages`**，接收前端传来的完整 `UIMessage[]` 数组进行全量覆盖。
+  3. 前端 `useChat` 的 `onFinish` 回调中，仅在流式输出彻底结束后，才将完整的 `event.messages` 发送给后端持久化，彻底解决了流式高频写入带来的数据库并发压力和幻觉覆盖问题。
+- **⚠️ 避坑警告 (DON'T DO)**：既然将消息聚合成了大 JSON，后续在开发 Dashboard 列表页或获取项目概览时，**严禁使用 `select *` 或全量拉取 `projects` 表**。必须显式排除 `uiMessages` 字段（如当前的 `projects.ts` 列表接口只 select title/createdAt 等元数据），否则极易导致严重的内存泄漏与网络开销 (OOM)。
 
 **[Ticket-02] [RESOLVED] Canvas 视图状态流转黑盒 (Medium Priority)**
 - **病状**: `CanvasPanel.tsx` 存在绕过 React 生命周期的强制 DOM 状态读取 Hack，极易引发渲染竞态条件，后期需重构数据同步机制。
