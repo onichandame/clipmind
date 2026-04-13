@@ -1,13 +1,12 @@
 import { Hono } from 'hono';
 import { db, projectMessages } from '@clipmind/db';
-import { eq } from 'drizzle-orm';
 
 const app = new Hono();
 
 app.post('/:projectId/messages', async (c) => {
   const projectId = c.req.param('projectId');
   const body = await c.req.json();
-  const { message } = body as { message: { id?: string; role: string; content?: string; parts?: unknown[]; [key: string]: unknown } };
+  const { message } = body as { message: { id?: string; role: string; content?: string; parts?: unknown[];[key: string]: unknown } };
 
   if (!message) {
     return c.json({ error: 'Missing message field' }, 400);

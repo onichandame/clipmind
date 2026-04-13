@@ -79,6 +79,7 @@ app.get('/:id', async (c) => {
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
     const messagesRes = await db.select().from(projectMessages).where(eq(projectMessages.projectId, id)).orderBy(asc(projectMessages.createdAt));
 
+    console.log(JSON.stringify(messagesRes, null, 2))
     // Store raw UIMessage — no transformation needed
     const initialMessages = messagesRes.map(m => {
       try {

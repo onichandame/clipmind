@@ -88,9 +88,10 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       const last = messages[messages.length - 1];
 
       // 架构师干预：基于深层探针截获的真实结构，精准提取流式大纲
-      const outlinePart = last?.parts?.find((p: any) => p.type === 'tool-updateOutline');
-      if (outlinePart && outlinePart.input && outlinePart.input.contentMd) {
-        setOutlineContent(outlinePart.input.contentMd, "agent");
+      const outlinePart = last?.parts?.filter(p => isToolUIPart(p)).find((p) => p.type === 'tool-updateOutline');
+      const input = outlinePart?.input as { contentMd: string } | undefined
+      if (input?.contentMd) {
+        setOutlineContent(input.contentMd, "agent");
         if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
       }
     }
@@ -112,7 +113,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const content = formData.get("content") as string;

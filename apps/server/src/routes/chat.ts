@@ -70,7 +70,7 @@ app.post("/", async (c) => {
             // 核心修复：直接使用外部 request.json() 解构出来的真实 projectId，禁止 LLM 瞎猜
             await db.insert(projectOutlines).values({
               id: crypto.randomUUID(),
-              projectId: pro jectId,
+              projectId: projectId,
               contentMd: safeContent
             }).onDuplicateKeyUpdate({
               set: { contentMd: safeContent }
