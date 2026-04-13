@@ -35,9 +35,9 @@ async function download() {
   if (process.platform === 'win32') staticPlatform = 'win32-x64';
   else if (process.platform === 'darwin') staticPlatform = process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64';
 
-  const url = `https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/${staticPlatform}`;
+  const url = `https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-${staticPlatform}`;
   console.log(`🚀 Downloading FFmpeg for ${triple} from ${url}...`);
-  
+
   try {
     execSync(`curl -L -# -o "${destPath}" "${url}"`, { stdio: 'inherit' });
     if (process.platform !== 'win32') {
