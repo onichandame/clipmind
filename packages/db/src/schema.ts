@@ -46,15 +46,6 @@ export const projectOutlines = mysqlTable('project_outlines', {
   version: int('version').notNull().default(1),
 });
 
-export const projectMessages = mysqlTable('project_messages', {
-  id: varchar('id', { length: 36 }).primaryKey(),
-  projectId: varchar('project_id', { length: 36 })
-    .notNull()
-    .references(() => projects.id, { onDelete: 'cascade' }), // 级联删除
-  message: json('message').notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-});
-
 export const basketItems = mysqlTable('basket_items', {
   id: varchar('id', { length: 36 }).primaryKey(),
   projectId: varchar('project_id', { length: 36 })
