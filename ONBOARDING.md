@@ -286,3 +286,4 @@
 - **DON'T DO (Git 空目录陷阱与 IO 崩溃)**: 在编写自动化下载 Sidecar 等预处理脚本时，严禁假设目标父目录必定存在。由于 `.gitignore` 会导致被忽略的目录在全新 Clone 的环境中（如 CI 容器）完全不存在，直接执行下载或写入必然引发 `No such file or directory` 崩溃。必须强制引入 `fs.mkdirSync(dir, { recursive: true })` 进行防御。
 - **DON'T DO (宿主机架构依赖)**: 在 CI 环境（尤其是涉及交叉编译的 GitHub Actions）中，严禁在脚本中使用 `process.arch` 或 `rustc -vV` 来决定 Sidecar 的下载版本。这会导致在 ARM 宿主机上编译 x86 产物时下载错误的二进制文件。
 - **新规范**: 必须优先读取 `TARGET_TRIPLE` 环境变量，基于“目标架构”映射下载地址和文件名后缀。
+- **DON'T DO (丢失产物与 403 黑洞)**: 严禁仅仅调用 `tauri-action` 就指望它自动发布。必须显式配置 `tagName: v__VERSION__` 才会触发底层的 GitHub Release 机制。同时，必须在 workflow 的 job 级别显式赋予 `permissions: contents: write`，否则会遭到 GitHub 安全策略的 403 拦截，导致产物挂载失败。

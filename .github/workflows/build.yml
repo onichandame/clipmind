@@ -6,6 +6,8 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -58,3 +60,8 @@ jobs:
         with:
           projectPath: apps/desktop
           args: --target ${{ matrix.target }}
+          tagName: v__VERSION__
+          releaseName: 'ClipMind v__VERSION__'
+          releaseBody: 'Automated release of ClipMind Desktop Client.'
+          releaseDraft: true
+          prerelease: false
