@@ -223,3 +223,16 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **定时任务挂载点**: 后续所有 Cron 任务必须收敛至 `apps/server/src/jobs/` 目录，并统一在 `index.ts` 数据库迁移 (`migrate`) 完成后集中调用挂载。
+
+## 📝 [阶段更新] 资产物理删除链路与乐观 UI 更新
+
+**1. 架构与状态流转 (Architecture State):**
+- **云端大脑**: 在 Hono 侧 (`apps/server/src/routes/assets.ts`) 引入了 Drizzle 的 `eq` 算子，新增了 `DELETE /:id` 路由，打通了底层的物理删除能力。
+- **视图流转**: 废弃了传统的全量刷新，在前端 (`assets.tsx`) 引入了 React Router 的 `useRevalidator`。在删除接口返回 200 OK 后，调用 `revalidator.revalidate()` 触发 Loader 重新拉取数据，实现极致流畅的“乐观 UI”更新。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (SPA 刷新毒瘤)**: 严禁在 React Router 架构中使用 `window.location.reload()` 去刷新列表。这会摧毁整个 SPA 的内存状态，导致用户体验断崖式下跌。必须强制使用 `revalidator.revalidate()` 配合后端的 JSON 数据流。
+- **DON'T DO (事件冒泡黑洞)**: 严禁在资产卡片内部的 `<button>`（如悬浮删除按钮）中漏写 `e.stopPropagation()`。否则极易触发卡片层级的点击事件，导致意外的页面跳转或弹窗。
+
+**3. 新共识与规范 (New Conventions):**
+- **原生降级策略**: 在引入重型的自定义无头组件（Headless UI / Radix）之前，对于毁灭性操作（如删除资产），规范统一下放使用原生的 `window.confirm` 进行二次确认拦截，以最轻量的代码保障系统级安全。

@@ -2,7 +2,7 @@ import { env } from '../env';
 import { Button } from "../components/Button";
 import { useState, useEffect } from "react";
 import { useRevalidator, useLoaderData } from "react-router";
-import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud } from "lucide-react";
+import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud, Trash2 } from "lucide-react";
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -103,6 +103,22 @@ export default function AssetsLibrary() {
     };
   }, []);
 
+  const handleDelete = async (e: React.MouseEvent, id: string, filename: string) => {
+    e.stopPropagation();
+    if (!window.confirm(`确定要永久删除素材 "${filename}" 吗？\n注意：此操作不可逆。`)) return;
+
+    try {
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        revalidator.revalidate(); // 乐观重新拉取数据
+      } else {
+        console.error('删除失败:', await res.text());
+      }
+    } catch (error) {
+      console.error('删除请求出错:', error);
+    }
+  };
+
   const processJob = async (job: UploadJob) => {
     try {
       updateJob(job.id, { status: 'compressing', progress: 0 });
@@ -177,6 +193,13 @@ export default function AssetsLibrary() {
               <div key={asset.id} className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 shadow-sm dark:shadow-none">
                 <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden transition-colors">
                   <Film className="w-8 h-8 text-zinc-400 dark:text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
+                  <button
+                    onClick={(e) => handleDelete(e, asset.id, asset.filename)}
+                    className="absolute top-2 left-2 p-1.5 bg-black/50 hover:bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200 backdrop-blur-sm z-10"
+                    title="删除素材"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                   <div className="absolute top-2 right-2">
                     {asset.status === 'ready' ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 backdrop-blur-sm">

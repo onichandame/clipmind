@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { db, assets } from "@clipmind/db";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 const app = new Hono();
 
@@ -33,6 +33,17 @@ app.post("/report", async (c) => {
   } catch (error) {
     console.error('❌ 资产入库失败:', error);
     return c.json({ error: 'Database Insert Error' }, 500);
+  }
+});
+
+app.delete("/:id", async (c) => {
+  try {
+    const id = c.req.param("id");
+    await db.delete(assets).where(eq(assets.id, id));
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('❌ 删除资产失败:', error);
+    return c.json({ error: 'Database Delete Error' }, 500);
   }
 });
 
