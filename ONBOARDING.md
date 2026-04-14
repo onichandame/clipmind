@@ -4,10 +4,14 @@
 
 ## 🏗️ 核心架构基座
 
-### 🛠️ Sidecar 二进制管理 (FFmpeg)
-- **存放路径**: `apps/desktop/src-tauri/bin/`
-- **自动化**: 通过 `apps/desktop/package.json` 中的 `predev` 脚本自动探测三元组后缀并提示下载。
-- **规范**: 严禁将 `ffmpeg-*` 二进制提交至 Git。新增平台支持时，必须确保 `tauri.conf.json` 中的 `externalBin` 路径与物理文件名严格匹配。
+### 🛠️ Sidecar 二进制管理 (FFmpeg & Whisper)
+
+- **存放路径**: `apps/desktop/src-tauri/bin/`。
+- **Sidecar 组成**:
+  - **FFmpeg**: 负责音视频极速分离、转码与压缩。
+  - **Whisper.cpp**: 采用 `large-v3-turbo` 模型，负责离线语音转文字（STT）。
+- **自动化**: 由 `apps/desktop/package.json` 的 `predev`/`prebuild` 钩子驱动。脚本会自动探测系统三元组并从 GitHub Releases 获取免解压的单体二进制文件。
+- **禁令**: 严禁将 `bin/ffmpeg-*`、`bin/whisper-*` 及模型文件 (`.bin`) 提交至 Git。
 
 ## 🏗️ 核心架构基座
 
@@ -18,6 +22,7 @@
 - **AI 底层**: Vercel AI SDK (v6.0+) - 负责 Agentic 工作流与多步 Tool Calling。
 
 ### 🛠️ Sidecar 二进制管理 (FFmpeg)
+
 - **存放路径**: `apps/desktop/src-tauri/bin/`。
 - **自动化**: 由 `apps/desktop/package.json` 的 `predev`/`prebuild` 钩子驱动。
 - **更新机制**: 脚本会自动探测系统三元组（Target Triple）并从 GitHub Releases 获取免解压的单体二进制文件。
@@ -25,17 +30,25 @@
 
 ---
 
-## 🌊 核心链路：端云解耦大文件处理管道
+## 🌊 核心链路：大文件处理与 RAG 离线准备管道
 
-处理大体积音视频素材时，我们采用了极限性能的架构设计。必须严格遵循以下 4 个流转阶段，**严禁私自更改链路职责**：
+处理大体积音视频素材时，我们采用了端侧计算前置的极限性能架构。必须严格遵循以下 5 个流转阶段，**严禁私自更改链路职责**：
 
-1. **底层极速分离 (Rust)**：
+1. **底层一鱼两吃 (Rust)**：
    - 前端下发指令，Rust 层唤起 FFmpeg Sidecar。
-   - **视频要求**：优先调用系统级硬件加速 (如 Mac `-c:v hevc_videotoolbox`) 结合 VBR 动态码率压缩。
-   - **音频要求**：为节省后端 AI (Whisper) 带宽，强制降维至 `-c:a aac -ac 1 -ar 16000 -b:a 32k` (单声道、16kHz、32kbps)。
-2. **凭证签发 (Node/Hono)**：前端向云端请求双轨道的 OSS 预签名直传 URL。
-3. **底层直传 (Rust)**：前端将 URL 交还给 Rust，由 Rust 底层网络栈 (`reqwest`) 绕过 WebKit 限制直接推送到阿里云 OSS。
-4. **闭环落盘 (Node/Hono)**：前端通过 Webhook 通知云端写入数据库，并触发 React Router `clientLoader` 驱动 UI 重新渲染回显。
+   - **单次读取双输出**：执行单次 FFmpeg 命令，同步输出视频正片 (`compressed.mp4`，用于云端落盘展示) 和纯净音频 (`whisper_temp.wav`，强制降维至 16kHz/单声道/16-bit PCM，专供 STT 使用)。
+2. **本地离线推理 (Rust)**：
+   - Rust 唤起 `whisper.cpp` Sidecar 消费本地的 `whisper_temp.wav`，输出带有毫秒级时间戳的 `transcript.srt` 文件。
+   - **即时清理 (RAII/ScopeGuard)**：推理完成后，Rust 读取 SRT 文本到内存，并**必须立即使用 `fs::remove_file` 物理抹除**本地的 WAV 和 SRT 临时文件，无论成功或 Panic，彻底杜绝“幽灵垃圾文件”。
+3. **双轨同步闭环 (Rust & Node)**：
+   - **轨道 A (视频直传)**: Rust 将提取到的直传 URL 交由底层网络栈 (`reqwest`)，绕过 WebKit 限制直接将 `compressed.mp4` 推送至阿里云 OSS。
+   - **轨道 B (文本上报)**: Rust 将内存中的 SRT 字符串作为 JSON Payload 直接 POST 给 Hono 后端。
+4. **数据清洗与粗切 (Node/Hono)**：
+   - Hono 接收 SRT 文本，按 **30秒-60秒的滑动窗口** 进行合并粗切，保留各 Block 的 `start_time` 和 `end_time`。
+   - 批量调用 OpenRouter (如 BGE-M3 模型) 获取 Embedding。（注意：必须加入并发限流或使用 Batch API，防止触发 429 熔断）。
+5. **隔离入库 (Qdrant)**：
+   - 向量数据写入名为 `clipmind_assets` 的专属 Collection（采用 Namespace 前缀方案与其他项目在逻辑上彻底隔离）。
+   - 向量的 Point ID 必须使用 **`UUIDv5(asset_id + chunk_index)`** 生成，以确保重复执行或覆盖更新时的幂等性。
 
 ---
 
@@ -87,6 +100,15 @@
 
 ## 📝 架构演进与历史工单 (Tech Debt Resolved)
 
+**[Ticket-07] 离线 STT 与 RAG 数据准备链路重构 (Offline-First)**
+
+- **背景**：为规避云端 ASR 成本与网络 IO 瓶颈，并用最快速度跑通 MVP，决定将语音转文本（STT）压力全面前置到用户端本地计算机。
+- **修复与决策**：
+  - 引入 `whisper.cpp (large-v3-turbo)` 侧边车，完美兼顾中英双语精度与本地推理速度。
+  - 彻底砍掉先前的“分离音轨并上传 OSS”链路，现在云端仅接收转录文本，实现 0 额外音频存储与带宽损耗。
+  - 采用 Qdrant 命名空间隔离方案（前缀 `clipmind_`）解决单实例多项目共用问题。
+- **⚠️ 避坑红线 (Rust 线程假死)**：调用 FFmpeg 和 Whisper 的 `Command` 执行体，必须被完整包裹在 `tokio::task::spawn_blocking` 中！绝对禁止在主异步上下文中直接阻塞，否则将导致 Tauri 前端 UI 彻底假死，用户无法看到任何进度更新。
+
 **[Ticket-05/06] 彻底废弃独立消息表，拥抱 Project JSON 聚合**
 
 - **病状**：独立 `project_messages` 表导致无休止的读写开销与多表 Join 性能损耗，流式高频写入极易引发幻觉覆盖。
@@ -102,19 +124,24 @@
 - **进度**：逐步清理 `as any`，对齐 Zod Schema 与 TypeScript 接口定义。
 
 ## 📝 [阶段更新] 大文件处理管道优化、按钮重构与临时文件自动清理
+
 **1. 架构与状态流转 (Architecture State):**
+
 - 移除了前端 `assets.tsx` 中的硬编码按钮，抽取了通用的 `Button.tsx` 组件，规范了系统的交互样式。
 - 细化了双向事件监听：前端现已分离监听 `upload-progress` (OSS 直传) 与 `ffmpeg-progress` (侧边车处理)。
 - **遗留架构债 (Tech Debt)**: FFmpeg 的进度提取目前基于轻量级字符串探测，某些特定视频容器格式下无法精准触发伪进度递增，导致 UI 仍可能处于静止的“急速处理中”状态。后续迭代需在 Rust 侧引入更稳定的进度报告回调拦截。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO**: 严禁在 Rust 的 `async_stream::stream!` 宏内直接消费外部的 `String` 路径变量。流闭包会强制拿走变量的所有权，导致在流结束后试图清理文件时引发 `E0382 borrow of moved value` 崩溃。必须在流定义外部提前执行 `let stream_path = path.clone();`，将流的生命周期与后续文件操作的生命周期彻底剥离。
 - **DON'T DO**: 严禁在 `process_asset` (阶段 1 极速分离) 结束后立即清理临时文件。由于端云解耦架构，临时 `.mp4` 和 `.aac` 必须存活到 `upload_asset` (阶段 3 直传 OSS) 完全返回 200 OK 之后，由直传层安全抹除，否则会导致断流。
 
 **3. 新共识与规范 (New Conventions):**
+
 - 前端项目新增了标准的 `Button.tsx` 组件。后续所有涉及表单或悬浮交互的按钮，必须优先复用该组件，严禁在业务线路由中反复拼凑 Tailwind 基础类。
 
 ### 🛑 8. Tailwind v4 双主题架构规范 (Light/Dark Mode)
+
 - **架构事实**: 本项目采用纯 Tailwind CSS v4 架构，已废弃 `tailwind.config.js`。
 - **暗黑触发机制**: 严禁依赖系统级媒体查询盲猜。必须在 `app/app.css` 顶部注入 `@custom-variant dark (&:where(.dark, .dark *));` 以实现基于 DOM 类名的精准劫持。
 - **状态流转与防闪烁 (FOUC)**: 必须将 `.dark` 类名挂载到顶级 `<html>` (`document.documentElement`) 节点上。初始态在 `root.tsx` 中同步读取 `localStorage` 阻断首屏闪烁。
