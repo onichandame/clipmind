@@ -282,3 +282,4 @@
 - **DON'T DO (默认 Identifier 黑洞)**: 严禁将 `tauri.conf.json` 中的 `identifier` 保持为默认的 `com.tauri.dev`，否则在执行 `tauri build`（尤其是跨平台时）会遭到系统的直接阻断。
 - **DON'T DO (Monorepo 上下文丢失)**: 在 Monorepo 架构下使用 `tauri-action` 时，严禁省略 `projectPath`。必须显式声明（如 `projectPath: apps/desktop`），否则 Action 会在根目录寻找配置文件并触发错误的回退机制。
 - **DON'T DO (默认 Identifier 黑洞)**: 严禁将 `tauri.conf.json` 中的 `identifier` 保持为默认的 `com.tauri.dev`，否则在执行 `tauri build`（尤其是跨平台时）会遭到系统的直接阻断。
+- **DON'T DO (子包 CLI 别名缺失)**: 在 Monorepo 架构中，如果将 Tauri 放置在子包（如 `apps/desktop`）内，必须在其 `package.json` 的 `scripts` 中显式声明 `"tauri": "tauri"`。否则，GitHub Actions 无法通过包管理器正确的唤起局部 Tauri CLI 进行跨平台构建。
