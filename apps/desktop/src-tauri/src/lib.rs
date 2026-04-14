@@ -316,6 +316,7 @@ async fn process_video_asset(
     app: AppHandle,
     state: State<'_, ProcessingManager>,
     job_id: String,
+    filename: String,
     local_path: String,
     server_url: String,
 ) -> Result<(), String> {
@@ -331,7 +332,10 @@ async fn process_video_asset(
     let app_ffmpeg = app.clone(); // 专供 FFmpeg 闭包使用
     let local_path_clone = local_path.clone();
 
-    println!("[Probe-FFmpeg] 开始提取音频轨道，源路径: {}", local_path_clone);
+    println!(
+        "[Probe-FFmpeg] 开始提取音频轨道，源路径: {}",
+        local_path_clone
+    );
 
     // 核心架构回归：使用 Tauri 官方 Shell 插件异步执行 Sidecar
     let sidecar_command = app_ffmpeg
@@ -342,12 +346,15 @@ async fn process_video_asset(
     // 调整为纯音频提取模式，原视频不进行任何处理
     let (mut rx, _child) = sidecar_command
         .args([
-            "-i", &local_path_clone,
-            "-vn",                      // 禁用视频流输出
-            "-c:a", "aac",              // 提取音频为 aac
-            "-b:a", "128k",             // 阿里云 ASR 推荐码率
-            &temp_audio,                // 输出到临时音频文件
-            "-y",                       // 强制覆盖
+            "-i",
+            &local_path_clone,
+            "-vn", // 禁用视频流输出
+            "-c:a",
+            "aac", // 提取音频为 aac
+            "-b:a",
+            "128k",      // 阿里云 ASR 推荐码率
+            &temp_audio, // 输出到临时音频文件
+            "-y",        // 强制覆盖
         ])
         .spawn()
         .map_err(|e| format!("FFmpeg Sidecar spawn failed: {}", e))?;
@@ -430,7 +437,7 @@ async fn process_video_asset(
 
             let report_payload = ReportPayload {
                 id: token_res.asset_id,
-                filename: format!("video_{}.mp4", job_id),
+                filename,
                 duration: 0,
                 oss_url: token_res.video_object_key,
                 audio_oss_url: token_res.audio_object_key,
@@ -478,12 +485,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init()) // 💡 核心修复：重新注册 Shell 插件
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![
-            process_asset,
-            upload_asset,
-            notify_webhook,
-            process_video_asset
-        ])
+        .invoke_handler(tauri::generate_handler![process_video_asset])
         .setup(|app| {
             // [架构升级] 启动即探测：将最优编码器挂载至全局内存，实现业务管线零延迟调用
             let handle = app.handle().clone();

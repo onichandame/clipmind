@@ -82,8 +82,14 @@ export default function AssetsLibrary() {
     import('@tauri-apps/api/event').then(({ listen }) => {
       // 监听上传进度
       listen<{ id: string, progress: number }>('upload-progress', (event) => {
+        const isComplete = event.payload.progress >= 100;
+        if (isComplete) {
+          revalidator.revalidate(); // 触发页面数据重新拉取
+        }
         setJobs(current => current.map(j =>
-          j.id === event.payload.id ? { ...j, progress: event.payload.progress } : j
+          j.id === event.payload.id
+            ? { ...j, progress: event.payload.progress, status: isComplete ? 'ready' : j.status }
+            : j
         ));
       }).then(fn => unlistenUpload = fn);
 
@@ -127,6 +133,7 @@ export default function AssetsLibrary() {
       // 预处理完成后 invoke 会立即返回，随后 Rust 在后台 tokio::spawn 并发推流。
       await invoke('process_video_asset', {
         jobId: job.id,
+        filename: job.filename,
         localPath: job.sourcePath,
         serverUrl: env.VITE_API_BASE_URL
       });

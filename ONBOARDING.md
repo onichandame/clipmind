@@ -226,3 +226,16 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **原生降级策略**: 在引入重型的自定义无头组件（Headless UI / Radix）之前，对于毁灭性操作（如删除资产），规范统一下放使用原生的 `window.confirm` 进行二次确认拦截，以最轻量的代码保障系统级安全。
+
+## 📝 [阶段更新] Asset 上传链路状态机与端云透传修复
+**1. 架构与状态流转 (Architecture State):**
+- **UI 状态机闭环**: 修复了前端上传进度条在 100% 时的死锁问题。现已引入进度拦截机制，当达到 100 时强制流转 `status` 为 `ready`，并显式调用 `revalidator.revalidate()` 触发 React Router v7 的 Loader 重新获取并渲染最新的资产列表。
+- **全链路文件名透传**: 修复了“乱码文件名”的幽灵 Bug。原有的 `jobId` 现仅作为底层物理文件的并发隔离标识，真实的 `job.filename` 已实现跨进程透传给 Rust 层，并最终组装进 `ReportPayload` 向 Hono 后端落盘。
+- **死码清理 (Tech Debt Resolved)**: 彻底从 Tauri v2 IPC 路由表 (`generate_handler!`) 中移除了已废弃的遗留指令 (`process_asset`, `upload_asset`, `notify_webhook`)，消除了前端幽灵调用的隐患。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (状态更新遗漏)**: 严禁在监听后台进度事件（如 `upload-progress`）时，只无脑更新数值而不处理业务终态。必须显式拦截完成态并触发视图层（Loader）的脏数据刷新。
+- **DON'T DO (标识符污染业务数据)**: 严禁为了省事用唯一标识符（如 `jobId`）去顶替本该跨端透传的业务元数据（如原始文件名），这必然会导致数据库产生无法挽回的幽灵脏数据。
+
+**3. 新共识与规范 (New Conventions):**
+- 现已确立底层 Rust 侧边车任务 (`process_video_asset`) 必须“包揽全流程”，包括向 Node 端发起 `POST /report` 落盘请求。前端已彻底退化为纯粹的状态观察者（Observer），禁止前端插手上传后的落盘网络交互。
