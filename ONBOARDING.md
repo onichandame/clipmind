@@ -280,3 +280,5 @@
 - **DON'T DO (Action 版本幻觉)**: 严禁想当然地认为 `tauri-apps/tauri-action` 的版本与 Tauri 框架版本同步。即使 Tauri 升级到了 v2，官方 Action 的主干版本标签依然是 `@v0`。写错版本号会导致 CI 流水线直接在初始化阶段崩溃 (Unable to resolve action)。
 - **DON'T DO (Monorepo 上下文丢失)**: 在 Monorepo 架构下使用 `tauri-action` 时，严禁省略 `projectPath`。必须显式声明（如 `projectPath: apps/desktop`），否则 Action 会在根目录寻找配置文件并触发错误的回退机制。
 - **DON'T DO (默认 Identifier 黑洞)**: 严禁将 `tauri.conf.json` 中的 `identifier` 保持为默认的 `com.tauri.dev`，否则在执行 `tauri build`（尤其是跨平台时）会遭到系统的直接阻断。
+- **DON'T DO (Monorepo 上下文丢失)**: 在 Monorepo 架构下使用 `tauri-action` 时，严禁省略 `projectPath`。必须显式声明（如 `projectPath: apps/desktop`），否则 Action 会在根目录寻找配置文件并触发错误的回退机制。
+- **DON'T DO (默认 Identifier 黑洞)**: 严禁将 `tauri.conf.json` 中的 `identifier` 保持为默认的 `com.tauri.dev`，否则在执行 `tauri build`（尤其是跨平台时）会遭到系统的直接阻断。
