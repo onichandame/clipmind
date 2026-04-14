@@ -196,3 +196,16 @@
 
 ### 4. 绝对的物理隔离
 所有临时文件的生成，**禁止使用毫秒级时间戳**（在极速并发下必产生碰撞脑裂）。必须且只能使用前端透传的唯一业务 `jobId` 进行命名隔离。
+
+## 📝 [阶段更新] 全局强类型环境变量治理与端云解耦重构 (Type-Safe & Fail-Fast)
+**1. 架构与状态流转 (Architecture State):**
+- **全链路去硬编码**: 彻底拔除了遍布前端组件、Rust 侧边车回调以及 Node Server 启动入口的 `http://localhost:8787` 幽灵硬编码。
+- **单点入口校验 (Fail-Fast)**: 在前端 (Vite) 和 后端 (Node Server) 均引入了 `zod` 并在启动/挂载的第一帧执行 `.env` 强类型反序列化。任何配置缺失或格式畸形（如 URL 不合法、CORS 数组为空），将直接阻断应用启动，拒绝“带病运行”。
+- **IPC 贯穿透传**: 确立了底层的配置注入规范。Rust 端不再擅自读取外部配置文件，而是由前端将合法的 `serverUrl` 经过 IPC 指令传递给 `lib.rs` 的异步任务，实现纯粹的端云解耦。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (死码与 IPC 炸弹)**: 严禁保留遗留的 `#[tauri::command]` 且内部带有硬编码的死代码。由于 Tauri 自动转换 `snake_case` 到 `camelCase`，前端搜索工具（如 grep）极易漏报，形成隐患。
+- **DON'T DO (CORS 数组反序列化)**: 在 Node 层处理 `process.env.CORS_ORIGIN` 时，绝对不能直接将其丢给 `cors()` 中间件。必须经过 Zod 的 `.transform(val => val.split(','))` 强制转换为 `string[]`，否则极易引发跨域拦截黑洞。
+
+**3. 新共识与规范 (New Conventions):**
+- 任何需要新增的环境变量，**必须**先在对应的 `env.ts` (前端或后端) 的 Zod Schema 中注册并附带严格的类型/范围校验（如 `z.coerce.number().min(1024)`）。严禁在业务代码中直接读取 `process.env` 或 `import.meta.env`。

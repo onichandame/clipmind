@@ -208,6 +208,7 @@ async fn notify_webhook(
     object_key: String,
     file_size: u64,
     duration: f64,
+    server_url: String,
 ) -> Result<(), String> {
     let client = Client::new();
     let payload = serde_json::json!({
@@ -218,7 +219,7 @@ async fn notify_webhook(
     });
 
     let res = client
-        .post("http://localhost:8787/api/oss-callback")
+        .post(format!("{}/api/oss-callback", server_url))
         .json(&payload)
         .send()
         .await

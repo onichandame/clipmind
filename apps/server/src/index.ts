@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { serverConfig } from './env';
 import { db } from '@clipmind/db';
 import { migrate } from 'drizzle-orm/mysql2/migrator';
 import path from 'path';
@@ -15,7 +16,7 @@ const app = new Hono();
 
 // 全局 CORS 策略
 app.use('/api/*', cors({
-  origin: ['http://localhost:5173', 'tauri://localhost'],
+  origin: serverConfig.CORS_ORIGIN,
   credentials: true,
 }));
 
@@ -38,8 +39,8 @@ const startServer = async () => {
     await migrate(db, { migrationsFolder: migrationPath });
     console.log('✅ [Database] Migrations completed.');
 
-    serve({ fetch: app.fetch, port: 8787 }, (info) => {
-      console.log(`🚀 Server listening on http://localhost:${info.port}`);
+    serve({ fetch: app.fetch, port: serverConfig.PORT }, (info) => {
+      console.log(`🚀 Server listening on port ${info.port} [CORS Allowed: ${serverConfig.CORS_ORIGIN.join(', ')}]`);
     });
   } catch (error) {
     console.error('❌ [Critical] Failed to run database migrations:', error);
