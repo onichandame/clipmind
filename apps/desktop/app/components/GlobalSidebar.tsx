@@ -70,5 +70,3 @@ export function GlobalSidebar() {
     </div>
   );
 }
-  );
-}
