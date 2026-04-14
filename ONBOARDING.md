@@ -264,3 +264,16 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **数据血缘的不可篡改性**: 在 Rust 底层向云端大脑（Node Server）发起落盘通知时，Payload 中的所有业务元数据（如时长、文件大小）必须来源于真实的物理探测，严禁使用魔法值兜底。
+
+## 📝 [阶段更新] CI/CD 架构演进与跨平台并发构建 (GitHub Actions)
+
+**1. 架构与状态流转 (Architecture State):**
+- **双轨制远端与三端并发流水线**: 确立了内部 Gitea (`origin`) 与外部 GitHub (`github`) 的双轨托管架构。引入了基于 GitHub Actions 的 `build.yml` 工作流，支持 macOS、Windows 和 Linux 的云端并发无头构建。
+- **环境隔离**: 所有的 Tauri release 构建正式剥离本地环境，彻底杜绝本地环境碎片化导致的幽灵编译报错。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (二进制越界黑洞)**: 严禁将针对特定目标平台下载的 `ffmpeg-<target>` 二进制文件提交至 Git。这会撑爆仓库并引发毁灭性的文件冲突。
+- **DON'T DO (防线穿透)**: `tauri.conf.json` 中的 `externalBin` 声明必须与根目录 `.gitignore` 保持一致。现已实施 `bin/ffmpeg-*` 与 `ffmpeg-*` 双重封锁。
+
+**3. 新共识与规范 (New Conventions):**
+- **云端构建唯一真理**: 正式包构建必须由向 GitHub 远端推送代码来驱动。严禁本地手动构建并私下分发。
