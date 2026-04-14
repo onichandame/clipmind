@@ -8,6 +8,7 @@ const serverEnvSchema = z.object({
     .refine((origins) => origins.length > 0, {
       message: "CORS_ORIGIN 不能包含空数组",
     }),
+  DATABASE_URL: z.string().url({ message: "DATABASE_URL 必须是有效的连接字符串" }),
 });
 
 export const serverConfig = serverEnvSchema.parse(process.env);

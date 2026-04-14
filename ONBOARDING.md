@@ -200,6 +200,22 @@
 **3. 新共识与规范 (New Conventions):**
 - 任何需要新增的环境变量，**必须**先在对应的 `env.ts` (前端或后端) 的 Zod Schema 中注册并附带严格的类型/范围校验（如 `z.coerce.number().min(1024)`）。严禁在业务代码中直接读取 `process.env` 或 `import.meta.env`。
 
+### 🛑 12. 生产环境 JIT 运行时决断与 OOM 防线
+
+- **架构事实**: 对于包含复杂类型推断（如 Drizzle + Zod）的 Monorepo 服务端，**严禁在容器构建阶段执行全量 `tsc` 编译**。这会导致 V8 堆内存溢出 (OOM)。
+- **规范**: 生产环境统一采用 `tsx` 作为运行时 Runner。它基于 `esbuild` 进行即时转译，跳过类型检查，既能秒级启动，又能完美保留 `__dirname` 的物理路径血缘，确保 Migration SQL 脚本寻址正常。
+- **pnpm 部署陷阱**: 在使用 pnpm v10+ 进行容器化抽取时，`pnpm deploy` 必须显式携带 `--legacy` 标志，否则会因为工作区注入策略改变而导致构建中断。
+
+## 📝 [阶段更新] 服务端 Docker 化与 JIT 运行时改造
+**1. 架构与状态流转 (Architecture State):**
+- 引入了多阶段构建 Dockerfile，实现了生产依赖的物理隔离 (pnpm deploy)。
+- 确立了以 `tsx` 为核心的生产运行时，彻底解决了 Monorepo 跨包引用导致的编译期 OOM 问题。
+- 规范了非 root 用户 (`hono:1001`) 运行准则，提升了容器安全性。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO**: 严禁在没有 Bundler 的情况下强行将 TS 编译为 JS 运行，这会破坏 `@clipmind/db` 等本地包的相对路径寻址。
+- **DON'T DO**: 严禁在 Docker 构建中盲目升级 pnpm 版本而不处理 `--legacy` 部署标志。
+
 ## 📝 [阶段更新] 定时任务架构与 OSS 幽灵资产自动巡检
 **1. 架构与状态流转 (Architecture State):**
 - 引入 `node-cron` 建立后端定时任务防线。

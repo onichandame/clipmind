@@ -1,8 +1,7 @@
 import 'dotenv/config';
 import { serverConfig } from './env';
-import { db } from '@clipmind/db';
-import { migrate } from 'drizzle-orm/mysql2/migrator';
-import path from 'path';
+import { runMigrations } from '@clipmind/db';
+import { db } from './db';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -35,9 +34,8 @@ app.route('/api/assets', assetsRoute);
 const startServer = async () => {
   try {
     console.log('🔄 [Database] Running migrations...');
-    // 精准定位到绝对物理路径
-    const migrationPath = path.resolve(__dirname, '../../../packages/db/src/migrations');
-    await migrate(db, { migrationsFolder: migrationPath });
+    // 直接调用 db 包封装的方法，彻底解耦路径与 Drizzle 细节
+    await runMigrations(serverConfig.DATABASE_URL);
     console.log('✅ [Database] Migrations completed.');
 
     // 启动定时清理任务防线
