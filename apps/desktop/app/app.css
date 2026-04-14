@@ -1,2 +1,5 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+
+/* [架构师决断]: 覆写 Tailwind v4 的默认 dark 变体触发机制为基于 HTML 标签的 class */
+@custom-variant dark (&:where(.dark, .dark *));

@@ -62,18 +62,18 @@ export default function Home() {
 
   if (allProjects.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full p-8 text-center bg-zinc-950">
-        <div className="w-24 h-24 mb-6 rounded-full bg-zinc-900 flex items-center justify-center border border-zinc-800">
-          <Sparkles className="w-10 h-10 text-zinc-500" />
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
+        <div className="w-24 h-24 mb-6 rounded-full bg-white dark:bg-zinc-900 flex items-center justify-center border border-zinc-200 dark:border-zinc-800 shadow-sm dark:shadow-none">
+          <Sparkles className="w-10 h-10 text-zinc-400 dark:text-zinc-500" />
         </div>
-        <h2 className="text-2xl font-bold text-zinc-100 mb-2">你的第一个视频大纲，从这里开始</h2>
+        <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100 mb-2">你的第一个视频大纲，从这里开始</h2>
         <p className="text-zinc-500 max-w-md mb-8">
           告诉 AI 你的创作灵感，我们将为你自动生成大纲并匹配库中的高光素材。
         </p>
         <button
           onClick={() => createMutation.mutate()}
           disabled={isCreating}
-          className="px-8 py-3 bg-zinc-100 text-zinc-950 rounded-lg font-bold hover:bg-white transition-all disabled:opacity-50 cursor-pointer"
+          className="px-8 py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-950 rounded-lg font-bold hover:bg-zinc-800 dark:hover:bg-white transition-all disabled:opacity-50 cursor-pointer"
         >
           {isCreating ? "正在创建..." : "+ 开始首次创作"}
         </button>
@@ -82,10 +82,10 @@ export default function Home() {
   }
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-zinc-950">
+    <div className="h-full flex flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
       <header className="flex items-center justify-between px-8 py-10 flex-shrink-0">
         <div>
-          <h1 className="text-3xl font-bold text-zinc-100">工作台</h1>
+          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-100">工作台</h1>
           <p className="text-zinc-500 mt-1">早安，创作者。</p>
         </div>
         <button
@@ -108,10 +108,10 @@ export default function Home() {
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {recentProjects.map((p) => (
-                <ProjectCard 
-                  key={p.id} 
-                  project={p} 
-                  onDelete={() => setDeleteId(p.id)} 
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  onDelete={() => setDeleteId(p.id)}
                 />
               ))}
             </div>
@@ -138,8 +138,8 @@ export default function Home() {
               </thead>
               <tbody className="divide-y divide-zinc-800/50">
                 {allProjects.map((p) => (
-                  <tr 
-                    key={p.id} 
+                  <tr
+                    key={p.id}
                     onClick={() => navigate(`/projects/${p.id}`)}
                     className="group hover:bg-zinc-900/40 transition-colors cursor-pointer"
                   >
@@ -156,7 +156,7 @@ export default function Home() {
                       {new Date(p.updatedAt).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <IconButton 
+                      <IconButton
                         icon={Trash2}
                         onClick={(e) => {
                           e.stopPropagation(); // 阻止冒泡，防止触发 tr 的跳转
@@ -175,9 +175,9 @@ export default function Home() {
 
       {/* Delete Confirmation Modal */}
       {deleteId && (
-        <DeleteConfirmModal 
-          onCancel={() => setDeleteId(null)} 
-          onConfirm={() => confirmDelete(deleteId)} 
+        <DeleteConfirmModal
+          onCancel={() => setDeleteId(null)}
+          onConfirm={() => confirmDelete(deleteId)}
         />
       )}
     </div>
