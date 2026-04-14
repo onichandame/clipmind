@@ -1,3 +1,4 @@
+import { env } from '../env';
 import { useRef, useEffect } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart } from "ai";
@@ -39,7 +40,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
     messages: startingMessages,
     transport: new DefaultChatTransport({
-      api: "http://localhost:8787/api/chat",
+      api: `${env.VITE_API_BASE_URL}/api/chat`,
       body: { projectId, currentOutline: outlineContent, isDirty }
     }),
     onData: (data) => {
@@ -63,7 +64,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       }
 
       // Persist messages: send complete array, replacing entire uiMessages
-      const persistUrl = `http://localhost:8787/api/projects/${projectId}/messages`;
+      const persistUrl = `${env.VITE_API_BASE_URL}/api/projects/${projectId}/messages`;
       fetch(persistUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

@@ -1,3 +1,4 @@
+import { env } from '../env';
 import { useNavigate } from "react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -22,7 +23,7 @@ export default function Home() {
   const { data, isLoading } = useQuery({
     queryKey: ['projects'],
     queryFn: async () => {
-      const res = await fetch('http://localhost:8787/api/projects');
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects`);
       if (!res.ok) throw new Error('Network response was not ok');
       return res.json();
     }
@@ -30,7 +31,7 @@ export default function Home() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch('http://localhost:8787/api/projects', { method: 'POST' });
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects`, { method: 'POST' });
       if (!res.ok) throw new Error('Network error');
       return res.json();
     },
@@ -42,7 +43,7 @@ export default function Home() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await fetch(`http://localhost:8787/api/projects/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Network error');
       return res.json();
     },

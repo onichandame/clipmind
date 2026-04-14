@@ -1,3 +1,4 @@
+import { env } from '../env';
 import { Button } from "../components/Button";
 import { useState, useEffect } from "react";
 import { useRevalidator, useLoaderData } from "react-router";
@@ -27,7 +28,7 @@ function formatDuration(seconds?: number) {
 
 // React Router v7 客户端加载器：负责从 Hono 后端获取真实资产列表
 export async function clientLoader() {
-  const res = await fetch('http://localhost:8787/api/assets');
+  const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets`);
   if (!res.ok) return [];
   return res.json() as Promise<Asset[]>;
 }
@@ -106,43 +107,20 @@ export default function AssetsLibrary() {
     try {
       updateJob(job.id, { status: 'compressing', progress: 0 });
 
-      // 生成本地临时输出路径
-      const videoOut = `${job.sourcePath}.min.mp4`;
-      const audioOut = `${job.sourcePath}.audio.aac`;
+      // 架构大统一：交由 Rust 层全权接管预处理、节流阀、并发隔离与零拷贝上传
+      // 预处理完成后 invoke 会立即返回，随后 Rust 在后台 tokio::spawn 并发推流。
+      await invoke('process_video_asset', {
+        jobId: job.id,
+        localPath: job.sourcePath,
+        serverUrl: env.VITE_API_BASE_URL
+      });
 
-      // 阶段 1：交由 Rust 层解析 Duration 并执行 FFmpeg Sidecar 极速处理
-      const duration = await invoke<number>('process_asset', { input: job.sourcePath, outputVideo: videoOut, outputAudio: audioOut });
-
+      // 预处理完成（锁已释放），Rust 进入脱壳后台上传
       updateJob(job.id, { status: 'uploading', progress: 0 });
-      // 阶段 2：获取云端并发签发 URL (指定当前运行的 Hono 后端端口)
-      const tokenRes = await fetch('http://localhost:8787/api/upload-token', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: job.filename }) // 架构升级：资产作为顶级实体，彻底移除 projectId
-      });
-      const { videoUploadUrl, audioUploadUrl, videoObjectKey } = await tokenRes.json();
+      console.log(`[Pipeline] 预处理完成，已移交 Rust 后台并发推流: ${job.filename}`);
 
-      // 阶段 3：移交 Rust 底层引擎直传，并获取真实上传的文件大小
-      const uploadTrack = async (localPath: string, url: string, type: string): Promise<number> => {
-        return await invoke<number>('upload_asset', { jobId: job.id, path: localPath, url: url, contentType: type });
-      };
-
-      // 音视频双轨并发直传
-      const [videoSize, audioSize] = await Promise.all([
-        uploadTrack(videoOut, videoUploadUrl, 'video/mp4'),
-        uploadTrack(audioOut, audioUploadUrl, 'audio/aac')
-      ]);
-
-      // 阶段 4：核心闭环 - 委托 Rust 发起底层 Webhook，免疫 WebKit 路由切换导致的丢数据风波
-      console.log(`[Stage 4: 闭环落盘] 委托 Rust 侧发送 Webhook...`);
-      await invoke('notify_webhook', {
-        filename: job.filename,
-        objectKey: videoObjectKey,
-        fileSize: videoSize, // 记录实际上传的压缩后视频大小
-        duration: duration
-      });
-
-      updateJob(job.id, { status: 'ready', progress: 100 });
-      revalidator.revalidate(); // 触发 React Router loader 重新拉取数据库最新列表
+      // 注意：UI 最终状态的完成 (ready) 和重新拉取 (revalidate) 
+      // 会由组件外部监听 'upload-progress' 达 100% 时的事件统一处理。
     } catch (error: any) {
       updateJob(job.id, { status: 'error' });
       console.error("处理管道异常中断:", error);
