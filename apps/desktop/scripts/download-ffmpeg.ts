@@ -39,6 +39,11 @@ async function download() {
   console.log(`🚀 Downloading FFmpeg for ${triple} from ${url}...`);
 
   try {
+    const binDir = path.dirname(destPath);
+    if (!fs.existsSync(binDir)) {
+      fs.mkdirSync(binDir, { recursive: true });
+      console.log(`📁 Created missing directory: ${binDir}`);
+    }
     execSync(`curl -L -# -o "${destPath}" "${url}"`, { stdio: 'inherit' });
     if (process.platform !== 'win32') {
       fs.chmodSync(destPath, 0o755);
