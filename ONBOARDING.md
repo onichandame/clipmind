@@ -209,3 +209,17 @@
 
 **3. 新共识与规范 (New Conventions):**
 - 任何需要新增的环境变量，**必须**先在对应的 `env.ts` (前端或后端) 的 Zod Schema 中注册并附带严格的类型/范围校验（如 `z.coerce.number().min(1024)`）。严禁在业务代码中直接读取 `process.env` 或 `import.meta.env`。
+
+## 📝 [阶段更新] 定时任务架构与 OSS 幽灵资产自动巡检
+**1. 架构与状态流转 (Architecture State):**
+- 引入 `node-cron` 建立后端定时任务防线。
+- 废弃了原先散落在路由中的 OSS 客户端局部实例化，将其统一抽离为 `apps/server/src/utils/oss.ts` 全局单例。
+- 新增 `cleanup-dangling-oss.ts` 任务：在服务启动时进行一次异步非阻塞巡检，随后挂载至每天凌晨 03:00 的 Cron 调度。通过比对 `assets` 表中的 `ossUrl` / `audioOssUrl` 与 OSS 实际物理存储，自动抹除未落盘的幽灵文件。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (防误删红线)**: 严禁在 OSS `list` 扫描时省略 `prefix`。必须严格限定扫描域（如 `prefix: 'assets/'`），否则一旦逻辑异常，极易清空整个 Bucket 的其他业务资源。
+- **DON'T DO (OOM 崩溃防线)**: 严禁不带游标（marker）无限制地请求 OSS 列表。必须采用 `do-while` 和 `max-keys` 结合的游标分页策略，防范海量文件撑爆 Node.js 内存。
+- **路径提取陷阱**: 数据库存储的是完整绝对 URL，而 OSS 删除 API 需要的是纯粹的 Object Key。比对前必须使用 `URL` 对象结合 `decodeURIComponent` 精准剥离域名及前导斜杠。
+
+**3. 新共识与规范 (New Conventions):**
+- **定时任务挂载点**: 后续所有 Cron 任务必须收敛至 `apps/server/src/jobs/` 目录，并统一在 `index.ts` 数据库迁移 (`migrate`) 完成后集中调用挂载。

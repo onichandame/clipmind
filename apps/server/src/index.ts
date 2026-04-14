@@ -25,6 +25,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'ClipMind Hono API'
 // 挂载独立业务路由
 app.route('/api/projects', projectsRoute);
 import assetsRoute from './routes/assets';
+import { startDanglingOssCleanupJob } from './jobs/cleanup-dangling-oss';
 
 app.route('/api/chat', chatRoute);
 app.route('/api/oss-callback', ossCallbackRoute);
@@ -38,6 +39,9 @@ const startServer = async () => {
     const migrationPath = path.resolve(__dirname, '../../../packages/db/src/migrations');
     await migrate(db, { migrationsFolder: migrationPath });
     console.log('✅ [Database] Migrations completed.');
+
+    // 启动定时清理任务防线
+    startDanglingOssCleanupJob();
 
     serve({ fetch: app.fetch, port: serverConfig.PORT }, (info) => {
       console.log(`🚀 Server listening on port ${info.port} [CORS Allowed: ${serverConfig.CORS_ORIGIN.join(', ')}]`);
