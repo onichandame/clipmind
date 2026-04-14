@@ -64,6 +64,13 @@
       "when": 1776101620330,
       "tag": "0008_furry_junta",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1776151312500,
+      "tag": "0009_aspiring_captain_britain",
+      "breakpoints": true
     }
   ]
 }

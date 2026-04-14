@@ -14,6 +14,8 @@ export const assets = mysqlTable('assets', {
   fileSize: int('file_size').notNull(), // 上传时直传获取(Byte)
   duration: int('duration'), // NEW: 视频总时长(秒)
   status: varchar('status', { length: 20 }).default('processing'), // processing | ready | error
+  asrTaskId: varchar('asr_task_id', { length: 128 }), // 阿里云 FileTrans 任务 ID
+  asrStatus: varchar('asr_status', { length: 20 }).default('pending'), // pending | processing | completed | failed
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

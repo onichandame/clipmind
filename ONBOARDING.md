@@ -239,3 +239,16 @@
 
 **3. 新共识与规范 (New Conventions):**
 - 现已确立底层 Rust 侧边车任务 (`process_video_asset`) 必须“包揽全流程”，包括向 Node 端发起 `POST /report` 落盘请求。前端已彻底退化为纯粹的状态观察者（Observer），禁止前端插手上传后的落盘网络交互。
+
+## 📝 [阶段更新] 云端 ASR 架构决断与 Webhook 幂等防御 (Cloud-First)
+
+**1. 架构与状态流转 (Architecture State):**
+- **推翻离线优先 (Ticket-07 过时)**: 为了追求极速交付与商业级识别精度，正式废弃端侧 `whisper.cpp` 方案。系统全面转向 **阿里云录音文件识别 (FileTrans)**。
+- **端侧音频降维隔离**: Rust 侧边车仅保留音轨极速分离职责，强制降维至 `16kHz / 单声道 AAC (32kbps)` 后直传 OSS。这完美契合了阿里云大模型的最佳识别区间，并将带宽损耗压缩至极限。
+- **状态机贯穿**: 在 `assets` 核心表中新增 `asrTaskId` 与 `asrStatus`，彻底打通了长音频异步回调的状态流转追踪。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (无脑 Webhook 落盘)**: 严禁在 OSS 回调接口 (`oss-callback.ts`) 中直接执行 `db.insert`。公有云 Webhook 极易因网络抖动发生重试，必须使用 `eq(assets.ossUrl, objectKey)` 配合 `limit(1)` 进行前置查询，实现绝对的幂等性拦截，死防幻觉资产和主键冲突报错。
+
+**3. 新共识与规范 (New Conventions):**
+- **异步不阻塞原则**: 在 Webhook 路由中触发 ASR 任务时，必须采用异步离线触发（如 `Promise.then` 挂载），绝对不允许阻塞向 OSS 返回 `200 OK`，否则会导致 OSS 端认为回调失败而疯狂重试。
