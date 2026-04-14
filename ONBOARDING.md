@@ -277,3 +277,4 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **云端构建唯一真理**: 正式包构建必须由向 GitHub 远端推送代码来驱动。严禁本地手动构建并私下分发。
+- **DON'T DO (Action 版本幻觉)**: 严禁想当然地认为 `tauri-apps/tauri-action` 的版本与 Tauri 框架版本同步。即使 Tauri 升级到了 v2，官方 Action 的主干版本标签依然是 `@v0`。写错版本号会导致 CI 流水线直接在初始化阶段崩溃 (Unable to resolve action)。
