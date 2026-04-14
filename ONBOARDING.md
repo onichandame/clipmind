@@ -4,17 +4,6 @@
 
 ## 🏗️ 核心架构基座
 
-### 🛠️ Sidecar 二进制管理 (FFmpeg & Whisper)
-
-- **存放路径**: `apps/desktop/src-tauri/bin/`。
-- **Sidecar 组成**:
-  - **FFmpeg**: 负责音视频极速分离、转码与压缩。
-  - **Whisper.cpp**: 采用 `large-v3-turbo` 模型，负责离线语音转文字（STT）。
-- **自动化**: 由 `apps/desktop/package.json` 的 `predev`/`prebuild` 钩子驱动。脚本会自动探测系统三元组并从 GitHub Releases 获取免解压的单体二进制文件。
-- **禁令**: 严禁将 `bin/ffmpeg-*`、`bin/whisper-*` 及模型文件 (`.bin`) 提交至 Git。
-
-## 🏗️ 核心架构基座
-
 - **桌面容器**: Tauri v2 (Rust) - 提供跨平台原生系统级访问权限与极速文件 IO。
 - **前端视图**: React Router v7 + Vite - 纯粹的 SPA 渲染层，仅负责 UI 与状态流转。
 - **云端大脑**: Hono (Node Server) - 处理高并发网络请求、数据库交互与 AI 对接。
@@ -24,25 +13,26 @@
 ### 🛠️ Sidecar 二进制管理 (FFmpeg)
 
 - **存放路径**: `apps/desktop/src-tauri/bin/`。
+- **Sidecar 组成**:
+  - **FFmpeg**: 负责音视频极速分离、转码与压缩。
 - **自动化**: 由 `apps/desktop/package.json` 的 `predev`/`prebuild` 钩子驱动。
 - **更新机制**: 脚本会自动探测系统三元组（Target Triple）并从 GitHub Releases 获取免解压的单体二进制文件。
 - **禁令**: 严禁将 `bin/ffmpeg-*` 提交至 Git。
 
 ---
 
-## 🌊 核心链路：大文件处理与离线 STT 管道
+## 🌊 核心链路：大文件处理与云端 ASR 管道
 
-处理大体积音视频素材时，我们采用了端侧计算前置的极限性能架构。当前阶段暂不进行向量化，必须严格遵循以下 3 个流转阶段，**严禁私自更改链路职责**：
+处理大体积音视频素材时，我们采用了端云协作的极限性能架构。当前阶段暂不进行向量化，必须严格遵循以下 3 个流转阶段，**严禁私自更改链路职责**：
 
-1. **底层一鱼两吃与本地推理 (Rust - Semaphore 隔离)**：
+1. **底层一鱼两吃极速分离 (Rust - Semaphore 隔离)**：
    - 前端下发指令，Rust 层获取 `Semaphore(1)` 锁，唤起 FFmpeg 同步输出视频正片和纯净音频 (强制降维至 16kHz/单声道/16-bit PCM)。
-   - 紧接着唤起 `whisper.cpp` 消费临时音频，输出 `transcript.srt` 文件。
    - **节流防崩**：解析处理进度时，强制注入 **500ms 节流阀**，按死前端 IPC 通信风暴。
 2. **流式上云与数据上报 (Rust - 无限制并发)**：
    - **零拷贝直传**: 释放排队锁后，进入独立的异步任务。采用 `tokio::fs::File` 结合 `tokio_util::codec::FramedRead` 转化为流，强行打入 `Content-Length` 头完成 OSS 预签名 PUT 直传。
-   - **落盘通知**: 推流成功后，将暂存的 SRT 字符串和元数据 POST 给 Hono 后端。
+   - **落盘通知与触发 ASR**: 推流成功后，将元数据 POST 给 Hono 后端。后端随后将拉起与阿里云 ASR 的对接流程进行高精转录。
 3. **即时物理清理 (RAII 兜底)**：
-   - 无论推流和上报成功或 Panic，任务终点**必须强制抹除**本地的所有临时音频与 SRT 文件，彻底杜绝“幽灵垃圾”。
+   - 无论推流和上报成功或 Panic，任务终点**必须强制抹除**本地的所有临时音视频文件，彻底杜绝“幽灵垃圾”。
 
 ---
 
@@ -60,7 +50,7 @@
   - **DON'T DO**: 严禁在前端强行解析本地大文件元数据。
   - **规范**: 必须在 Rust 层直接解析 FFmpeg stderr 输出流，提取真实的 `Duration` 传递给前端。
 - **血泪教训 2 (IPC 通信风暴)**：直接将底层高频事件（如 FFmpeg stderr 字节流）无脑跨进程转发给前端，瞬间会撑爆 V8 引擎导致 `NeedDebuggerBreak trap` 崩溃。
-  - **规范**: Rust 后端向前端发送进度事件时，必须强制注入 **节流阀 (Throttle)**（如 150ms 推送一次），按死性能毒瘤。
+  - **规范**: Rust 后端向前端发送进度事件时，必须强制注入 **节流阀 (Throttle)**（严格对齐 500ms 推送一次），按死性能毒瘤。
 - **血泪教训 3 (幽灵资产与 Webhook 移交)**：如果让前端在上传完毕后去 `fetch` 调用后端的落盘 API，一旦用户在进度 99% 时切换路由或刷新页面，回调就会灰飞烟灭。文件上了 OSS，但数据库记录丢失，产生“幽灵资产”。
   - **DON'T DO**: 严禁在前端 `assets.tsx` 发起跨域 Webhook 通知 Node Server。
   - **规范**: 必须由执行直传的 Rust 底层 (`lib.rs`)，在推流成功后，直接使用 `reqwest::Client` (开启 `json` feature) 向后端发起落盘通知。
@@ -102,14 +92,14 @@
 
 ## 📝 架构演进与历史工单 (Tech Debt Resolved)
 
-**[Ticket-07] 离线 STT 与 RAG 数据准备链路重构 (Offline-First)**
+**[Ticket-07] STT 链路重构：弃用 Whisper，拥抱阿里云 ASR**
 
-- **背景**：为规避云端 ASR 成本与网络 IO 瓶颈，并用最快速度跑通 MVP，决定将语音转文本（STT）压力全面前置到用户端本地计算机。
+- **背景**：早期 MVP 阶段尝试了将 STT 压力前置到本地 (`whisper.cpp`)，但随之带来了沉重的模型分发体积负担，以及在低端设备上算力遭遇瓶颈导致的发热与卡顿。
 - **修复与决策**：
-  - 引入 `whisper.cpp (large-v3-turbo)` 侧边车，完美兼顾中英双语精度与本地推理速度。
-  - 彻底砍掉先前的“分离音轨并上传 OSS”链路，现在云端仅接收转录文本，实现 0 额外音频存储与带宽损耗。
+  - **全面弃用 Whisper**：移除本地推理侧边车，释放客户端体积与性能压力。
+  - **恢复云端 ASR 链路**：端侧现仅负责通过 FFmpeg 极速分离并提取纯净音频，随后直传 OSS，由 Hono 后端对接阿里云 ASR 完成高并发、高精度的语音识别。
   - 采用 Qdrant 命名空间隔离方案（前缀 `clipmind_`）解决单实例多项目共用问题。
-- **⚠️ 避坑红线 (Rust 线程假死)**：调用 FFmpeg 和 Whisper 的 `Command` 执行体，必须被完整包裹在 `tokio::task::spawn_blocking` 中！绝对禁止在主异步上下文中直接阻塞，否则将导致 Tauri 前端 UI 彻底假死，用户无法看到任何进度更新。
+- **⚠️ 避坑红线 (旧病历废除)**：早期提倡的 `tokio::task::spawn_blocking` 包裹 `Command` 的做法已被明确鉴定为**错误实践**，现已全量迁移至 Tauri v2 `app.shell().sidecar()` 原生异步 API。
 
 **[Ticket-05/06] 彻底废弃独立消息表，拥抱 Project JSON 聚合**
 
@@ -142,7 +132,7 @@
 
 - 前端项目新增了标准的 `Button.tsx` 组件。后续所有涉及表单或悬浮交互的按钮，必须优先复用该组件，严禁在业务线路由中反复拼凑 Tailwind 基础类。
 
-### 🛑 8. Tailwind v4 双主题架构规范 (Light/Dark Mode)
+### 🛑 10. Tailwind v4 双主题架构规范 (Light/Dark Mode)
 
 - **架构事实**: 本项目采用纯 Tailwind CSS v4 架构，已废弃 `tailwind.config.js`。
 - **暗黑触发机制**: 严禁依赖系统级媒体查询盲猜。必须在 `app/app.css` 顶部注入 `@custom-variant dark (&:where(.dark, .dark *));` 以实现基于 DOM 类名的精准劫持。
@@ -162,7 +152,7 @@
 **3. 新共识与规范 (New Conventions):**
 - 后续如需引入需要高频调用的外部进程依赖配置（如 AI 模型的本地路径、特定算子的支持度），必须采用相同的“App Setup 探测 -> `tauri::State` 挂载 -> 内存提取”三步走模式，严禁在业务请求的 Handle 闭包内执行耗时探测。
 
-### 🛑 9. 幽灵特异性与 Markdown 渲染 (Typography 陷阱)
+### 🛑 11. 幽灵特异性与 Markdown 渲染 (Typography 陷阱)
 
 - **血泪教训**: 在实现双态主题时，如果使用 `@tailwindcss/typography` (`prose`) 渲染 Markdown，它会强制接管内部所有 HTML 标签（如 `<p>`, `<h1>`）的颜色特异性。如果外层容器强行设置了 `text-white`，在 Light 模式下，`prose` 默认会把内部文字还原为深灰色，导致在深色背景气泡上出现“隐形墨水”的灾难。
 - **规范**: 严禁通过外层普通 class 试图覆盖 `prose` 的颜色。对于恒定深色背景的区块（如用户发送的消息气泡），必须**绕过系统主题**，硬编码传入 `prose-invert`；对于需要跟随系统变色的区块（如 AI 回复），传入 `dark:prose-invert`。
