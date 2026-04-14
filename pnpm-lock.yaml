@@ -138,6 +138,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@ai-sdk/openai':
+        specifier: ^3.0.52
+        version: 3.0.52(zod@3.25.76)
       '@clipmind/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -3985,6 +3988,12 @@ snapshots:
       '@ai-sdk/provider-utils': 4.0.23(zod@4.3.6)
       '@vercel/oidc': 3.1.0
       zod: 4.3.6
+
+  '@ai-sdk/openai@3.0.52(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.8
+      '@ai-sdk/provider-utils': 4.0.23(zod@3.25.76)
+      zod: 3.25.76
 
   '@ai-sdk/openai@3.0.52(zod@4.3.6)':
     dependencies:

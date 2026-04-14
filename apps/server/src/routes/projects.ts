@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { db } from '@clipmind/db';
+import { db } from '../db';
 import { projects, basketItems, projectOutlines } from '@clipmind/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
 

@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { ossClient } from '../utils/oss';
-import { db } from '@clipmind/db';
+import { db } from '../db';
 import { assets } from '@clipmind/db/schema';
 
 export function startDanglingOssCleanupJob() {
