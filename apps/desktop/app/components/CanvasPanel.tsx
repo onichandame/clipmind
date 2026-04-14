@@ -1,8 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
+import { Menu, ShoppingBasket } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
+import { useBasketStore } from "../store/useBasketStore";
+import { Button } from "./Button";
 
 type CanvasMode = "outline" | "footage" | "split";
 
@@ -13,6 +16,7 @@ interface OutlineData {
 
 interface CanvasPanelProps {
   outline: OutlineData | null;
+  onToggleBasket: () => void;
 }
 
 const modeLabels: Record<CanvasMode, string> = {
@@ -21,8 +25,10 @@ const modeLabels: Record<CanvasMode, string> = {
   split: "✨ 交付视图",
 };
 
-export function CanvasPanel({ outline }: CanvasPanelProps) {
+export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
   const { activeMode, setActiveMode, setOutlineContent, outlineContent } = useCanvasStore();
+  const basketItems = useBasketStore((state) => state.items);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const editor = useEditor({
     extensions: [
@@ -70,7 +76,14 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
       <div className="h-14 border-b border-zinc-200 dark:border-zinc-800/50 flex items-center justify-between px-6 bg-white/80 dark:bg-zinc-900/20 backdrop-blur-md transition-colors duration-200">
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400 transition-colors">当前视图:</span>
-          <div className="flex bg-zinc-100 dark:bg-zinc-800/50 p-1 rounded-lg border border-zinc-200 dark:border-zinc-700/30 transition-colors">
+
+          {/* 窄屏态：仅显示当前模式名称 */}
+          <span className="lg:hidden text-sm font-bold text-zinc-900 dark:text-zinc-100">
+            {modeLabels[activeMode]}
+          </span>
+
+          {/* 宽屏态：模式选择器 */}
+          <div className="hidden lg:flex bg-zinc-100 dark:bg-zinc-800/50 p-1 rounded-lg border border-zinc-200 dark:border-zinc-700/30 transition-colors">
             {(["outline", "footage", "split"] as CanvasMode[]).map((mode) => (
               <button
                 key={mode}
@@ -85,7 +98,78 @@ export function CanvasPanel({ outline }: CanvasPanelProps) {
             ))}
           </div>
         </div>
+
+        {/* 宽屏态：素材篮子 (复用 Button 组件) */}
+        <div className="hidden lg:flex">
+          <Button variant="secondary" size="sm" onClick={onToggleBasket} className="gap-2">
+            <ShoppingBasket size={16} />
+            <span>素材篮子</span>
+            {basketItems.length > 0 && (
+              <span className="bg-indigo-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-md shadow-inner">
+                {basketItems.length}
+              </span>
+            )}
+          </Button>
+        </div>
+
+        {/* 窄屏态：汉堡菜单唤起按钮 */}
+        <div className="lg:hidden relative">
+          <Button variant="secondary" size="sm" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="px-2">
+            <Menu size={18} />
+            {basketItems.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 w-2.5 h-2.5 rounded-full border border-zinc-100 dark:border-zinc-900" />
+            )}
+          </Button>
+        </div>
       </div>
+
+      {/* 窄屏态：汉堡下拉菜单 */}
+      {isMobileMenuOpen && (
+        <div className="absolute top-14 left-0 w-full bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800/50 z-40 flex flex-col p-4 shadow-xl lg:hidden gap-5 animate-in slide-in-from-top-2">
+          <div className="flex flex-col gap-3">
+            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">切换视图</span>
+            <div className="grid grid-cols-1 gap-2">
+              {(["outline", "footage", "split"] as CanvasMode[]).map((mode) => (
+                <Button
+                  key={mode}
+                  variant={activeMode === mode ? "primary" : "secondary"}
+                  size="md"
+                  fullWidth
+                  onClick={() => {
+                    setActiveMode(mode);
+                    setIsMobileMenuOpen(false);
+                  }}
+                >
+                  {modeLabels[mode]}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div className="h-px w-full bg-zinc-200 dark:bg-zinc-800/50" />
+
+          <Button
+            variant="secondary"
+            size="md"
+            fullWidth
+            onClick={() => {
+              onToggleBasket();
+              setIsMobileMenuOpen(false);
+            }}
+            className="justify-between"
+          >
+            <div className="flex items-center gap-2">
+              <ShoppingBasket size={18} />
+              <span>打开素材篮子</span>
+            </div>
+            {basketItems.length > 0 && (
+              <span className="bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-md shadow-inner">
+                {basketItems.length} 项
+              </span>
+            )}
+          </Button>
+        </div>
+      )}
 
       {/* 主画布区 */}
       <div className="flex-1 overflow-auto w-full flex justify-center">

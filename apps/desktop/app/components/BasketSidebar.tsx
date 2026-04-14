@@ -26,24 +26,6 @@ export function BasketSidebar({ isOpen, onToggle }: BasketSidebarProps) {
 
   return (
     <>
-      {/* FIX: 重构唤起按钮为右侧悬浮 FAB (Floating Action Button) */}
-      {!isOpen && (
-        <button
-          type="button"
-          onClick={onToggle}
-          className="fixed top-6 right-6 z-30 bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_20px_rgba(99,102,241,0.3)] rounded-2xl px-4 py-3 flex items-center gap-2.5 transition-all transform hover:scale-105 hover:-translate-y-1 group"
-          aria-label="Open basket"
-        >
-          <span className="text-xl group-hover:animate-bounce">🛒</span>
-          <span className="font-medium text-sm tracking-wide">素材篮子</span>
-          {items.length > 0 && (
-            <span className="bg-white text-indigo-600 text-xs font-bold px-2 py-0.5 rounded-full ml-1 shadow-inner">
-              {items.length}
-            </span>
-          )}
-        </button>
-      )}
-
       {/* FIX: 抽屉面板暗黑玻璃态重构 */}
       <div
         className={`

@@ -30,25 +30,19 @@
 
 ---
 
-## 🌊 核心链路：大文件处理与 RAG 离线准备管道
+## 🌊 核心链路：大文件处理与离线 STT 管道
 
-处理大体积音视频素材时，我们采用了端侧计算前置的极限性能架构。必须严格遵循以下 5 个流转阶段，**严禁私自更改链路职责**：
+处理大体积音视频素材时，我们采用了端侧计算前置的极限性能架构。当前阶段暂不进行向量化，必须严格遵循以下 3 个流转阶段，**严禁私自更改链路职责**：
 
-1. **底层一鱼两吃 (Rust)**：
-   - 前端下发指令，Rust 层唤起 FFmpeg Sidecar。
-   - **单次读取双输出**：执行单次 FFmpeg 命令，同步输出视频正片 (`compressed.mp4`，用于云端落盘展示) 和纯净音频 (`whisper_temp.wav`，强制降维至 16kHz/单声道/16-bit PCM，专供 STT 使用)。
-2. **本地离线推理 (Rust)**：
-   - Rust 唤起 `whisper.cpp` Sidecar 消费本地的 `whisper_temp.wav`，输出带有毫秒级时间戳的 `transcript.srt` 文件。
-   - **即时清理 (RAII/ScopeGuard)**：推理完成后，Rust 读取 SRT 文本到内存，并**必须立即使用 `fs::remove_file` 物理抹除**本地的 WAV 和 SRT 临时文件，无论成功或 Panic，彻底杜绝“幽灵垃圾文件”。
-3. **双轨同步闭环 (Rust & Node)**：
-   - **轨道 A (视频直传)**: Rust 将提取到的直传 URL 交由底层网络栈 (`reqwest`)，绕过 WebKit 限制直接将 `compressed.mp4` 推送至阿里云 OSS。
-   - **轨道 B (文本上报)**: Rust 将内存中的 SRT 字符串作为 JSON Payload 直接 POST 给 Hono 后端。
-4. **数据清洗与粗切 (Node/Hono)**：
-   - Hono 接收 SRT 文本，按 **30秒-60秒的滑动窗口** 进行合并粗切，保留各 Block 的 `start_time` 和 `end_time`。
-   - 批量调用 OpenRouter (如 BGE-M3 模型) 获取 Embedding。（注意：必须加入并发限流或使用 Batch API，防止触发 429 熔断）。
-5. **隔离入库 (Qdrant)**：
-   - 向量数据写入名为 `clipmind_assets` 的专属 Collection（采用 Namespace 前缀方案与其他项目在逻辑上彻底隔离）。
-   - 向量的 Point ID 必须使用 **`UUIDv5(asset_id + chunk_index)`** 生成，以确保重复执行或覆盖更新时的幂等性。
+1. **底层一鱼两吃与本地推理 (Rust - Semaphore 隔离)**：
+   - 前端下发指令，Rust 层获取 `Semaphore(1)` 锁，唤起 FFmpeg 同步输出视频正片和纯净音频 (强制降维至 16kHz/单声道/16-bit PCM)。
+   - 紧接着唤起 `whisper.cpp` 消费临时音频，输出 `transcript.srt` 文件。
+   - **节流防崩**：解析处理进度时，强制注入 **500ms 节流阀**，按死前端 IPC 通信风暴。
+2. **流式上云与数据上报 (Rust - 无限制并发)**：
+   - **零拷贝直传**: 释放排队锁后，进入独立的异步任务。采用 `tokio::fs::File` 结合 `tokio_util::codec::FramedRead` 转化为流，强行打入 `Content-Length` 头完成 OSS 预签名 PUT 直传。
+   - **落盘通知**: 推流成功后，将暂存的 SRT 字符串和元数据 POST 给 Hono 后端。
+3. **即时物理清理 (RAII 兜底)**：
+   - 无论推流和上报成功或 Panic，任务终点**必须强制抹除**本地的所有临时音频与 SRT 文件，彻底杜绝“幽灵垃圾”。
 
 ---
 
@@ -95,6 +89,14 @@
 - 在 Node Server 入口处，`import 'dotenv/config'` 必须是绝对的第一行代码，防止模块提升导致 DB 初始化崩溃。
 - 严禁在未配置 `drizzle.config.ts` 时执行 `generate` 引发迁移历史脑裂。
 - 编写重构脚本时，永远使用 Here-Doc 语法 (`cat << 'EOF' | node`)，严禁 `node -e "..."`。
+
+### 🛑 8. 侧边车并发控制与 500ms 节流阀 (防假死/防风暴)
+- **预处理必须排队**: 绝不允许在 Rust 侧无限制唤起重型 Sidecar（如 FFmpeg/Whisper），必须使用 `tokio::sync::Semaphore(1)` 隔离保护，保证全局唯一执行。
+- **进度必须节流**: 解析 Sidecar stdout/stderr 进度时，必须引入 `std::time::Instant`。强制计算当前时间与上次发送时间的差值，**大于 500ms** 才允许向前端 `emit`，死防 IPC 风暴。
+
+### 🛑 9. OSS 流式上传规范 (零拷贝防 OOM)
+- **DON'T DO**: 严禁在 Rust 中使用 `fs::read` 将大文件一次性读入 `Vec<u8>` 后再发送，极易引发端侧和 V8 引擎 OOM 崩溃。
+- **规范**: 必须采用 `tokio::fs::File::open` 配合 `tokio_util::codec::FramedRead` 转化为流。由于 OSS 预签名校验严格，发送前**必须获取精确大小**，并在请求头中强行打入 `CONTENT_LENGTH`，以阻止 Reqwest 默认的 Chunked 传输破坏签名。
 
 ---
 
@@ -164,3 +166,16 @@
 
 - **血泪教训**: 在实现双态主题时，如果使用 `@tailwindcss/typography` (`prose`) 渲染 Markdown，它会强制接管内部所有 HTML 标签（如 `<p>`, `<h1>`）的颜色特异性。如果外层容器强行设置了 `text-white`，在 Light 模式下，`prose` 默认会把内部文字还原为深灰色，导致在深色背景气泡上出现“隐形墨水”的灾难。
 - **规范**: 严禁通过外层普通 class 试图覆盖 `prose` 的颜色。对于恒定深色背景的区块（如用户发送的消息气泡），必须**绕过系统主题**，硬编码传入 `prose-invert`；对于需要跟随系统变色的区块（如 AI 回复），传入 `dark:prose-invert`。
+
+## 📝 [阶段更新] 顶部响应式导航重构与悬浮按钮剔除
+
+**1. 架构与状态流转 (Architecture State):**
+- 彻底移除了 `BasketSidebar` 内部硬编码的悬浮唤起按钮，将其纯粹化为一个受控的抽屉组件。
+- 篮子的开闭状态 (`isBasketOpen`) 现已提升并收敛于 `WorkspaceLayout`，通过 `onToggleBasket` 属性下发至 `CanvasPanel`。
+- 将“素材篮子”入口安全注入到了 `CanvasPanel` 顶部状态栏的 Flex 布局流中，实现了与视图切换器的响应式共存。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO**: 绝对禁止在复杂的布局容器中随意使用 `fixed` 或 `absolute` 硬编码悬浮操作按钮（FAB）。这种无视文档流的做法，在屏幕尺寸缩小至临界点时，必然会导致不可预见的物理遮挡（如遮挡顶部 Tab 栏）。
+
+**3. 新共识与规范 (New Conventions):**
+- **响应式折叠 (Hamburger Menu)**: 面对顶部栏拥挤问题，严禁任由系统强行挤压文字导致排版崩溃。必须采用标准的断点策略：宽屏态 (`lg:flex`) 展开所有操作并复用通用 `Button` 组件；窄屏态 (`lg:hidden`) 必须将功能收纳至汉堡菜单中。
