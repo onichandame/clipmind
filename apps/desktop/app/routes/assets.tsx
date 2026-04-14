@@ -1,3 +1,4 @@
+import { Button } from "../components/Button";
 import { useState, useEffect } from "react";
 import { useRevalidator, useLoaderData } from "react-router";
 import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud } from "lucide-react";
@@ -72,6 +73,35 @@ export default function AssetsLibrary() {
     newJobs.forEach(processJob); // 发射！独立进入状态机，互不阻塞
   };
 
+  // 注入进度监听，拦截 Rust 底层的节流事件
+  useEffect(() => {
+    let unlistenUpload: () => void;
+    let unlistenFFmpeg: () => void;
+
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      // 监听上传进度
+      listen<{ id: string, progress: number }>('upload-progress', (event) => {
+        setJobs(current => current.map(j =>
+          j.id === event.payload.id ? { ...j, progress: event.payload.progress } : j
+        ));
+      }).then(fn => unlistenUpload = fn);
+
+      // 监听压缩进度并在控制台打印
+      listen<{ log: string }>('ffmpeg-progress', (event) => {
+        console.log("[前端 FFmpeg 进度捕获]:", event.payload.log);
+        // 视觉补偿：由于 FFmpeg 日志难以精准转化为百分比且未绑定 ID，我们为处于 compressing 的任务统一增加伪进度
+        setJobs(current => current.map(j =>
+          (j.status === 'compressing' && j.progress < 90) ? { ...j, progress: j.progress + 2 } : j
+        ));
+      }).then(fn => unlistenFFmpeg = fn);
+    });
+
+    return () => {
+      if (unlistenUpload) unlistenUpload();
+      if (unlistenFFmpeg) unlistenFFmpeg();
+    };
+  }, []);
+
   const processJob = async (job: UploadJob) => {
     try {
       updateJob(job.id, { status: 'compressing', progress: 0 });
@@ -123,12 +153,9 @@ export default function AssetsLibrary() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 p-8 font-sans">
       <div className="flex items-center justify-between mb-8 max-w-7xl mx-auto">
         <h1 className="text-2xl font-semibold tracking-tight">全部素材 (Assets)</h1>
-        <button
-          onClick={handleSelectFiles}
-          className="flex items-center px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-md transition-colors shadow-lg shadow-indigo-500/20"
-        >
+        <Button onClick={handleSelectFiles} variant="primary">
           <UploadCloud className="w-4 h-4 mr-2" /> 批量导入并极速压缩
-        </button>
+        </Button>
       </div>
 
       <div className="max-w-7xl mx-auto">

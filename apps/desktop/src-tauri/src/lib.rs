@@ -20,10 +20,11 @@ async fn upload_asset(
 
     let app_handle = app.clone();
     let id_for_emit = job_id.clone();
+    let stream_path = path.clone(); // FIX: 克隆路径以剥离流媒体与底层清理的生命周期绑定
 
     // 2. 构造底层的 Stream 并强制注入泛型类型，彻底摧毁编译器的推断黑洞
     let async_stream = async_stream::stream! {
-      let mut file = match tokio::fs::File::open(&path).await {
+      let mut file = match tokio::fs::File::open(&stream_path).await {
         Ok(f) => f,
         Err(e) => {
           yield Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
@@ -71,6 +72,8 @@ async fn upload_asset(
         .map_err(|e| format!("上传请求失败: {}", e))?;
 
     if res.status().is_success() {
+        // [阶段清理] 直传 OSS 成功后，物理清理本地临时音视频文件
+        let _ = tokio::fs::remove_file(&path).await;
         Ok(file_size)
     } else {
         Err(format!("OSS 返回错误: {}", res.status()))
@@ -144,8 +147,10 @@ async fn process_asset(
                 }
 
                 // 核心修复：阻断 IPC 风暴，防止 V8 引擎 OOM 崩溃
-                if last_emit.elapsed() >= throttle_duration {
-                    let _ = app.emit("ffmpeg-progress", line.to_string());
+                // 将频率限制延长至 500ms，并使用 JSON 包装确保跨语言序列化安全
+                if last_emit.elapsed() >= std::time::Duration::from_millis(500) {
+                    println!("[Rust FFmpeg 探针] {}", line); // 满足你查看底层返回的要求
+                    let _ = app.emit("ffmpeg-progress", serde_json::json!({ "log": line.to_string() }));
                     last_emit = std::time::Instant::now();
                 }
             }
