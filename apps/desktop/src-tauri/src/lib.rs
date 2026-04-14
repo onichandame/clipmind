@@ -1,5 +1,5 @@
 use reqwest::Client;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncReadExt;
@@ -83,35 +83,53 @@ async fn upload_asset(
 #[tauri::command]
 async fn process_asset(
     app: AppHandle,
+    encoder_state: tauri::State<'_, VideoEncoderState>,
     input: String,
     output_video: String,
     output_audio: String,
 ) -> Result<f64, String> {
+    let encoder = &encoder_state.0;
+    
+    let mut args = vec![
+        "-y".to_string(), // 强制覆盖已有残留文件
+        "-i".to_string(),
+        input,
+    ];
+
+    // 视频轨道：基于全局状态注入自适应硬件加速或软件兜底
+    args.push("-c:v".to_string());
+    args.push(encoder.clone());
+    
+    // 针对特定硬件加速器注入额外的质量控制参数 (VBR/Preset)
+    if encoder.contains("videotoolbox") {
+        args.push("-q:v".to_string());
+        args.push("50".to_string());
+    } else if encoder.contains("nvenc") || encoder.contains("amf") || encoder.contains("qsv") {
+        args.push("-preset".to_string());
+        args.push("fast".to_string());
+    }
+
+    args.extend(vec![
+        "-an".to_string(),
+        output_video,
+        // 音频轨道：强制降维至 16kHz 32kbps 单声道 AAC，专门喂给后端 ASR
+        "-vn".to_string(),
+        "-c:a".to_string(),
+        "aac".to_string(),
+        "-ac".to_string(),
+        "1".to_string(),
+        "-ar".to_string(),
+        "16000".to_string(),
+        "-b:a".to_string(),
+        "32k".to_string(),
+        output_audio,
+    ]);
+
     let sidecar_command = app
         .shell()
         .sidecar("ffmpeg")
         .map_err(|e| format!("无法构建 sidecar: {}", e))?
-        .args([
-            "-y", // 强制覆盖已有残留文件
-            "-i",
-            &input,
-            // 视频轨道：剔除音频 (-an) (MVP 阶段兜底使用 libx264，后续可针对 OS 开启硬件加速)
-            "-c:v",
-            "libx264",
-            "-an",
-            &output_video,
-            // 音频轨道：剔除视频 (-vn)，强制降维至 16kHz 32kbps 单声道 AAC，专门喂给后端 ASR
-            "-vn",
-            "-c:a",
-            "aac",
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-b:a",
-            "32k",
-            &output_audio,
-        ]);
+        .args(args);
 
     let (mut rx, _child) = sidecar_command
         .spawn()
@@ -243,6 +261,8 @@ pub async fn detect_best_video_encoder(app: &tauri::AppHandle) -> String {
     fallback
 }
 
+struct VideoEncoderState(String);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -254,6 +274,13 @@ pub fn run() {
             notify_webhook
         ])
         .setup(|app| {
+            // [架构升级] 启动即探测：将最优编码器挂载至全局内存，实现业务管线零延迟调用
+            let handle = app.handle().clone();
+            tauri::async_runtime::block_on(async move {
+                let encoder = detect_best_video_encoder(&handle).await;
+                handle.manage(VideoEncoderState(encoder));
+            });
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
