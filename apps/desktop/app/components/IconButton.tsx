@@ -1,16 +1,16 @@
 import type { LucideIcon } from "lucide-react";
-import type { ButtonHTMLAttributes } from "react";
+import type { ComponentProps } from "react";
 
-interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface IconButtonProps extends ComponentProps<'button'> {
   icon: LucideIcon;
   iconSize?: number;
 }
 
-export function IconButton({ 
-  icon: Icon, 
-  iconSize = 16, 
-  className = "", 
-  ...props 
+export function IconButton({
+  icon: Icon,
+  iconSize = 16,
+  className = "",
+  ...props
 }: IconButtonProps) {
   return (
     <button
