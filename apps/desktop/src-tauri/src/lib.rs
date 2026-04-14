@@ -200,6 +200,49 @@ async fn notify_webhook(
     }
 }
 
+pub async fn detect_best_video_encoder(app: &tauri::AppHandle) -> String {
+    let fallback = "libx264".to_string();
+
+    let cmd = match app.shell().sidecar("ffmpeg") {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            eprintln!("Failed to initialize ffmpeg sidecar: {}", e);
+            return fallback;
+        }
+    };
+
+    let output = match cmd.args(["-encoders"]).output().await {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("Failed to execute ffmpeg -encoders: {}", e);
+            return fallback;
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let priorities = if cfg!(target_os = "macos") {
+        vec!["hevc_videotoolbox", "h264_videotoolbox"]
+    } else {
+        vec![
+            "hevc_nvenc",
+            "h264_nvenc",
+            "hevc_amf",
+            "h264_amf",
+            "h264_qsv",
+            "h264_vaapi",
+        ]
+    };
+
+    for encoder in priorities {
+        if stdout.contains(encoder) {
+            return encoder.to_string();
+        }
+    }
+
+    fallback
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
