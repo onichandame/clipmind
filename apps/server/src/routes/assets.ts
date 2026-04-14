@@ -14,4 +14,26 @@ app.get("/", async (c) => {
   }
 });
 
+app.post("/report", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { id, filename, duration, ossUrl, audioOssUrl, fileSize } = body;
+
+    await db.insert(assets).values({
+      id,
+      filename,
+      ossUrl,
+      audioOssUrl,
+      fileSize,
+      duration,
+      status: 'ready',
+    });
+
+    return c.json({ success: true, assetId: id });
+  } catch (error) {
+    console.error('❌ 资产入库失败:', error);
+    return c.json({ error: 'Database Insert Error' }, 500);
+  }
+});
+
 export default app;

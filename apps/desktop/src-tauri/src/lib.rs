@@ -1,8 +1,18 @@
-use reqwest::Client;
-use tauri::{AppHandle, Emitter, Manager};
+use reqwest::{
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    Client,
+};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncReadExt;
+use tokio::sync::Semaphore;
+use tokio_util::codec::{BytesCodec, FramedRead};
 
 #[tauri::command]
 async fn upload_asset(
@@ -89,7 +99,7 @@ async fn process_asset(
     output_audio: String,
 ) -> Result<f64, String> {
     let encoder = &encoder_state.0;
-    
+
     let mut args = vec![
         "-y".to_string(), // 强制覆盖已有残留文件
         "-i".to_string(),
@@ -99,7 +109,7 @@ async fn process_asset(
     // 视频轨道：基于全局状态注入自适应硬件加速或软件兜底
     args.push("-c:v".to_string());
     args.push(encoder.clone());
-    
+
     // 针对特定硬件加速器注入额外的质量控制参数 (VBR/Preset)
     if encoder.contains("videotoolbox") {
         args.push("-q:v".to_string());
@@ -140,7 +150,7 @@ async fn process_asset(
 
     // 注入高频防御：IPC 节流阀
     let mut last_emit = std::time::Instant::now();
-    let throttle_duration = std::time::Duration::from_millis(150);
+    let _throttle_duration = std::time::Duration::from_millis(150);
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -168,7 +178,10 @@ async fn process_asset(
                 // 将频率限制延长至 500ms，并使用 JSON 包装确保跨语言序列化安全
                 if last_emit.elapsed() >= std::time::Duration::from_millis(500) {
                     println!("[Rust FFmpeg 探针] {}", line); // 满足你查看底层返回的要求
-                    let _ = app.emit("ffmpeg-progress", serde_json::json!({ "log": line.to_string() }));
+                    let _ = app.emit(
+                        "ffmpeg-progress",
+                        serde_json::json!({ "log": line.to_string() }),
+                    );
                     last_emit = std::time::Instant::now();
                 }
             }
@@ -263,6 +276,202 @@ pub async fn detect_best_video_encoder(app: &tauri::AppHandle) -> String {
 
 struct VideoEncoderState(String);
 
+// --- 核心流转架构：并发隔离与状态 ---
+pub struct ProcessingManager {
+    pub semaphore: Semaphore,
+}
+
+impl ProcessingManager {
+    pub fn new() -> Self {
+        Self {
+            semaphore: Semaphore::new(1),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadTokenResponse {
+    asset_id: String,
+    video_upload_url: String,
+    video_object_key: String,
+    audio_upload_url: String,
+    audio_object_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReportPayload {
+    id: String,
+    filename: String,
+    duration: i32,
+    oss_url: String,
+    audio_oss_url: String,
+    file_size: u64,
+}
+
+#[tauri::command]
+async fn process_video_asset(
+    app: AppHandle,
+    state: State<'_, ProcessingManager>,
+    job_id: String,
+    local_path: String,
+    server_url: String,
+) -> Result<(), String> {
+    println!("[Job {}] 准备排队获取 Semaphore 锁...", job_id);
+
+    let _permit = state.semaphore.acquire().await.unwrap();
+    println!("[Job {}] 🟢 独占 CPU 开始执行预处理...", job_id);
+
+    // 物理隔离：只生成音频临时文件，原视频将直接从原始路径上传
+    let temp_audio = format!("temp_{}.aac", job_id);
+
+    let app_clone = app.clone(); // 留给 tokio::spawn 异步上传使用
+    let app_ffmpeg = app.clone(); // 专供 FFmpeg 闭包使用
+    let local_path_clone = local_path.clone();
+
+    println!("[Probe-FFmpeg] 开始提取音频轨道，源路径: {}", local_path_clone);
+
+    // 核心架构回归：使用 Tauri 官方 Shell 插件异步执行 Sidecar
+    let sidecar_command = app_ffmpeg
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("无法初始化 FFmpeg Sidecar: {}", e))?;
+
+    // 调整为纯音频提取模式，原视频不进行任何处理
+    let (mut rx, _child) = sidecar_command
+        .args([
+            "-i", &local_path_clone,
+            "-vn",                      // 禁用视频流输出
+            "-c:a", "aac",              // 提取音频为 aac
+            "-b:a", "128k",             // 阿里云 ASR 推荐码率
+            &temp_audio,                // 输出到临时音频文件
+            "-y",                       // 强制覆盖
+        ])
+        .spawn()
+        .map_err(|e| format!("FFmpeg Sidecar spawn failed: {}", e))?;
+
+    let mut last_emit = Instant::now();
+    // 原生 async 循环，天生防假死，不再需要 spawn_blocking 丑陋的包裹
+    while let Some(event) = rx.recv().await {
+        if let CommandEvent::Stderr(line_bytes) = event {
+            let line = String::from_utf8_lossy(&line_bytes);
+            if last_emit.elapsed() > Duration::from_millis(500) {
+                let _ = app_ffmpeg.emit("ffmpeg-progress", &line);
+                last_emit = Instant::now();
+            }
+        }
+    }
+
+    println!(
+        "[Job {}] FFmpeg 极速双轨分离完毕，准备进入直传队列...",
+        job_id
+    );
+
+    // 约束 4: STT 完成后必须释放并发许可
+    drop(_permit);
+    println!(
+        "[Task {}] 🔴 预处理完成，已释放 Semaphore 锁。进入后台并发直传阶段。",
+        job_id
+    );
+
+    // 约束 4 & 5: 开启 tokio::spawn 异步上传，不阻塞主流程
+    tokio::spawn(async move {
+        let client = Client::new();
+
+        let async_flow: Result<(), String> = async {
+            let token_payload = serde_json::json!({ "filename": "video.mp4" });
+            let token_res = client
+                .post(format!("{}/api/upload-token", server_url))
+                .json(&token_payload)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json::<UploadTokenResponse>()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // 轨道 1: 视频直传 (直接读取原始物理文件，实现 0 拷贝和 0 损耗)
+            let file = tokio::fs::File::open(&local_path_clone)
+                .await
+                .map_err(|e| format!("无法打开原始视频文件: {}", e))?;
+
+            let file_size = file.metadata().await.map_err(|e| e.to_string())?.len();
+
+            let stream = FramedRead::new(file, BytesCodec::new());
+            let body = reqwest::Body::wrap_stream(stream);
+
+            // 动态匹配 Content-Type 以迎合 OSS 签名 (防 403 挂起)
+            let mime_type = if local_path_clone.to_lowercase().ends_with(".mov") {
+                "video/quicktime"
+            } else {
+                "video/mp4"
+            };
+
+            let _ = app_clone.emit(
+                "upload-progress",
+                serde_json::json!({ "id": job_id, "progress": 10 }),
+            );
+
+            client
+                .put(&token_res.video_upload_url)
+                .header(CONTENT_LENGTH, file_size)
+                .header(CONTENT_TYPE, mime_type)
+                .body(body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let _ = app_clone.emit(
+                "upload-progress",
+                serde_json::json!({ "id": job_id, "progress": 90 }),
+            );
+
+            let report_payload = ReportPayload {
+                id: token_res.asset_id,
+                filename: format!("video_{}.mp4", job_id),
+                duration: 0,
+                oss_url: token_res.video_object_key,
+                audio_oss_url: token_res.audio_object_key,
+                file_size,
+            };
+
+            println!("[Probe-Upload] 准备向 Hono 报告落盘...");
+            let report_res = client
+                .post(format!("{}/api/assets/report", server_url))
+                .json(&report_payload)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            println!(
+                "[Probe-Upload] Hono 报告响应状态码: {}",
+                report_res.status()
+            );
+
+            println!("[Probe-Upload] 发送最终 100% 进度...");
+            let _ = app_clone.emit(
+                "upload-progress",
+                serde_json::json!({ "id": job_id, "progress": 100 }),
+            );
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = async_flow {
+            eprintln!("[Probe-Error] Cloud upload pipeline failed: {}", err);
+        } else {
+            println!("[Probe-Upload] 整个上传任务成功结束。");
+        }
+
+        // 终极清理：只清理音频，原始视频文件需保留在用户目录
+        let _ = fs::remove_file(&temp_audio);
+    });
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -271,7 +480,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             process_asset,
             upload_asset,
-            notify_webhook
+            notify_webhook,
+            process_video_asset
         ])
         .setup(|app| {
             // [架构升级] 启动即探测：将最优编码器挂载至全局内存，实现业务管线零延迟调用
@@ -279,6 +489,9 @@ pub fn run() {
             tauri::async_runtime::block_on(async move {
                 let encoder = detect_best_video_encoder(&handle).await;
                 handle.manage(VideoEncoderState(encoder));
+
+                // 挂载核心流水线并发管理器
+                handle.manage(ProcessingManager::new());
             });
 
             if cfg!(debug_assertions) {
