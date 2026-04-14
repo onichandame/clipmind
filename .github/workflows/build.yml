@@ -54,6 +54,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_API_BASE_URL: "https://clipmind.prodream.cn"
+          TARGET_TRIPLE: ${{ matrix.target }}
         with:
           projectPath: apps/desktop
           args: --target ${{ matrix.target }}
