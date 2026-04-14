@@ -1,9 +1,29 @@
 import { Link, useLocation } from "react-router";
-import { LayoutGrid, Library } from "lucide-react";
+import { LayoutGrid, Library, Moon, Sun } from "lucide-react";
+import { useState, useEffect } from "react";
 
 export function GlobalSidebar() {
   const location = useLocation();
   const isAssets = location.pathname.startsWith("/assets");
+  const [isDark, setIsDark] = useState(false);
+
+  // [架构师决断]: 初始化时读取系统 DOM 的实际状态，确保与 root.tsx 的注入一致
+  useEffect(() => {
+    setIsDark(document.documentElement.classList.contains("dark"));
+  }, []);
+
+  const toggleTheme = () => {
+    const root = document.documentElement;
+    const willBeDark = !root.classList.contains("dark");
+    if (willBeDark) {
+      root.classList.add("dark");
+      localStorage.setItem("theme", "dark");
+    } else {
+      root.classList.remove("dark");
+      localStorage.setItem("theme", "light");
+    }
+    setIsDark(willBeDark);
+  };
 
   return (
     <div className="w-16 flex-shrink-0 bg-zinc-50 dark:bg-zinc-900/40 border-r border-zinc-200 dark:border-zinc-800/80 flex flex-col items-center py-5 gap-6 z-50 transition-colors duration-200">
@@ -31,10 +51,24 @@ export function GlobalSidebar() {
         </Link>
       </div>
 
-      {/* User Avatar */}
-      <div className="mt-auto mb-2 cursor-pointer hover:ring-2 hover:ring-[#6D5DFB]/50 rounded-full transition-all">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-700 to-zinc-600 border border-zinc-500"></div>
+      {/* Bottom Actions */}
+      <div className="mt-auto flex flex-col gap-4 items-center mb-2">
+        {/* Theme Toggle */}
+        <div
+          onClick={toggleTheme}
+          className="w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer transition-all duration-200 text-zinc-500 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/40 hover:text-zinc-900 dark:hover:text-zinc-100"
+          title={isDark ? "切换至浅色模式" : "切换至深色模式"}
+        >
+          {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+        </div>
+
+        {/* User Avatar */}
+        <div className="cursor-pointer hover:ring-2 hover:ring-[#6D5DFB]/50 rounded-full transition-all">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-700 to-zinc-600 border border-zinc-500"></div>
+        </div>
       </div>
     </div>
+  );
+}
   );
 }
