@@ -360,10 +360,29 @@ async fn process_video_asset(
         .map_err(|e| format!("FFmpeg Sidecar spawn failed: {}", e))?;
 
     let mut last_emit = Instant::now();
+    let mut extracted_duration = 0.0;
     // 原生 async 循环，天生防假死，不再需要 spawn_blocking 丑陋的包裹
     while let Some(event) = rx.recv().await {
         if let CommandEvent::Stderr(line_bytes) = event {
             let line = String::from_utf8_lossy(&line_bytes);
+
+            // 实时提取视频时长
+            if line.contains("Duration: ") {
+                if let Some(d_str) = line
+                    .split("Duration: ")
+                    .nth(1)
+                    .and_then(|s| s.split(',').next())
+                {
+                    let parts: Vec<&str> = d_str.trim().split(':').collect();
+                    if parts.len() == 3 {
+                        let h: f64 = parts[0].parse().unwrap_or(0.0);
+                        let m: f64 = parts[1].parse().unwrap_or(0.0);
+                        let s: f64 = parts[2].parse().unwrap_or(0.0);
+                        extracted_duration = h * 3600.0 + m * 60.0 + s;
+                    }
+                }
+            }
+
             if last_emit.elapsed() > Duration::from_millis(500) {
                 let _ = app_ffmpeg.emit("ffmpeg-progress", &line);
                 last_emit = Instant::now();
@@ -438,7 +457,7 @@ async fn process_video_asset(
             let report_payload = ReportPayload {
                 id: token_res.asset_id,
                 filename,
-                duration: 0,
+                duration: extracted_duration as i32,
                 oss_url: token_res.video_object_key,
                 audio_oss_url: token_res.audio_object_key,
                 file_size,
