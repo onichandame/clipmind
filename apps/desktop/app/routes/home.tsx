@@ -126,33 +126,33 @@ export default function Home() {
               全部项目
             </h3>
           </div>
-          <div className="bg-zinc-900/30 border border-zinc-800 rounded-xl overflow-hidden">
+          <div className="bg-white dark:bg-zinc-900/30 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm dark:shadow-none transition-colors">
             <table className="w-full text-left">
               <thead>
-                <tr className="border-b border-zinc-800 text-xs text-zinc-500 uppercase">
+                <tr className="border-b border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500 uppercase transition-colors">
                   <th className="px-6 py-4 font-semibold">项目名称</th>
                   <th className="px-6 py-4 font-semibold text-center">素材篮</th>
                   <th className="px-6 py-4 font-semibold">更新时间</th>
                   <th className="px-6 py-4"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-800/50">
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/50 transition-colors">
                 {allProjects.map((p) => (
                   <tr
                     key={p.id}
                     onClick={() => navigate(`/projects/${p.id}`)}
-                    className="group hover:bg-zinc-900/40 transition-colors cursor-pointer"
+                    className="group hover:bg-zinc-50 dark:hover:bg-zinc-900/40 transition-colors cursor-pointer"
                   >
-                    <td className="px-6 py-4 font-bold text-zinc-200 group-hover:text-white transition-colors">
+                    <td className="px-6 py-4 font-bold text-zinc-900 dark:text-zinc-200 dark:group-hover:text-white transition-colors">
                       {p.title}
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center justify-center gap-1.5 text-zinc-500">
-                        <ShoppingBasket size={14} className={p.basketCount > 0 ? "text-zinc-300" : ""} />
+                      <div className="flex items-center justify-center gap-1.5 text-zinc-500 transition-colors">
+                        <ShoppingBasket size={14} className={p.basketCount > 0 ? "text-zinc-800 dark:text-zinc-300" : ""} />
                         <span className="text-sm">{p.basketCount}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-zinc-500">
+                    <td className="px-6 py-4 text-sm text-zinc-500 transition-colors">
                       {new Date(p.updatedAt).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 text-right">

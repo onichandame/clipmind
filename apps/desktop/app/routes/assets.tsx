@@ -150,9 +150,9 @@ export default function AssetsLibrary() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 p-8 font-sans">
+    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-8 font-sans transition-colors duration-200">
       <div className="flex items-center justify-between mb-8 max-w-7xl mx-auto">
-        <h1 className="text-2xl font-semibold tracking-tight">全部素材 (Assets)</h1>
+        <h1 className="text-2xl font-semibold tracking-tight transition-colors">全部素材 (Assets)</h1>
         <Button onClick={handleSelectFiles} variant="primary">
           <UploadCloud className="w-4 h-4 mr-2" /> 批量导入并极速压缩
         </Button>
@@ -162,13 +162,13 @@ export default function AssetsLibrary() {
 
         {/* 极速上传并发管道 Pipeline UI */}
         {jobs.length > 0 && (
-          <div className="mb-8 p-4 bg-zinc-900/50 border border-zinc-800/80 rounded-xl space-y-3">
-            <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Activity className="w-4 h-4 text-indigo-400" /> 并发处理管道
+          <div className="mb-8 p-4 bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800/80 rounded-xl space-y-3 transition-colors">
+            <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2 transition-colors">
+              <Activity className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> 并发处理管道
             </h2>
             {jobs.map(job => (
-              <div key={job.id} className="flex items-center gap-4 bg-zinc-950 p-3 rounded-lg border border-zinc-800/50">
-                <div className="flex-1 truncate text-sm text-zinc-300">{job.filename}</div>
+              <div key={job.id} className="flex items-center gap-4 bg-white dark:bg-zinc-950 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800/50 shadow-sm dark:shadow-none transition-colors">
+                <div className="flex-1 truncate text-sm text-zinc-800 dark:text-zinc-300 transition-colors">{job.filename}</div>
                 <div className="flex-[2] flex items-center gap-3 text-xs">
                   <span className={`w-20 font-medium ${job.status === 'compressing' ? 'text-amber-400 animate-pulse' : job.status === 'uploading' ? 'text-blue-400' : job.status === 'ready' ? 'text-emerald-400' : 'text-zinc-500'}`}>
                     {job.status === 'queued' && '等待中...'}
@@ -177,7 +177,7 @@ export default function AssetsLibrary() {
                     {job.status === 'ready' && '✅ 资产已就绪'}
                     {job.status === 'error' && '❌ 处理失败'}
                   </span>
-                  <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                  <div className="flex-1 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden transition-colors">
                     <div
                       className={`h-full transition-all duration-300 ${job.status === 'compressing' ? 'w-full bg-amber-500/50 animate-pulse' : job.status === 'ready' ? 'w-full bg-emerald-500' : 'bg-blue-500'}`}
                       style={{ width: job.status === 'uploading' ? `${job.progress}%` : undefined }}
@@ -189,16 +189,16 @@ export default function AssetsLibrary() {
           </div>
         )}
         {assets.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-zinc-800 rounded-xl text-zinc-500">
-            <svg className="w-12 h-12 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"></path></svg>
-            <p>还没有上传任何素材。点击右上角开始沉淀你的视频底座。</p>
+          <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-zinc-300 dark:border-zinc-800 rounded-xl text-zinc-500 bg-zinc-50/50 dark:bg-transparent transition-colors">
+            <svg className="w-12 h-12 mb-4 opacity-50 text-zinc-400 dark:text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"></path></svg>
+            <p className="text-zinc-600 dark:text-zinc-500 transition-colors">还没有上传任何素材。点击右上角开始沉淀你的视频底座。</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {assets.map((asset) => (
-              <div key={asset.id} className="group bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-700 transition-all duration-200">
-                <div className="aspect-video bg-zinc-800 relative flex items-center justify-center overflow-hidden">
-                  <Film className="w-8 h-8 text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
+              <div key={asset.id} className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 shadow-sm dark:shadow-none">
+                <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden transition-colors">
+                  <Film className="w-8 h-8 text-zinc-400 dark:text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
                   <div className="absolute top-2 right-2">
                     {asset.status === 'ready' ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 backdrop-blur-sm">
@@ -215,12 +215,12 @@ export default function AssetsLibrary() {
                     )}
                   </div>
                 </div>
-                <div className="p-4">
-                  <h3 className="text-sm font-medium text-zinc-200 truncate" title={asset.filename}>{asset.filename}</h3>
-                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                <div className="p-4 bg-white dark:bg-transparent transition-colors">
+                  <h3 className="text-sm font-medium text-zinc-900 dark:text-zinc-200 truncate transition-colors" title={asset.filename}>{asset.filename}</h3>
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500 transition-colors">
                     {/* 确保字段名与 Drizzle 返回的一致 */}
                     <div className="flex gap-2">
-                      <span className="font-medium text-zinc-400">{formatDuration(asset.duration)}</span>
+                      <span className="font-medium text-zinc-600 dark:text-zinc-400 transition-colors">{formatDuration(asset.duration)}</span>
                       <span>•</span>
                       <span>{((asset.fileSize || 0) / (1024 * 1024)).toFixed(2)} MB</span>
                     </div>

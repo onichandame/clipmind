@@ -123,10 +123,10 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   return (
     <div className="flex flex-col h-full bg-transparent">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800/60 backdrop-blur-sm z-10">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-800/60 backdrop-blur-sm z-10 transition-colors">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded bg-indigo-500/20 flex items-center justify-center text-indigo-400 text-xs">✨</div>
-          <h1 className="text-sm font-medium text-zinc-200">AI 助理</h1>
+          <div className="w-6 h-6 rounded bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-xs transition-colors">✨</div>
+          <h1 className="text-sm font-medium text-zinc-900 dark:text-zinc-200 transition-colors">AI 助理</h1>
         </div>
       </div>
 
@@ -137,11 +137,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
           return (
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               {!isUser && (
-                <div className="w-7 h-7 mt-1 rounded-full bg-zinc-800 flex items-center justify-center mr-3 flex-shrink-0 border border-zinc-700/50">
-                  <span className="text-[10px] text-zinc-400">AI</span>
+                <div className="w-7 h-7 mt-1 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mr-3 flex-shrink-0 border border-zinc-200 dark:border-zinc-700/50 transition-colors">
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium transition-colors">AI</span>
                 </div>
               )}
-              <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed ${isUser ? "bg-zinc-800 text-zinc-100 rounded-2xl rounded-tr-sm border border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-300"}`}>
+              <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed transition-colors ${isUser ? "bg-zinc-900 dark:bg-zinc-800 text-white dark:text-zinc-100 rounded-2xl rounded-tr-sm border border-transparent dark:border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-700 dark:text-zinc-300"}`}>
                 {/* 1. 纯文本渲染 & 工具状态回显 (拦截空炮消息) */}
                 {(() => {
                   const msg = message;
@@ -151,7 +151,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                   if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
 
                   return (
-                    <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800">
+                    <div className={`prose prose-sm ${isUser ? 'prose-invert' : 'dark:prose-invert'} max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-200 dark:prose-pre:border-zinc-800 transition-colors`}>
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
                     </div>
                   );
@@ -187,10 +187,10 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       {/* Input Area */}
       <div className="px-5 py-4 pb-6 bg-transparent">
         <form onSubmit={handleSubmit} className="relative flex items-end">
-          <div className="relative w-full flex items-center bg-zinc-800/60 border border-zinc-700/60 hover:border-zinc-600 focus-within:border-indigo-500/50 focus-within:bg-zinc-800 transition-all rounded-2xl shadow-sm overflow-hidden">
-            <input type="text" name="content" disabled={isLoading} autoComplete="off" className="flex-1 w-full bg-transparent text-zinc-200 text-sm px-4 py-3.5 focus:outline-none disabled:opacity-50" />
+          <div className="relative w-full flex items-center bg-white dark:bg-zinc-800/60 border border-zinc-300 dark:border-zinc-700/60 hover:border-zinc-400 dark:hover:border-zinc-600 focus-within:border-indigo-500/50 focus-within:bg-zinc-50 dark:focus-within:bg-zinc-800 transition-all rounded-2xl shadow-sm overflow-hidden">
+            <input type="text" name="content" disabled={isLoading} autoComplete="off" placeholder="输入你想创作的内容..." className="flex-1 w-full bg-transparent text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-4 py-3.5 focus:outline-none disabled:opacity-50 transition-colors" />
             <div className="pr-2 flex-shrink-0">
-              <button type="submit" disabled={isLoading} className="p-1.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-50 disabled:bg-zinc-700 disabled:text-zinc-500">
+              <button type="submit" disabled={isLoading} className="p-1.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-50 disabled:bg-zinc-200 dark:disabled:bg-zinc-700 disabled:text-zinc-400 dark:disabled:text-zinc-500">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>
               </button>
             </div>
