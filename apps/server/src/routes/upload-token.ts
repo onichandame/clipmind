@@ -6,7 +6,7 @@ const app = new Hono();
 app.post("/", async (c) => {
   try {
     const body = await c.req.json();
-    const { filename } = body; 
+    const { filename } = body;
 
     if (!filename) {
       return c.json({ error: 'filename is required' }, 400);
@@ -18,10 +18,11 @@ app.post("/", async (c) => {
 
     const uniqueId = crypto.randomUUID();
     const videoExt = filename.split('.').pop() || 'mp4';
-    
+
     // 架构升级：资产作为顶级实体，直接存放在全局 assets 目录下
     const videoObjectKey = `assets/${uniqueId}/video.${videoExt}`;
     const audioObjectKey = `assets/${uniqueId}/audio.aac`;
+    const thumbObjectKey = `assets/${uniqueId}/thumb.jpg`;
 
     const client = new OSS({
       region: process.env.ALIYUN_OSS_REGION,
@@ -38,13 +39,18 @@ app.post("/", async (c) => {
     const audioUploadUrl = client.signatureUrl(audioObjectKey, {
       expires: 3600, method: 'PUT', 'Content-Type': 'audio/aac'
     });
+    const thumbUploadUrl = client.signatureUrl(thumbObjectKey, {
+      expires: 3600, method: 'PUT', 'Content-Type': 'image/jpeg'
+    });
 
-    return c.json({ 
+    return c.json({
       assetId: uniqueId,
-      videoUploadUrl, 
+      videoUploadUrl,
       videoObjectKey,
       audioUploadUrl,
-      audioObjectKey
+      audioObjectKey,
+      thumbUploadUrl,
+      thumbObjectKey
     }, 200);
 
   } catch (error) {

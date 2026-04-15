@@ -18,13 +18,14 @@ app.get("/", async (c) => {
 app.post("/report", async (c) => {
   try {
     const body = await c.req.json();
-    const { id, filename, duration, ossUrl, audioOssUrl, fileSize } = body;
+    const { id, filename, duration, ossUrl, audioOssUrl, thumbnailUrl, fileSize } = body;
 
     await db.insert(assets).values({
       id,
       filename,
       ossUrl,
       audioOssUrl,
+      thumbnailUrl,
       fileSize,
       duration,
       status: 'ready',

@@ -330,6 +330,16 @@
 **3. 新共识与规范 (New Conventions):**
 - **品牌一致性防线**: 后续新增的任何提示词、UI 占位符、引导页或报错文案中，**绝对禁止**退化使用泛指的 "AI" 或 "系统"。必须且只能使用产品级专属代号 "ClipMind"。
 
+## 📝 [阶段更新] 视频截帧与端云多轨并发直传架构
+
+**1. 架构与状态流转 (Architecture State):**
+- **底层一鱼三吃**: 升级了 Rust 侧的 FFmpeg 处理管线，在剥离音频的同时，利用 `-ss 00:00:00.500 -vframes 1` 同步极速提取首帧缩略图。
+- **多轨预签名与并发直传**: Hono 后端的 `upload-token` 路由现支持同时签发 `video`、`audio` 和 `thumb` 三条轨道的 OSS 直传 Token。Rust 侧开启多路 `tokio::spawn` 异步任务将缩略图与音频同步推送上云。
+- **数据模型演进**: `@clipmind/db` 中的 `assets` 表正式新增 `thumbnailUrl` 字段，实现了视觉资产的云端持久化。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (端云架构的数据断层)**: 在升级全链路协议时，绝对不能只重启/编译客户端。由于 Rust 的 `serde` 强类型反序列化特性，如果 Node 后端尚未部署新版路由（未下发 `thumbUploadUrl`），客户端的 Token 解析会直接触发 `error decoding response body` 致命崩溃。必须保证“云端先行部署”的发布次序。
+
 ## 📝 [阶段更新] 流式输出防抖与渲染风暴隔离 (Render-Thrashing Prevention)
 
 **1. 架构与状态流转 (Architecture State):**

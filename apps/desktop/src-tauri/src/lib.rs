@@ -298,6 +298,8 @@ struct UploadTokenResponse {
     video_object_key: String,
     audio_upload_url: String,
     audio_object_key: String,
+    thumb_upload_url: String,
+    thumb_object_key: String,
 }
 
 #[derive(Serialize)]
@@ -308,6 +310,7 @@ struct ReportPayload {
     duration: i32,
     oss_url: String,
     audio_oss_url: String,
+    thumbnail_url: String,
     file_size: u64,
 }
 
@@ -327,6 +330,7 @@ async fn process_video_asset(
 
     // 物理隔离：只生成音频临时文件，原视频将直接从原始路径上传
     let temp_audio = format!("temp_{}.aac", job_id);
+    let temp_thumb = format!("temp_{}_thumb.jpg", job_id);
 
     let app_clone = app.clone(); // 留给 tokio::spawn 异步上传使用
     let app_ffmpeg = app.clone(); // 专供 FFmpeg 闭包使用
@@ -343,18 +347,29 @@ async fn process_video_asset(
         .sidecar("ffmpeg")
         .map_err(|e| format!("无法初始化 FFmpeg Sidecar: {}", e))?;
 
-    // 调整为纯音频提取模式，原视频不进行任何处理
+    // 同步截取音频和首帧缩略图
     let (mut rx, _child) = sidecar_command
         .args([
             "-i",
             &local_path_clone,
-            "-vn", // 禁用视频流输出
+            // 音频抽取配置
+            "-vn",
             "-c:a",
-            "aac", // 提取音频为 aac
+            "aac",
             "-b:a",
-            "128k",      // 阿里云 ASR 推荐码率
-            &temp_audio, // 输出到临时音频文件
-            "-y",        // 强制覆盖
+            "128k",
+            &temp_audio,
+            // 截帧配置 (0.5秒处截1帧)
+            "-ss",
+            "00:00:00.500",
+            "-i",
+            &local_path_clone,
+            "-vframes",
+            "1",
+            "-q:v",
+            "2",
+            &temp_thumb,
+            "-y",
         ])
         .spawn()
         .map_err(|e| format!("FFmpeg Sidecar spawn failed: {}", e))?;
@@ -401,6 +416,9 @@ async fn process_video_asset(
         "[Task {}] 🔴 预处理完成，已释放 Semaphore 锁。进入后台并发直传阶段。",
         job_id
     );
+
+    // 克隆一份用于清理兜底
+    let temp_thumb_cleanup = temp_thumb.clone();
 
     // 约束 4 & 5: 开启 tokio::spawn 异步上传，不阻塞主流程
     tokio::spawn(async move {
@@ -454,12 +472,41 @@ async fn process_video_asset(
                 serde_json::json!({ "id": job_id, "progress": 90 }),
             );
 
+            // 轨道 3: 缩略图直传
+            if let Ok(thumb_file) = tokio::fs::File::open(&temp_thumb).await {
+                if let Ok(meta) = thumb_file.metadata().await {
+                    let thumb_stream = FramedRead::new(thumb_file, BytesCodec::new());
+                    let _ = client
+                        .put(&token_res.thumb_upload_url)
+                        .header(CONTENT_LENGTH, meta.len())
+                        .header(CONTENT_TYPE, "image/jpeg")
+                        .body(reqwest::Body::wrap_stream(thumb_stream))
+                        .send()
+                        .await;
+                }
+            }
+
+            // 轨道 3: 缩略图直传
+            if let Ok(thumb_file) = tokio::fs::File::open(&temp_thumb).await {
+                if let Ok(meta) = thumb_file.metadata().await {
+                    let thumb_stream = FramedRead::new(thumb_file, BytesCodec::new());
+                    let _ = client
+                        .put(&token_res.thumb_upload_url)
+                        .header(CONTENT_LENGTH, meta.len())
+                        .header(CONTENT_TYPE, "image/jpeg")
+                        .body(reqwest::Body::wrap_stream(thumb_stream))
+                        .send()
+                        .await;
+                }
+            }
+
             let report_payload = ReportPayload {
                 id: token_res.asset_id,
                 filename,
                 duration: extracted_duration as i32,
                 oss_url: token_res.video_object_key,
                 audio_oss_url: token_res.audio_object_key,
+                thumbnail_url: token_res.thumb_object_key,
                 file_size,
             };
 
@@ -492,8 +539,9 @@ async fn process_video_asset(
             println!("[Probe-Upload] 整个上传任务成功结束。");
         }
 
-        // 终极清理：只清理音频，原始视频文件需保留在用户目录
+        // 终极清理：只清理音频和临时缩略图，原始视频文件需保留在用户目录
         let _ = fs::remove_file(&temp_audio);
+        let _ = fs::remove_file(&temp_thumb_cleanup);
     });
 
     Ok(())
