@@ -657,3 +657,18 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **3. 新共识与规范 (New Conventions):**
 - **严守唯一监听器原则**: 前端处理高频跨进程消息（IPC events）时，只允许全局存在唯一的 `listen` 监听器，并在组件卸载时强制解绑。
 - **节流阀基准线**: 后端 Rust 发送所有的非关键性进度事件（如上传进度、FFmpeg 输出），统一锚定 `500ms` 为最低安全限流间隔，防风暴拦截逻辑只认 `Instant`，不认其他条件。
+
+## 📝 [阶段更新] RAG 切片向量化与 Qdrant 混合检索基建 (Semantic Search)
+
+**1. 架构与状态流转 (Architecture State):**
+- **底层基座复用**: 彻底贯彻了“单一真理源”原则。在 `apps/server/src/utils/ai.ts` 中暴露了全局统一的 `getAIProvider`，使得 Embeddings 工具类可以直接复用现有的 OpenRouter (`OPENAI_API_KEY`) 实例，消除了 API Key 分裂的技术债。
+- **异步防线机制 (Fire-and-Forget)**: 在 `asr-callback.ts` 的 Webhook 路由中，彻底剥离了耗时的 Embedding 运算与 Qdrant 网络 I/O。向量化流水线以 `Promise.catch` 的形式被“即发即弃”，保证了向阿里云返回 200 OK 的耗时被压缩在毫秒级，彻底杜绝了重试风暴。
+- **模型与基建对齐**: 废弃了原定的 `bge-m3` (1024维) 方案，为适配基础设施现存的 Qdrant 引擎规格，全量切换至 `text-embedding-3-small` (1536维，余弦相似度)。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (实例化冗余)**: 严禁在不同的工具类（如 `chat.ts`, `embeddings.ts`）中反复调用 `createOpenAI`。必须统一从 `ai.ts` 导入 Provider，防止后续增加统一拦截器或更换 BaseURL 时发生架构脑裂。
+- **DON'T DO (强行阻塞 Webhook)**: 绝对禁止在 `asr-callback.ts` 中 `await processVectorization(...)`。Webhook 的唯一天职是光速响应外部服务并流转核心状态机，附带的重型数据清洗必须丢入后台异步队列。
+- **DON'T DO (自动 DDL 与全表扫描黑洞)**: 严禁依赖应用层的 ORM/代码去自动管理 Qdrant 的 Collection Schema。对于 Payload Indexes，必须**手动在运维侧**建立 `assetId` (Keyword，用于精确隔离查询) 和 `text` (Text，用于 BM25 混合检索) 索引。不建索引会导致每一次带有资产过滤的 RAG 搜索都退化为灾难性的全表扫描。
+
+**3. 新共识与规范 (New Conventions):**
+- **手动基建边界**: 数据库 (PostgreSQL/MySQL) 的 Schema 变更由 Drizzle 的 Migration 管理；但向量数据库 (Qdrant) 的 Collection 与 Payload 索引建立，必须作为纯粹的 IaC/运维脚本手动执行，代码层只负责 `Upsert` 纯净的数据点。
