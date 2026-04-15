@@ -1,9 +1,9 @@
 import { Hono } from "hono";
-import { projectOutlines, editingPlans, assets } from "@clipmind/db";
+import { projectOutlines, editingPlans, assets, projects } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
 import { z } from "zod";
-import { inArray } from "drizzle-orm";
+import { inArray, eq } from "drizzle-orm";
 import { db } from "../db";
 import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
@@ -189,6 +189,39 @@ app.post("/", async (c) => {
         }
       }),
     },
+    onFinish: async ({ response }) => {
+      try {
+        console.log(`[Chat] streamText 结束，开始持久化对话到 Project: ${projectId}`);
+        // 获取用户的最后一条消息
+        const lastUserMessage = messages[messages.length - 1];
+
+        // 获取当前数据库中已有的历史消息
+        const existingProject = await db.select({
+          uiMessages: projects.uiMessages
+        }).from(projects).where(eq(projects.id, projectId)).limit(1);
+
+        if (existingProject.length === 0) {
+          console.warn(`⚠️ [Chat] 未找到对应项目 ${projectId}，放弃持久化。`);
+          return;
+        }
+
+        let existingMessages: UIMessage[] = [];
+        if (existingProject[0].uiMessages && Array.isArray(existingProject[0].uiMessages)) {
+          existingMessages = existingProject[0].uiMessages as UIMessage[];
+        }
+
+        // 将用户的最新消息和 AI 生成的 messages (包含 parts/tool calls) 拼接落盘
+        const updatedMessages = [...existingMessages, lastUserMessage, ...response.messages];
+
+        await db.update(projects)
+          .set({ uiMessages: updatedMessages })
+          .where(eq(projects.id, projectId));
+
+        console.log(`[Chat] ✅ 对话持久化成功，当前总消息数: ${updatedMessages.length}`);
+      } catch (error) {
+        console.error(`❌ [Chat] 对话持久化失败:`, error);
+      }
+    }
   });
 
 
