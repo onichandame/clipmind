@@ -2,24 +2,27 @@ import { Hono } from "hono";
 import { assets } from "@clipmind/db";
 import { desc, eq } from "drizzle-orm";
 import { db } from "../db";
+import { ossClient } from "../utils/oss";
 
 const app = new Hono();
 
 app.get("/", async (c) => {
   try {
     const allAssets = await db.select().from(assets).orderBy(desc(assets.createdAt));
-    
-    // 架构升级：基于现有环境变量动态拼装 OSS 绝对路径 (DRY 原则)
-    const region = process.env.ALIYUN_OSS_REGION || '';
-    const bucket = process.env.ALIYUN_OSS_BUCKET || '';
-    const baseUrl = `https://${bucket}.${region}.aliyuncs.com`;
-    
-    const mappedAssets = allAssets.map(asset => ({
-      ...asset,
-      ossUrl: asset.ossUrl ? `${baseUrl}/${asset.ossUrl}` : asset.ossUrl,
-      audioOssUrl: asset.audioOssUrl ? `${baseUrl}/${asset.audioOssUrl}` : asset.audioOssUrl,
-      thumbnailUrl: asset.thumbnailUrl ? `${baseUrl}/${asset.thumbnailUrl}` : asset.thumbnailUrl,
-    }));
+
+    // 架构升级：私有 Bucket 动态签名策略
+    // 数据库仅存储 Key，分发层实时生成带有 Expires/Signature 的临时链接 (默认 1 小时有效)
+    const mappedAssets = allAssets.map(asset => {
+      const sign = (key: string | null) =>
+        key ? ossClient.signatureUrl(key, { expires: 3600 }) : null;
+
+      return {
+        ...asset,
+        ossUrl: sign(asset.ossUrl),
+        audioOssUrl: sign(asset.audioOssUrl),
+        thumbnailUrl: sign(asset.thumbnailUrl),
+      };
+    });
 
     return c.json(mappedAssets);
   } catch (error) {
