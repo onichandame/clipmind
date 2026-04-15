@@ -1,11 +1,13 @@
 import { Hono } from "hono";
-import { projectOutlines, editingPlans } from "@clipmind/db";
+import { projectOutlines, editingPlans, assets } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
 import { z } from "zod";
+import { inArray } from "drizzle-orm";
 import { db } from "../db";
 import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
+import { ossClient } from "../utils/oss";
 
 const app = new Hono();
 
@@ -142,12 +144,40 @@ app.post("/", async (c) => {
             const qdrantResults = await searchVectors(embeddings[0], limit);
 
             // 过滤提取核心 payload，剥离高维向量数组，降低 LLM Context Token 消耗
-            const clips = qdrantResults.map((p: any) => ({
+            const baseClips = qdrantResults.map((p: any) => ({
               score: p.score,
               assetId: p.payload?.assetId,
               text: p.payload?.text,
               startTime: p.payload?.startTime,
               endTime: p.payload?.endTime,
+            }));
+
+            // 提取去重的 assetIds 防止 N+1 查询
+            const assetIds = [...new Set(baseClips.map((c: any) => c.assetId).filter(Boolean))];
+            const assetMap: Record<string, { filename: string, thumbnailUrl: string | null }> = {};
+
+            if (assetIds.length > 0) {
+              const dbAssets = await db.select({
+                id: assets.id,
+                filename: assets.filename,
+                thumbnailUrl: assets.thumbnailUrl
+              }).from(assets).where(inArray(assets.id, assetIds as string[]));
+
+              for (const a of dbAssets) {
+                let signedThumb = null;
+                if (a.thumbnailUrl) {
+                  // 动态签发 2 小时有效期的 HTTPS 链接
+                  signedThumb = ossClient.signatureUrl(a.thumbnailUrl, { expires: 7200, secure: true });
+                }
+                assetMap[a.id] = { filename: a.filename || '未知素材', thumbnailUrl: signedThumb };
+              }
+            }
+
+            // 缝合元数据与预签名 URL
+            const clips = baseClips.map((c: any) => ({
+              ...c,
+              filename: c.assetId ? (assetMap[c.assetId]?.filename || '未知素材') : '未知素材',
+              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.thumbnailUrl || null) : null
             }));
 
             console.log(`[RAG] 检索完成，召回 ${clips.length} 条相关切片`);
