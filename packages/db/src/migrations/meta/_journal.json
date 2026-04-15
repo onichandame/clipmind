@@ -78,6 +78,13 @@
       "when": 1776225568615,
       "tag": "0010_fuzzy_thaddeus_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1776258488575,
+      "tag": "0011_gigantic_blindfold",
+      "breakpoints": true
     }
   ]
 }
