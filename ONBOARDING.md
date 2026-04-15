@@ -485,6 +485,17 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **3. 新共识与规范 (New Conventions):**
 - ASR 任务提交必须强依赖 `serverConfig.PUBLIC_WEBHOOK_DOMAIN` 作为回调基地址，确保本地开发与线上部署的网络链路具有自适应性。
 
+## 📝 [阶段更新] Tauri 生产环境 CORS 与自定义协议安全防线 (Production CORS Matrix)
+
+**1. 架构与状态流转 (Architecture State):**
+- 明确了 Tauri 桌面端在开发模式与生产模式下的底层网络环境差异。在构建为 Release 产物后，Tauri 前端将脱离本地的 Web Server 端口，转而由原生系统的 WebView 通过自定义协议（Custom Protocol）进行加载。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (CORS 盲区与静默失败)**: 严禁在 Node Server 后端的 CORS 配置中仅放行开发端口（如 `http://localhost:1420`）。在生产环境中，系统会使用 `http://tauri.localhost`（或 `tauri://localhost`）。若 CORS 白名单遗漏这些自定义协议域名，生产包的接口调用会被 WebKit/WebView2 视作跨域并被无情且静默地拦截。由于生产包默认剥离了 DevTools，这极易演变成幽灵 Bug。
+
+**3. 新共识与规范 (New Conventions):**
+- **多端 CORS 矩阵**: 后端服务（Hono）的环境变量 `CORS_ORIGIN` 必须是一个严格包含多端的配置。在上线 Tauri 生产包前，必须验证白名单内同时包含开发态 URL 与生产态的自定义协议 URL。
+
 ## 📝 [阶段更新] OSS 幽灵资产巡检 DDD 重构与白名单黑洞修复 (Data Loss Prevention)
 
 **1. 架构与状态流转 (Architecture State):**
