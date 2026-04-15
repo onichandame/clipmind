@@ -2,6 +2,7 @@ import { useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { WorkspaceLayout } from "../components/WorkspaceLayout";
 import { Loader2 } from "lucide-react";
+import { env } from "~/env";
 
 export default function ProjectWorkspace() {
   const { projectId } = useParams();
@@ -9,7 +10,7 @@ export default function ProjectWorkspace() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['project', projectId],
     queryFn: async () => {
-      const res = await fetch(`http://localhost:8787/api/projects/${projectId}`);
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
       if (!res.ok) throw new Error('Failed to load project details');
       return res.json();
     },
