@@ -364,3 +364,16 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **原生降级废除**: 此后 ClipMind 桌面端中任何涉及“毁灭性操作（删除、覆盖等）”的拦截器，必须强制采用统一样式的受控 Modal 组件（如 `DeleteConfirmModal`），绝对禁止再出现原生 `window.confirm`。
+
+## 📝 [阶段更新] 全局弹窗双态主题适配与交互闭环
+
+**1. 架构与状态流转 (Architecture State):**
+- 修复了 `DeleteConfirmModal` 基础组件的主题断层问题。移除了硬编码的深色类名，全面适配了 Tailwind v4 的双态主题 (Light/Dark Mode)，保证了在不同系统偏好下的视觉一致性。
+- 补全了弹窗的交互闭环：在底层 Overlay 注入了点击外部遮罩层自动关闭 (`onCancel`) 的标准逻辑。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (硬编码单态主题)**: 严禁在全局通用组件（如弹窗、表单、卡片）中硬编码 `bg-zinc-900` 等深色类名。必须强制使用双态响应式类名（如 `bg-white dark:bg-zinc-900`），防止在 Light 模式下产生突兀的“黑斑”。
+- **DON'T DO (事件冒泡黑洞)**: 在实现点击遮罩层关闭弹窗时，严禁忘记在弹窗内部内容层（Content）的 DOM 节点上绑定 `onClick={(e) => e.stopPropagation()}`。如果不显式阻断冒泡，用户在弹窗内部的任何正常点击都会穿透到遮罩层，错误触发关闭。
+
+**3. 新共识与规范 (New Conventions):**
+- **标准交互与视觉底线**: 后续系统中新增的任何受控 Modal/Dialog 弹窗组件，必须标配双态主题支持，且必须实现“外部遮罩关闭 + 内部冒泡阻断”的安全交互双重防线。
