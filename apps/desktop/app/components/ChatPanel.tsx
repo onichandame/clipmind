@@ -7,7 +7,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCanvasStore } from "../store/useCanvasStore";
-
+import { EditingPlanCard } from "./EditingPlanCard";
 
 interface ChatPanelProps {
   projectId: string;
@@ -164,11 +164,41 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 })()}
 
                 {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) */}
-                {message?.parts?.filter((p: any) => p.toolCallId || (p.type && p.type.startsWith('tool-'))).map((toolPart: any, index: number) => {
-                  const state = toolPart.state;
-                  // 适配 v6 的流式状态机
-                  const isCalling = state === 'streaming' || state === 'input-streaming' || state === 'input-available';
-                  const isOutline = toolPart.type?.includes('updateOutline') || toolPart.toolName === 'updateOutline';
+                {message?.parts?.filter((p: any) => p.type === 'tool-invocation' || p.toolCallId || (p.type && p.type.startsWith('tool-'))).map((toolPart: any, index: number) => {
+                  const invocation = toolPart.type === 'tool-invocation' ? toolPart.toolInvocation : toolPart;
+                  const state = invocation.state || toolPart.state;
+                  const toolName = invocation.toolName || toolPart.toolName || toolPart.type;
+
+                  // [架构师规范] 精准拦截目标工具，并确保在 prose 外层渲染，防止 Markdown 样式污染
+                  if (toolName?.includes('generateEditingPlan')) {
+                    if (state === 'result' || (invocation.args && Object.keys(invocation.args).length > 0)) {
+                      // 防御性 Fallback：确保传入的确实是合法的对象
+                      if (typeof invocation.args !== 'object' || Array.isArray(invocation.args)) {
+                        return (
+                          <div key={index} className="mt-4 mb-2 p-3 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
+                            ⚠️ 方案解析异常，等待重试...
+                          </div>
+                        );
+                      }
+                      return (
+                        <div key={index} className="mt-4 mb-2">
+                          <EditingPlanCard plan={invocation.args} />
+                        </div>
+                      );
+                    } else {
+                      // 流式传输过程中的优雅占位
+                      return (
+                        <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3 animate-pulse">
+                          <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                          <span className="text-sm font-medium">正在生成智能剪辑方案...</span>
+                        </div>
+                      );
+                    }
+                  }
+
+                  // 兼容旧版以及其它工具 (大纲更新、素材检索等)
+                  const isCalling = state === 'streaming' || state === 'input-streaming' || state === 'input-available' || state === 'partial-call';
+                  const isOutline = toolName?.includes('updateOutline');
 
                   return (
                     <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3">
