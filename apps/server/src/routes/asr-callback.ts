@@ -12,7 +12,7 @@ async function processVectorization(assetId: string, chunks: any[]) {
     console.log(`[Vectorization] Starting task for asset ${assetId}...`);
     const texts = chunks.map(c => c.transcriptText);
     const vectors = await generateEmbeddings(texts);
-    
+
     const points = chunks.map((chunk, i) => ({
       id: chunk.id,
       vector: vectors[i],
@@ -25,8 +25,10 @@ async function processVectorization(assetId: string, chunks: any[]) {
     }));
 
     await upsertVectors(points);
-    console.log(`✅ [Vectorization] Asset ${assetId} synced to Qdrant successfully.`);
+    await db.update(assets).set({ status: 'ready' }).where(eq(assets.id, assetId));
+    console.log(`✅ [Vectorization] Asset ${assetId} synced to Qdrant successfully. Status -> ready.`);
   } catch (error) {
+    await db.update(assets).set({ status: 'error' }).where(eq(assets.id, assetId));
     console.error(`❌ [Vectorization] Task failed for asset ${assetId}:`, error);
   }
 }
@@ -37,7 +39,7 @@ app.post("/", async (c) => {
     console.log("[DEBUG: ASR-Callback] 1. 收到阿里云的回调 POST 请求!");
     const body = await c.req.json();
     console.log("[DEBUG: ASR-Callback] 2. 回调请求体:", JSON.stringify(body));
-    
+
     // 依据阿里云 FileTrans Webhook 官方结构解析
     const taskId = body.TaskId;
     const statusCode = body.StatusCode;
@@ -73,12 +75,12 @@ app.post("/", async (c) => {
 
         await db.insert(assetChunks).values(chunksToInsert);
         console.log(`✅ ASR 切片落盘成功：资产 ${assetId}，共生成 ${chunksToInsert.length} 条 RAG 索引片段。`);
-        
+
         processVectorization(assetId, chunksToInsert).catch(console.error);
       }
     } else {
       // 失败状态流转
-      await db.update(assets).set({ asrStatus: 'failed' }).where(eq(assets.id, assetId));
+      await db.update(assets).set({ status: 'error', asrStatus: 'failed' }).where(eq(assets.id, assetId));
       console.error(`❌ ASR 任务底层失败: ${taskId}, 状态码: ${statusCode}`);
     }
 
