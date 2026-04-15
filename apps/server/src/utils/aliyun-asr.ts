@@ -4,6 +4,7 @@ import { db } from "../db";
 import { serverConfig } from "../env";
 // @ts-ignore
 import Core from '@alicloud/pop-core';
+import { ossClient } from "./oss";
 
 /**
  * 提交阿里云录音文件识别任务 (FileTrans)
@@ -31,9 +32,13 @@ export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) 
       apiVersion: '2018-08-17'
     });
 
+    // 核心修复：自动签发具有时效性的公网可达 URL (7200秒/2小时有效)
+    const signedAudioUrl = ossClient.signatureUrl(audioOssUrl, { expires: 7200 });
+    console.log(`[DEBUG: Aliyun-ASR] 1.5. 成功签发 OSS 临时访问链接: ${signedAudioUrl.split('?')[0]}?Expires=...`);
+
     const task = {
       appkey: appKey,
-      file_link: audioOssUrl,
+      file_link: signedAudioUrl,
       version: "4.0",
       enable_words: false,
       enable_callback: true,
