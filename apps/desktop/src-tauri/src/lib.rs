@@ -463,7 +463,8 @@ async fn process_video_asset(
                         total_read += chunk_size;
 
                         let now = std::time::Instant::now();
-                        if now.duration_since(last_emit) >= throttle || total_read == file_size {
+                        // 修复 IPC 风暴：只依赖时间节流，坚决移除 total_read == file_size 的穿透漏洞
+                        if now.duration_since(last_emit) >= throttle {
                             // 将视频上传阶段映射至 0% ~ 90% (留 10% 给收尾工作)
                             let pct = ((total_read as f64 / file_size as f64) * 90.0) as u8;
                             let _ = app_emitter.emit(
@@ -500,7 +501,10 @@ async fn process_video_asset(
             if !video_res.status().is_success() {
                 let status = video_res.status();
                 let err_text = video_res.text().await.unwrap_or_default();
-                return Err(format!("视频直传被 OSS 拒绝! 状态码: {}, 错误信息: {}", status, err_text));
+                return Err(format!(
+                    "视频直传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
+                    status, err_text
+                ));
             }
 
             let _ = app_clone.emit(
@@ -560,9 +564,10 @@ async fn process_video_asset(
                 file_size,
             };
 
-            println!("[Probe-Upload] 准备向 Hono 报告落盘...");
+            println!("[Probe-Upload] 准备向 Hono 发起落盘与 ASR 触发请求...");
+            // 修复路由脱轨：必须将落盘请求发送至真正的 Webhook 入口
             let report_res = client
-                .post(format!("{}/api/assets/report", server_url))
+                .post(format!("{}/api/oss-callback", server_url))
                 .json(&report_payload)
                 .send()
                 .await
@@ -623,12 +628,12 @@ pub fn run() {
             }
 
             // [临时调试] 强制在生产环境打开控制台，捕获网络异常
-            #[cfg(not(debug_assertions))]
-            {
-                if let Some(window) = app.handle().get_webview_window("main") {
-                    window.open_devtools();
-                }
-            }
+            //#[cfg(not(debug_assertions))]
+            //{
+            //    if let Some(window) = app.handle().get_webview_window("main") {
+            //        window.open_devtools();
+            //    }
+            //}
 
             Ok(())
         })
