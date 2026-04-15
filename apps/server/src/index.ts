@@ -8,6 +8,7 @@ import { cors } from 'hono/cors';
 
 import chatRoute from './routes/chat';
 import ossCallbackRoute from './routes/oss-callback';
+import asrCallbackRoute from './routes/asr-callback';
 import uploadTokenRoute from './routes/upload-token';
 import projectsRoute from './routes/projects';
 

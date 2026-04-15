@@ -1,6 +1,7 @@
 import { assets } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
+import { serverConfig } from "../env";
 
 /**
  * 提交阿里云录音文件识别任务 (FileTrans)
@@ -9,7 +10,7 @@ import { db } from "../db";
  */
 export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) {
   // 架构师红线：此处依赖阿里云鉴权，实际项目中须在 env 中配置 AK/SK
-  const appKey = process.env.ALIYUN_ASR_APPKEY;
+  const appKey = serverConfig.ALIYUN_ASR_APPKEY;
   if (!appKey) {
     console.warn("⚠️ 缺少 ALIYUN_ASR_APPKEY，跳过 ASR 任务提交");
     return;
@@ -19,6 +20,7 @@ export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) 
 
   try {
     // TODO: 替换为真实的 @alicloud/pop-core 客户端调用
+    // 需将 serverConfig.PUBLIC_WEBHOOK_DOMAIN + '/api/asr-callback' 作为回调地址传入
     // const response = await client.request('SubmitTask', { ... });
     const mockTaskId = `aliyun_task_${Date.now()}`;
 

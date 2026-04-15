@@ -472,3 +472,15 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **零拷贝与类型冻结**: 在处理 `reqwest` 的 `Body::wrap_stream` 边界时，统一采用 `tokio_util` 的 `BytesMut` 结合 `.freeze()` 的方式转换为安全的不可变 `Bytes`，实现全程零拷贝传递。
+
+## 📝 [阶段更新] 云端 ASR 管线基建与环境防线 (Aliyun FileTrans)
+**1. 架构与状态流转 (Architecture State):**
+- **环境单点防御**: 在 `apps/server/src/env.ts` 中全面接入了阿里云 ASR 所需的 AK/SK 与 Webhook 域名校验。实现了强类型与 Fail-Fast 阻断，彻底禁用了在业务代码中直读 `process.env` 的行为。
+- **回调解析器落地**: 完成了 `apps/server/src/routes/asr-callback.ts` 的编写与主路由挂载。该路由严格遵循阿里云 FileTrans 官方 Payload 结构，打通了从 TaskId 反查、资产状态流转到毫秒级 RAG 切片 (`assetChunks`) 批量落盘的完整闭环。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (Monorepo 模块寻址陷阱)**: 严禁在 Monorepo 根目录下使用 `tsx` 直接运行深层子包（如 `apps/server`）的独立脚本。这会导致 Node 模块解析器无法正确穿透并加载子包局部的 `node_modules`（如 `mysql2`），引发幽灵的 `MODULE_NOT_FOUND` 错误。必须进入子包上下文后执行。
+- **DON'T DO (硬编码密钥泄漏)**: 绝对禁止在 `utils` 等底层工具类中直接 `process.env.XXX`。不仅破坏了类型安全，更极易引发线上环境缺少配置时的静默失败。
+
+**3. 新共识与规范 (New Conventions):**
+- ASR 任务提交必须强依赖 `serverConfig.PUBLIC_WEBHOOK_DOMAIN` 作为回调基地址，确保本地开发与线上部署的网络链路具有自适应性。
