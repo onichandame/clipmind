@@ -2,39 +2,75 @@ import { create } from 'zustand';
 
 type CanvasMode = 'outline' | 'footage' | 'plan' | 'split';
 
+interface ProjectState {
+  outlineContent: string;
+  editingPlan: any | null;
+  isDirty: boolean;
+  lastModifiedBy: 'user' | 'agent' | 'system';
+  retrievedClips: any[];
+}
+
+const initialProjectState: ProjectState = {
+  outlineContent: '',
+  editingPlan: null,
+  isDirty: false,
+  lastModifiedBy: 'system',
+  retrievedClips: [],
+};
+
 interface CanvasState {
   activeMode: CanvasMode;
   setActiveMode: (mode: CanvasMode) => void;
-
-  // 人机协同核心状态
-  outlineContent: string; // 存储大纲的 Markdown 文本
-  editingPlan: any | null; // 存储剪辑方案数据
-  isDirty: boolean;        // 脏标记：用户是否手动修改过
-  lastModifiedBy: 'user' | 'agent' | 'system';
+  projects: Record<string, ProjectState>;
 
   // 动作
-  setOutlineContent: (content: string, modifiedBy: 'user' | 'agent' | 'system') => void;
-  setEditingPlan: (plan: any) => void;
-  clearDirtyState: () => void;
+  setOutlineContent: (projectId: string, content: string, modifiedBy: 'user' | 'agent' | 'system') => void;
+  setEditingPlan: (projectId: string, plan: any) => void;
+  clearDirtyState: (projectId: string) => void;
+  setRetrievedClips: (projectId: string, clips: any[]) => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
   activeMode: 'outline',
   setActiveMode: (mode) => set({ activeMode: mode }),
+  projects: {},
 
-  outlineContent: '',
-  editingPlan: null,
-  isDirty: false,
-  lastModifiedBy: 'system',
+  setOutlineContent: (projectId, content, modifiedBy) => set((state) => {
+    const pState = state.projects[projectId] || { ...initialProjectState };
+    return {
+      projects: {
+        ...state.projects,
+        [projectId]: {
+          ...pState,
+          outlineContent: content,
+          lastModifiedBy: modifiedBy,
+          isDirty: modifiedBy === 'user' ? true : pState.isDirty
+        }
+      }
+    };
+  }),
 
-  setOutlineContent: (content, modifiedBy) => set((state) => ({
-    outlineContent: content,
-    lastModifiedBy: modifiedBy,
-    // 只有当用户修改时，才将其标记为 dirty，引发对 Agent 的强制重新读取警告
-    isDirty: modifiedBy === 'user' ? true : state.isDirty
-  })),
+  setEditingPlan: (projectId, plan) => set((state) => {
+    const pState = state.projects[projectId] || { ...initialProjectState };
+    return {
+      projects: { ...state.projects, [projectId]: { ...pState, editingPlan: plan } }
+    };
+  }),
 
-  setEditingPlan: (plan) => set({ editingPlan: plan }),
+  clearDirtyState: (projectId) => set((state) => {
+    if (!state.projects[projectId]) return state;
+    return {
+      projects: {
+        ...state.projects,
+        [projectId]: { ...state.projects[projectId], isDirty: false }
+      }
+    };
+  }),
 
-  clearDirtyState: () => set({ isDirty: false }),
+  setRetrievedClips: (projectId, clips) => set((state) => {
+    const pState = state.projects[projectId] || { ...initialProjectState };
+    return {
+      projects: { ...state.projects, [projectId]: { ...pState, retrievedClips: clips } }
+    };
+  })
 }));

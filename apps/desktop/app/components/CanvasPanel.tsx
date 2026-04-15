@@ -16,6 +16,7 @@ interface OutlineData {
 }
 
 interface CanvasPanelProps {
+  projectId: string;
   outline: OutlineData | null;
   onToggleBasket: () => void;
 }
@@ -27,8 +28,12 @@ const modeLabels: Record<CanvasMode, string> = {
   split: "✨ 交付视图",
 };
 
-export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
-  const { activeMode, setActiveMode, setOutlineContent, outlineContent } = useCanvasStore();
+export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelProps) {
+  const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
+  const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
+  const retrievedClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
+  
+  console.log("🕵️‍♂️ [Probe CanvasPanel] activeMode:", activeMode, "| clips length:", retrievedClips?.length);
   const basketItems = useBasketStore((state) => state.items);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -51,7 +56,7 @@ export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
     onUpdate: ({ editor }) => {
       // 获取 Markdown 并标记为用户修改
       const md = editor.storage.markdown.getMarkdown();
-      setOutlineContent(md, "user");
+      setOutlineContent(projectId, md, "user");
     },
   });
 
@@ -68,9 +73,9 @@ export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
       if (!editor.isFocused) {
         editor.commands.setContent(targetContent);
       }
-      if (!outlineContent) setOutlineContent(targetContent, "system");
+      if (!outlineContent) setOutlineContent(projectId, targetContent, "system");
     }
-  }, [outline?.contentMd, outlineContent, editor, setOutlineContent]);
+  }, [outline?.contentMd, outlineContent, editor, setOutlineContent, projectId]);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
@@ -194,7 +199,46 @@ export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
             </div>
           )
         ) : activeMode === "plan" ? (
-          <PlanCanvas />
+          <PlanCanvas projectId={projectId} />
+        ) : activeMode === "footage" ? (
+          <div className="h-full w-full overflow-y-auto p-8 bg-zinc-50 dark:bg-zinc-950">
+            {retrievedClips.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-400 space-y-4">
+                <div className="text-4xl">🎬</div>
+                <p className="text-sm">暂无检索结果，请在左侧向 ClipMind 描述所需素材</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto pb-20">
+                {retrievedClips.map((clip: any, i: number) => (
+                  <div key={i} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm flex flex-col transition-colors group">
+                    {/* 缩略图区域 */}
+                    <div className="w-full h-32 bg-zinc-100 dark:bg-zinc-800 relative">
+                      {clip.thumbnailUrl ? (
+                        <img src={clip.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-zinc-400 text-2xl">🎬</div>
+                      )}
+                      <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono">
+                        {(clip.startTime / 1000).toFixed(1)}s - {(clip.endTime / 1000).toFixed(1)}s
+                      </div>
+                    </div>
+                    {/* 文本区域 */}
+                    <div className="p-4 flex flex-col gap-3 flex-1">
+                      <div className="flex justify-between items-center gap-2">
+                        <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded shrink-0">
+                          Score: {clip.score?.toFixed(2) || 'N/A'}
+                        </span>
+                        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 truncate" title={clip.filename}>
+                          {clip.filename || '未知素材'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-3 leading-relaxed">{clip.text}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex items-center justify-center h-full text-zinc-500 italic">
             {activeMode} 视图开发中...

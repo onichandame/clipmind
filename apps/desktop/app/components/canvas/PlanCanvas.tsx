@@ -1,8 +1,12 @@
 import { useCanvasStore } from "../../store/useCanvasStore";
 import { EditingPlanCard } from "../EditingPlanCard";
 
-export function PlanCanvas() {
-  const editingPlan = useCanvasStore((state) => state.editingPlan);
+interface PlanCanvasProps {
+  projectId: string;
+}
+
+export function PlanCanvas({ projectId }: PlanCanvasProps) {
+  const editingPlan = useCanvasStore((state) => state.projects[projectId]?.editingPlan);
 
   if (!editingPlan) {
     return (

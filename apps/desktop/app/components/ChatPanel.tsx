@@ -29,10 +29,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const startingMessages = initialMessages;
 
   // 2. 规范调用
-  const outlineContent = useCanvasStore((s) => s.outlineContent);
-  const isDirty = useCanvasStore((s) => s.isDirty);
+  const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
+  const isDirty = useCanvasStore((s) => s.projects[projectId]?.isDirty || false);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
   const setEditingPlan = useCanvasStore((s) => s.setEditingPlan);
+  const setRetrievedClips = useCanvasStore((s) => s.setRetrievedClips);
 
   const { messages, setMessages, sendMessage, status, } = useChat({
     id: projectId,
@@ -84,11 +85,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       const outlinePart = last?.parts?.filter(p => isToolUIPart(p)).find((p) => p.type === 'tool-updateOutline');
       const input = outlinePart?.input as { contentMd: string } | undefined
       if (input?.contentMd) {
-        setOutlineContent(input.contentMd, "agent");
+        setOutlineContent(projectId, input.contentMd, "agent");
         if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
       }
     }
-  }, [messages, status, setOutlineContent, setActiveMode]);
+  }, [messages, status, setOutlineContent, setActiveMode, projectId]);
 
   // [架构师干预] 监听剪辑方案生成结果并推送至独立视图
   useEffect(() => {
@@ -108,12 +109,34 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     const args = planPart?.toolInvocation?.args || planPart?.args;
 
     if (args && typeof args === 'object' && !Array.isArray(args)) {
-      setEditingPlan(args);
+      setEditingPlan(projectId, args);
       if (useCanvasStore.getState().activeMode !== 'plan') {
         setActiveMode('plan');
       }
     }
-  }, [messages, setEditingPlan, setActiveMode]);
+  }, [messages, setEditingPlan, setActiveMode, projectId]);
+
+  // [架构师干预] 监听素材检索结果并推送至检索视图
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const lastMsg = messages[messages.length - 1];
+    const footagePart = lastMsg?.parts?.find((p: any) => {
+      const invocation = p.type === 'tool-invocation' ? p.toolInvocation : p;
+      const toolName = invocation?.toolName || p.type;
+      const state = invocation?.state || p.state;
+      return toolName?.includes('searchFootage') && (state === 'result' || state === 'output-available' || state === 'done');
+    });
+
+    // 取出结果 (兼容 AI SDK v6 的 result / output / args 内嵌格式)
+    const resultPayload = footagePart?.toolInvocation?.result || footagePart?.result || footagePart?.toolInvocation?.output || footagePart?.output || footagePart?.toolInvocation?.args || footagePart?.args;
+
+    if (resultPayload && Array.isArray(resultPayload.clips)) {
+      setRetrievedClips(projectId, resultPayload.clips);
+      if (useCanvasStore.getState().activeMode !== 'footage') {
+        setActiveMode('footage');
+      }
+    }
+  }, [messages, setRetrievedClips, setActiveMode, projectId]);
 
   // 3. 状态强制同步 (SPA 刚需)
   // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，
@@ -121,9 +144,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   // 因此，使用 setMessages 强制同步外部服务端状态，是正确的同步模式。
   useEffect(() => {
     setMessages(startingMessages);
-    // 架构师干预：斩草除根。切换项目时强行清空全局大纲内存，防止幽灵状态。
-    useCanvasStore.getState().setOutlineContent("", "system");
-    useCanvasStore.getState().clearDirtyState();
+    // 架构师干预：斩草除根。切换项目时强行清空该项目大纲内存，防止幽灵状态。
+    useCanvasStore.getState().setOutlineContent(projectId, "", "system");
+    useCanvasStore.getState().clearDirtyState(projectId);
   }, [projectId, initialMessages.length]);
 
   // 4. 自动滚动到底部 (防抖动与白屏崩溃防线)
@@ -146,7 +169,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
         { text: content },
         { body: { projectId, currentOutline: outlineContent, isDirty } }
       );
-      if (isDirty) clearDirtyState();
+      if (isDirty) clearDirtyState(projectId);
       e.currentTarget.reset();
     }
   };
