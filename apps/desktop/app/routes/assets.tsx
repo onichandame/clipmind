@@ -156,7 +156,7 @@ export default function AssetsLibrary() {
 
     // 检查是否所有任务都已到达终态 ('ready' 或 'error')
     const allFinished = jobs.every(j => j.status === 'ready' || j.status === 'error');
-    
+
     if (allFinished) {
       const timer = setTimeout(() => {
         // 利用 setState 的回调形式，执行终态双重校验 (防 Race Condition)
@@ -199,7 +199,7 @@ export default function AssetsLibrary() {
                     {job.status === 'queued' && '等待中...'}
                     {job.status === 'compressing' && '⚙️ 极速处理中'}
                     {job.status === 'uploading' && `☁️ 上传中 ${job.progress}%`}
-                    {job.status === 'ready' && '✅ 资产已就绪'}
+                    {job.status === 'ready' && '✅ 上传完毕，AI 接管'}
                     {job.status === 'error' && '❌ 处理失败'}
                   </span>
                   <div className="flex-1 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden transition-colors">
@@ -254,18 +254,18 @@ export default function AssetsLibrary() {
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
-                  <div className="absolute top-2 right-2">
+                  <div className="absolute top-2 right-2 shadow-sm drop-shadow-md">
                     {asset.status === 'ready' ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 backdrop-blur-sm">
-                        <CheckCircle2 className="w-3 h-3" /> 已就绪
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-600 text-white shadow-md border-0">
+                        <CheckCircle2 className="w-3.5 h-3.5" /> 已就绪
                       </span>
                     ) : asset.status === 'error' ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20 backdrop-blur-sm">
-                        <AlertCircle className="w-3 h-3" /> 解析失败
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-red-600 text-white shadow-md border-0">
+                        <AlertCircle className="w-3.5 h-3.5" /> 处理失败
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 backdrop-blur-sm">
-                        <Clock className="w-3 h-3 animate-pulse" /> 解析中
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-indigo-600 text-white shadow-md border-0">
+                        <Activity className="w-3.5 h-3.5 animate-pulse" /> 处理中
                       </span>
                     )}
                   </div>

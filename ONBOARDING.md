@@ -684,3 +684,20 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **单一数据源原则**: 任何衍生数据（如 ASR 文本、RAG 向量）的生命周期，必须严格依附于顶级实体 Asset。删除 Asset 必须触发全链路联动的“雪崩删除”。
+
+## 📝 [阶段更新] 资产上传状态机收敛与 Qdrant 异步陷阱防线 (State Machine Convergence)
+
+**1. 架构与状态流转 (Architecture State):**
+- **领域状态收敛 (Single Source of Truth)**: 彻底修复了前端卡片 UI 状态“偷跑”的逻辑漏洞。前端组件现已退化为纯粹的无状态展示层 (Dumb Component)，仅监听单一的 `asset.status` 字段。
+- **端云状态机闭环**: 确立了严格的状态流转纪律：
+  1. 落盘瞬间 (`assets.ts`)：状态强制初始化为 `processing`。
+  2. ASR 回调 (`asr-callback.ts`)：仅更新内部的 `asrStatus`，主状态按兵不动。
+  3. 向量化终点 (`processVectorization`)：只有当 Qdrant 物理落盘彻底完成后，才下达最终指令将主状态流转为 `ready`。任何一环异常均流转为 `error`。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (前端视觉篡改)**: 严禁在前端局部的上传队列（Jobs）完成时，通过硬编码文案（如“✅ 资产已就绪”）去误导全局状态。必须将其降级为“上传完毕，AI 接管”，防止与底层耗时的 ASR/向量化任务产生语义冲突。
+- **DON'T DO (Qdrant 异步静默陷阱)**: **绝对禁止**在调用 Qdrant `PUT /points` 接口时省略 `?wait=true` 参数。原生 `fetch` 遇到异步接口返回的 200 OK 会瞬间放行 `await`，导致系统在向量构建完成前就错误地提前流转了就绪状态，形成致命的“假就绪”黑洞。
+
+**3. 新共识与规范 (New Conventions):**
+- **强制同步阻塞**: 任何向外部基础设施（如向量数据库）写入并直接影响核心业务状态机流转的网络请求，必须在 URL 或 Payload 中显式开启同步等待模式，绝不能容忍不可观测的后台异步排队。
+- **高对比度 UI 防线**: 对于叠加在复杂媒体（如视频缩略图）之上的状态徽章 (Badge)，严禁使用低透明度 (如 `bg-emerald-500/10`) 设计，必须强制采用高对比度的实体背景与阴影 (`shadow-md`)，确保视觉可读性。
