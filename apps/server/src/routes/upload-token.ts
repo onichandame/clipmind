@@ -17,7 +17,7 @@ app.post("/", async (c) => {
     }
 
     const uniqueId = crypto.randomUUID();
-    const videoExt = filename.split('.').pop() || 'mp4';
+    const videoExt = (filename.split('.').pop() || 'mp4').toLowerCase();
 
     // 架构升级：资产作为顶级实体，直接存放在全局 assets 目录下
     const videoObjectKey = `assets/${uniqueId}/video.${videoExt}`;
