@@ -9,7 +9,7 @@ const app = new Hono();
 
 async function processVectorization(assetId: string, chunks: any[]) {
   try {
-    console.log(`[Vectorization] Starting task for asset ${assetId}...`);
+    console.log(`[PROBE: VECTOR] 🕒 ${new Date().toISOString()} - 资产 ${assetId} 开始向量化...`);
     const texts = chunks.map(c => c.transcriptText);
     const vectors = await generateEmbeddings(texts);
 
@@ -25,8 +25,9 @@ async function processVectorization(assetId: string, chunks: any[]) {
     }));
 
     await upsertVectors(points);
+    console.log(`[PROBE: VECTOR] 🕒 ${new Date().toISOString()} - Qdrant 写入完成，准备更新数据库为 ready...`);
     await db.update(assets).set({ status: 'ready' }).where(eq(assets.id, assetId));
-    console.log(`✅ [Vectorization] Asset ${assetId} synced to Qdrant successfully. Status -> ready.`);
+    console.log(`✅ [PROBE: VECTOR] 🕒 ${new Date().toISOString()} - 资产 ${assetId} 数据库状态已正式流转为 ready。`);
   } catch (error) {
     await db.update(assets).set({ status: 'error' }).where(eq(assets.id, assetId));
     console.error(`❌ [Vectorization] Task failed for asset ${assetId}:`, error);
