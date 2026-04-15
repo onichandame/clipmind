@@ -69,6 +69,8 @@
 
 ### 🛑 6. Vercel AI SDK V6 协议陷阱
 
+**[核心准则] 在编写任何 AI 调用或 Agent 逻辑代码前，必须完整阅读并理解 [Vercel AI SDK LLM 规范](https://ai-sdk.dev/llms.txt) 以确保符合最新的协议标准。**
+
 - **异步清洗**：引入多模态后，`convertToModelMessages` 变为异步函数，必须 `await`。
 - **ReAct 循环**：调用 `streamText` 时**必须显式声明 `maxSteps`**，否则 Agent 调用一次工具后会直接假死。
 - **状态流转**：废弃旧版 `toolInvocations`，所有状态打平至 `message.parts` 数组，前端必须基于 `parts` 重构渲染层。
@@ -303,3 +305,14 @@
 - **DON'T DO (宿主机架构依赖)**: 在 CI 环境（尤其是涉及交叉编译的 GitHub Actions）中，严禁在脚本中使用 `process.arch` 或 `rustc -vV` 来决定 Sidecar 的下载版本。这会导致在 ARM 宿主机上编译 x86 产物时下载错误的二进制文件。
 - **新规范**: 必须优先读取 `TARGET_TRIPLE` 环境变量，基于“目标架构”映射下载地址和文件名后缀。
 - **DON'T DO (丢失产物与 403 黑洞)**: 严禁仅仅调用 `tauri-action` 就指望它自动发布。必须显式配置 `tagName: v__VERSION__` 才会触发底层的 GitHub Release 机制。同时，必须在 workflow 的 job 级别显式赋予 `permissions: contents: write`，否则会遭到 GitHub 安全策略的 403 拦截，导致产物挂载失败。
+
+## 📝 [阶段更新] AI SDK 规范准则引入与文档阅读协议
+
+**1. 架构与状态流转 (Architecture State):**
+- **规范前置**: 确立了 AI 相关代码开发的“文档先行”原则。在 AI 逻辑进入编码阶段前，必须完成对最新协议标准的对齐。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (协议幻觉)**: 严禁在未阅读最新官方协议的情况下盲目编写 AI 逻辑。Vercel AI SDK 迭代极快，依赖旧记忆编写的代码极易在多模态转换或 Tool Calling 链路中引发不可预测的静默失败。
+
+**3. 新共识与规范 (New Conventions):**
+- **强制阅读协议**: 正式将 `https://ai-sdk.dev/llms.txt` 列为 AI 开发的必读规范。所有涉及 Vercel AI SDK 的开发任务，必须首要核对该文档以确保代码符合当前的 LLM 交互协议。
