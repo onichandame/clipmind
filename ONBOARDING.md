@@ -701,3 +701,18 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **3. 新共识与规范 (New Conventions):**
 - **强制同步阻塞**: 任何向外部基础设施（如向量数据库）写入并直接影响核心业务状态机流转的网络请求，必须在 URL 或 Payload 中显式开启同步等待模式，绝不能容忍不可观测的后台异步排队。
 - **高对比度 UI 防线**: 对于叠加在复杂媒体（如视频缩略图）之上的状态徽章 (Badge)，严禁使用低透明度 (如 `bg-emerald-500/10`) 设计，必须强制采用高对比度的实体背景与阴影 (`shadow-md`)，确保视觉可读性。
+
+## 📝 [阶段更新] RAG 工具化与 Agentic 多步检索链路 (Server-Side Tool Calling)
+
+**1. 架构与状态流转 (Architecture State):**
+- **工具挂载**: 成功将 `search_assets` (向量检索) 注册为 Server-Side Tool，直接注入到 `apps/server/src/routes/chat.ts` 的 `streamText` 中。
+- **多步循环 (Agentic Loop)**: 启用了 `maxSteps: 5`，允许大模型在调用 Qdrant 获取视频切片后，能够继续留在上下文中阅读切片数据，并最终输出自然语言总结给前端。
+- **Token 防御**: 在检索完成后，剥离了高维向量数组，仅将 `score`, `text`, `startTime` 等极简 payload 喂给 LLM，极致节省上下文 Token 消耗。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (默认生命周期截断)**: 严禁在包含 Tool Calling 的 `streamText` 中省略 `maxSteps`。若采用默认值 1，大模型在发出工具调用指令后会立刻终止流，导致用户永远看不到最终的总结文本。
+- **DON'T DO (防假死与哑火)**: 在到达 `maxSteps` 最后一步时，必须通过 `prepareStep` 动态注入系统提示词，强制禁用所有工具并要求大模型必须输出纯文本结论，防止 Agent 陷入无休止的工具调用死循环。
+
+**3. 新共识与规范 (New Conventions):**
+- **安全召回阈值**: 全局检索默认限制召回数为 20（Top-K=20），严格防止海量视频切片撑爆模型的 Context Window 导致 429 报错或长文本幻觉。
+- **端侧处理分离**: Qdrant 仅作为纯粹的高维空间计算引擎，文本向量化必须在 Node 层调用大模型 Embedding API 完成后，再将纯数字向量打入 Qdrant。当前为纯稠密向量（Dense Vector）语义检索，暂未开启 BM25 全文混合检索。
