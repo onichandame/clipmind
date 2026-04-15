@@ -621,6 +621,15 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // [临时调试] 强制在生产环境打开控制台，捕获网络异常
+            #[cfg(not(debug_assertions))]
+            {
+                if let Some(window) = app.handle().get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
