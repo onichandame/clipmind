@@ -3,6 +3,7 @@ import { assets } from "@clipmind/db";
 import { desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { ossClient } from "../utils/oss";
+import { deleteVectorsByAssetId } from "../utils/qdrant";
 
 const app = new Hono();
 
@@ -58,6 +59,10 @@ app.delete("/:id", async (c) => {
   try {
     const id = c.req.param("id");
     await db.delete(assets).where(eq(assets.id, id));
+    
+    // 触发 Qdrant 幽灵向量清理 (Fire-and-forget 防阻塞)
+    deleteVectorsByAssetId(id).catch(e => console.error(`❌ [Qdrant] 清理资产 ${id} 的向量失败:`, e));
+    
     return c.json({ success: true });
   } catch (error) {
     console.error('❌ 删除资产失败:', error);

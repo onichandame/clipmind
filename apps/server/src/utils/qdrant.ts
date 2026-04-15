@@ -35,6 +35,26 @@ export async function ensureCollectionExists() {
   }
 }
 
+export async function deleteVectorsByAssetId(assetId: string) {
+  const config = getQdrantConfig();
+  
+  const res = await fetch(`${config.url}/collections/${COLLECTION_NAME}/points/delete`, {
+    method: 'POST',
+    headers: config.headers,
+    body: JSON.stringify({
+      filter: {
+        must: [
+          { key: "assetId", match: { value: assetId } }
+        ]
+      }
+    })
+  });
+  
+  if (!res.ok) {
+    throw new Error(`Qdrant Delete failed: ${await res.text()}`);
+  }
+}
+
 export async function upsertVectors(points: { id: string, vector: number[], payload: any }[]) {
   const config = getQdrantConfig();
   await ensureCollectionExists();
