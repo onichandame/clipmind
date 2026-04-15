@@ -29,6 +29,7 @@ import { startDanglingOssCleanupJob } from './jobs/cleanup-dangling-oss';
 
 app.route('/api/chat', chatRoute);
 app.route('/api/oss-callback', ossCallbackRoute);
+app.route('/api/asr-callback', asrCallbackRoute);
 app.route('/api/upload-token', uploadTokenRoute);
 app.route('/api/assets', assetsRoute);
 
