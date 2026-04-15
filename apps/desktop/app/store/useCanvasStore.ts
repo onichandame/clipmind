@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-type CanvasMode = 'outline' | 'footage' | 'plan' | 'split';
+type CanvasMode = 'outline' | 'footage' | 'plan';
 
 interface ProjectState {
   outlineContent: string;

@@ -25,7 +25,6 @@ const modeLabels: Record<CanvasMode, string> = {
   outline: "📝 策划大纲",
   footage: "🎬 素材检索",
   plan: "📋 剪辑方案",
-  split: "✨ 交付视图",
 };
 
 export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelProps) {

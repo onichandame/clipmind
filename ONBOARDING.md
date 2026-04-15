@@ -716,3 +716,16 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **3. 新共识与规范 (New Conventions):**
 - **安全召回阈值**: 全局检索默认限制召回数为 20（Top-K=20），严格防止海量视频切片撑爆模型的 Context Window 导致 429 报错或长文本幻觉。
 - **端侧处理分离**: Qdrant 仅作为纯粹的高维空间计算引擎，文本向量化必须在 Node 层调用大模型 Embedding API 完成后，再将纯数字向量打入 Qdrant。当前为纯稠密向量（Dense Vector）语义检索，暂未开启 BM25 全文混合检索。
+
+## 📝 [阶段更新] 素材检索与 AI SDK v6 状态机陷阱修复 (Retrieval & Vercel AI SDK)
+
+**1. 架构与状态流转 (Architecture State):**
+- **项目级状态隔离**: 彻底推翻了扁平化的全局 Store，`useCanvasStore` 现已升级为基于 `projectId` 的字典隔离架构 (`Record<string, ProjectState>`)。有效阻断了多项目并发操作时的状态串库 (Data Bleeding)。
+- **DDD 与后端直出 (哑视图防线)**: 在素材检索链路中，彻底斩断了前端拿到 `assetId` 后反复发起 `fetch` 轮询数据库获取 URL 的 N+1 渲染风暴。现已全量重构为在 Node 端 `chat.ts` 内部，利用 Drizzle 的 `inArray` 批量查询 MySQL 并直签 OSS 链接，确保前端仅作为纯粹的“哑视图 (Dumb UI)”消费数据。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (AI SDK v6 协议漂移与状态黑盒)**: **绝对禁止**在前端硬编码拦截 `toolInvocation.state === 'result'` 去断言工具调用完毕！Vercel AI SDK v6 在处理复杂多模态工具或流式终态时，存在严重的内部协议漂移。
+- **防线铁律**: 提取工具调用结果时，必须全量兼容探测 `.output`、`.result` 以及 `.args` 对象，并且必须显式放行 `output-available` 与 `done` 状态。否则极易导致前端逻辑死锁在 Loading 态，无法向下一步状态流转。
+
+**3. 新共识与规范 (New Conventions):**
+- **废弃交付视图**: 根据最新产品决策，彻底移除了冗余的 `split` (交付视图) 链路与画布。所有的 AI 编导输出均收敛至独立的 `PlanCanvas` 剪辑方案卡片中，保持交互和视觉的极致克制。
