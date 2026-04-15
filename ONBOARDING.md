@@ -67,14 +67,14 @@
 
 **资产（Asset）是系统的底层基建，属于全局顶级实体。** 绝对不要在预签名阶段将其强行绑定到特定的 `projectId` 目录下（如 `projects/{id}/assets/...`）。物理存储路径必须是纯粹的 `assets/{uniqueId}/...`，与 Project 的关联交由数据库关联表处理，为“跨项目复用”留出后路。
 
-### 🛑 6. Vercel AI SDK V6 协议陷阱
+### 🛑 6. Vercel AI SDK V6 协议陷阱 (已于 CQRS 架构重构中更新)
 
 **[核心准则] 在编写任何 AI 调用或 Agent 逻辑代码前，必须完整阅读并理解 [Vercel AI SDK LLM 规范](https://ai-sdk.dev/llms.txt) 以确保符合最新的协议标准。**
 
 - **异步清洗**：引入多模态后，`convertToModelMessages` 变为异步函数，必须 `await`。
 - **ReAct 循环**：调用 `streamText` 时**必须显式声明 `maxSteps`**，否则 Agent 调用一次工具后会直接假死。
-- **状态流转**：废弃旧版 `toolInvocations`，所有状态打平至 `message.parts` 数组，前端必须基于 `parts` 重构渲染层。
-- **持久化由前端发起**：`streamText` 回调无法拿到标准 UI 格式，**所有消息持久化必须由前端 `useChat` 的 `onFinish` 发起**，并在流式输出彻底结束后全量覆盖。
+- **【已废弃】持久化由前端发起**：绝对禁止由前端负责核心业务数据的落盘！这会产生幽灵账单与数据截断。当前系统已全面切换为 **CQRS (读写分离)** 架构。数据库仅存储纯净的 `CoreMessage`，全量持久化收敛于后端 `chat.ts` 的 `streamText.onFinish` 钩子中。
+- **CoreMessage 协议屏障**：Vercel AI SDK 后端仅认识 `CoreMessage`（工具调用在 `toolInvocations` 中），前端 UI 仅认识 `UIMessage`（工具调用扁平化在 `parts` 中）。**严禁**在后端强行将带有 `type: "tool-invocation"` 的 `parts` 塞回给底层 SDK，必将引发 Zod `invalid_union` 死亡崩溃。
 
 ### 🛑 7. Monorepo 环境变量与迁移防线
 
@@ -729,3 +729,18 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **废弃交付视图**: 根据最新产品决策，彻底移除了冗余的 `split` (交付视图) 链路与画布。所有的 AI 编导输出均收敛至独立的 `PlanCanvas` 剪辑方案卡片中，保持交互和视觉的极致克制。
+
+## 📝 [架构升级] 消息持久化 CQRS 重构与 CoreMessage 协议对齐 (Zero-Overhead Persistence)
+
+**1. 架构与状态流转 (Architecture State - CQRS):**
+- **单一真理源 (Single Source of Truth)**: 彻底推翻了“前端传历史记录 -> 后端解析 -> 前端发 Webhook 落盘”的脆弱链路。现已确立 MySQL 数据库为对话历史的绝对真理源，且内部**仅存储 Vercel AI SDK 原生的 `CoreMessage` 数组**。
+- **写链路 (Zero-Overhead Write)**: 在 `apps/server/src/routes/chat.ts` 中，`streamText` 消费 `CoreMessage[]`，吐出 `CoreMessage[]`。在 `onFinish` 钩子中，一行翻译代码都不写，直接 100% 无损追加落盘。彻底消灭了后端复杂的状态机翻译成本。
+- **读链路视图投影 (View Projection)**: 在 `apps/server/src/routes/projects.ts` 的 `GET /:id` 接口中注入了翻译器（Adapter）。仅在前端需要拉取项目渲染时，后端才动态将底层的 `CoreMessage` 降维并映射为前端 `useChat` 所需的 `UIMessage` (注入唯一 ID，将工具状态缝合至 `parts` 数组)。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (前端越权落盘)**: 绝对禁止由前端在 `onFinish` 阶段调用 API 保存对话。这会导致严重的数据截断（用户中途刷新页面）、幽灵账单以及与后端数据库的状态脑裂。
+- **DON'T DO (Zod 的死亡尖叫 - 强塞 parts)**: Vercel AI SDK 底层的 `convertToModelMessages` 军规极严。前端的 `UIMessage` 会把工具调用放入 `parts`，但后端的 `CoreMessage` 只认识根级别的 `toolInvocations`。**严禁把带有 `type: "tool-invocation"` 的 `parts` 传给底层 SDK**，否则会立刻触发 `ZodError: invalid_union` 导致 Node 进程崩溃白屏。
+- **DON'T DO (手动拼接 UIMessage 文本陷阱)**: **绝对禁止**在后端使用 `{ role: 'user', content: lastUserMsg.content }` 去手动拼接前端传来的消息！在 AI SDK v6 的多模态架构下，前端发来的 `lastUserMsg.content` 极可能是 `undefined`，真实的文本被深埋在 `parts: [{ type: 'text', text: '...' }]` 中。必须且只能使用官方的 `await convertToModelMessages([lastUserMsg])` 充当“净水器”进行安全提取。
+
+**3. 新共识与规范 (New Conventions):**
+- **前端哑终端化 (Dumb Terminal)**: 前端 `useChat` 现已被剥夺所有历史状态控制权和落盘权。任何需要与大模型交互的网络请求，后端必须无视前端发来的历史记录，强制从数据库 `projects` 表中提取经过强类型清洗的 `CoreMessage` 上下文。

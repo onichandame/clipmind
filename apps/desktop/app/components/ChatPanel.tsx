@@ -65,13 +65,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
         queryClient.invalidateQueries({ queryKey: ['project', projectId] });
       }
 
-      // Persist messages: send complete array, replacing entire uiMessages
-      const persistUrl = `${env.VITE_API_BASE_URL}/api/projects/${projectId}/messages`;
-      fetch(persistUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uiMessages: event.messages }),
-      }).catch(console.error);
+      // [Arch] 架构重构：前端落盘已彻底废弃！
+      // 持久化职责已全量收敛至 Hono 后端 chat.ts 的 streamText onFinish 钩子中。
+      // 此处仅做视图层状态流转，阻断 "幽灵覆写"。
     },
   });
 
