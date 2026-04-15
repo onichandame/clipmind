@@ -393,3 +393,68 @@
 **3. 新共识与规范 (New Conventions):**
 - **端云类型严格对齐**: 任何涉及客户端请求构建与云端预签名计算的双端协作，其核心输入变量（如文件后缀、MIME Type）在两端都必须进行严格的标准化降维处理（强制小写/去空），杜绝大小写引发的安全拦截。
 - **借用检查防御**: 在 Rust 中调用 `response.text().await` 提取错误信息时，会发生所有权转移 (Move)。若后续还需要获取 `response.status()`，必须提前 `let status = response.status();` 进行克隆缓存，严禁引发 `borrow of moved value` 编译中断。
+
+## 📝 [架构交接] 云端 ASR 管线完整实施方案 (Aliyun FileTrans)
+
+**工单状态**: 基础设施已就绪，等待线上 E2E 联调与 Webhook 解析器落地。
+**交接背景**: 本系统已正式推翻端侧 `whisper.cpp` 的离线方案，全面转向阿里云智能语音交互（录音文件识别 FileTrans）服务。前端视频上传与底层 Rust 音频分离降维（16kHz AAC）已完成，现将云端异步回调链路交接给后续开发者。
+
+### 📊 一、 外部知识沉淀 (调研结论与 API 情报)
+为了避免后续开发者重复查阅阿里云冗长的文档，现将核心对接情报固化如下：
+1. **为什么选型 FileTrans**：该接口专为长音频（最长120分钟）离线转录设计，原生支持智能语义分片与断句。
+2. **核心刚需契合点**：它能返回精准到**毫秒级 (BeginTime / EndTime)** 的时间戳，这对于我们后续构建基于视频时间轴的 RAG (检索增强生成) 切片回放是不可或缺的底层数据。
+3. **交互模式**：全异步架构。必须先通过 `SubmitTask` 提交音频 URL，系统进入排队；完成后，阿里云会主动向我们的服务器发送 POST Webhook 包含全量转录结果。
+4. **核心 Payload 结构** (接手人必读，用于编写解析器)：
+   ```json
+   {
+     "TaskId": "阿里云生成的唯一任务ID",
+     "StatusCode": 21050000, // 成功状态码
+     "StatusText": "SUCCESS",
+     "Result": {
+       "Sentences": [
+         {
+           "BeginTime": 1250, // 毫秒
+           "EndTime": 4500,
+           "Text": "第一段切片字幕。"
+         }
+       ]
+     }
+   }
+   ```
+
+### 🏗️ 二、 已经完成的架构基建 (What is Done)
+接手人无需再碰以下底层逻辑，它们已经历过架构级的防腐败加固：
+1. **端侧音频强制降维**：Rust 层 FFmpeg 已锁定 `-ar 16000 -ac 1`，输出最契合阿里云大模型的 16kHz 单声道音频。
+2. **状态机数据库扩容**：`assets` 表已新增 `asrTaskId` 和 `asrStatus` ('pending' | 'processing' | 'completed' | 'failed')；同时预留了 `asset_chunks` 表用于存储 RAG 字幕切片。
+3. **Webhook 绝对幂等**：`apps/server/src/routes/oss-callback.ts` 中已注入基于 `ossUrl` 的 Drizzle `eq` 唯一性拦截，免疫阿里云的重试风暴。
+4. **动态预签名提权**：在 `aliyun-asr.ts` 中，已修复私有 Bucket 的 403 黑洞。提交任务前会自动调用 `ossClient.signatureUrl` 签发具有 2 小时有效期的临时 URL 供阿里云拉取。
+
+### 🎯 三、 接手人待办事项 (What needs to be done)
+接下来的开发者请严格按照以下 3 步走，不要跳过任何一步：
+
+**阶段 1：线上环境变量补全 (运维防线)**
+在 `clipmind.prodream.cn` 线上服务器的 Node.js 环境变量中，必须注入以下参数（Zod 强类型已开启拦截，不填直接 Crash）：
+- `ALIYUN_ACCESS_KEY_ID`: 阿里云 AK
+- `ALIYUN_ACCESS_KEY_SECRET`: 阿里云 SK
+- `ALIYUN_ASR_APPKEY`: 智能语音交互 AppKey（已废弃含糊的 ALIYUN_APPKEY 命名）
+- `PUBLIC_WEBHOOK_DOMAIN`: 固定为 `https://clipmind.prodream.cn`
+
+**阶段 2：编写并挂载 ASR 回调解析器 (核心开发任务)**
+你需要在 `apps/server/src/routes/` 下新建 `asr-callback.ts` 路由。它的唯一职责是接收阿里云的 POST 请求：
+1. **提取 TaskId**：根据 `req.body.TaskId`，在 `assets` 表中反查出对应的 `assetId`。
+2. **状态扭转**：将该资产的 `asrStatus` 标记为 `completed`。
+3. **切片落盘**：遍历 `Result.Sentences` 数组，将每一句映射为 `assetChunks` 表的结构（关联 `assetId`，映射 `startTime`, `endTime`, `transcriptText`）并批量 `db.insert`。
+
+**阶段 3：执行线上 E2E 验证 (验尸官环节)**
+一切就绪后，直接通过线上桌面端上传一个 1-3 分钟的视频。约 1 分钟后，登录线上数据库执行验尸 SQL：
+```sql
+-- 验证状态机是否流转
+SELECT asr_status FROM assets ORDER BY created_at DESC LIMIT 1; 
+
+-- 验证 RAG 切片是否落盘成功且时间轴递增
+SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = '刚上传的ID' ORDER BY start_time ASC;
+```
+
+### 🛑 四、 架构红线与避坑指南 (DON'Ts)
+- **DON'T DO (私有资产暴露)**：严禁在 `submitAliyunAsrTask` 中直接将 `objectKey` 拼接域名传给阿里云。Bucket 是私有的，不带签名的 URL 会被直接拦截导致 ASR 静默失败。
+- **DON'T DO (阻塞 OSS 回调)**：在 `oss-callback.ts` 触发 `submitAliyunAsrTask` 时，必须是异步 `Promise.catch`。绝对禁止 `await`，不能让调用阿里云的网络开销拖住给 OSS 响应 200 OK 的时间。

@@ -111,7 +111,7 @@ export default function AssetsLibrary() {
     };
   }, []);
 
-  const [deletingAsset, setDeletingAsset] = useState<{id: string, filename: string} | null>(null);
+  const [deletingAsset, setDeletingAsset] = useState<{ id: string, filename: string } | null>(null);
 
   const handleDeleteClick = (e: React.MouseEvent, id: string, filename: string) => {
     e.stopPropagation();
@@ -164,7 +164,7 @@ export default function AssetsLibrary() {
       <div className="flex items-center justify-between mb-8 max-w-7xl mx-auto">
         <h1 className="text-2xl font-semibold tracking-tight transition-colors">全部素材 (Assets)</h1>
         <Button onClick={handleSelectFiles} variant="primary">
-          <UploadCloud className="w-4 h-4 mr-2" /> 批量导入并极速压缩
+          <UploadCloud className="w-4 h-4 mr-2" /> 批量导入
         </Button>
       </div>
 
@@ -183,7 +183,7 @@ export default function AssetsLibrary() {
                   <span className={`w-20 font-medium ${job.status === 'compressing' ? 'text-amber-400 animate-pulse' : job.status === 'uploading' ? 'text-blue-400' : job.status === 'ready' ? 'text-emerald-400' : 'text-zinc-500'}`}>
                     {job.status === 'queued' && '等待中...'}
                     {job.status === 'compressing' && '⚙️ 极速处理中'}
-                    {job.status === 'uploading' && `☁️ 直传云端 ${job.progress}%`}
+                    {job.status === 'uploading' && `☁️ 上传中 ${job.progress}%`}
                     {job.status === 'ready' && '✅ 资产已就绪'}
                     {job.status === 'error' && '❌ 处理失败'}
                   </span>
@@ -218,12 +218,12 @@ export default function AssetsLibrary() {
                 <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden transition-colors">
                   {asset.thumbnailUrl ? (
                     <>
-                      <img 
-                        src={asset.thumbnailUrl} 
+                      <img
+                        src={asset.thumbnailUrl}
                         alt={asset.filename}
                         className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        onError={(e) => { 
-                          e.currentTarget.style.display = 'none'; 
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
                           e.currentTarget.nextElementSibling?.classList.remove('hidden');
                         }}
                       />

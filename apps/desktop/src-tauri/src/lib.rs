@@ -446,8 +446,40 @@ async fn process_video_asset(
 
             let file_size = file.metadata().await.map_err(|e| e.to_string())?.len();
 
+            use futures_util::StreamExt;
             let stream = FramedRead::new(file, BytesCodec::new());
-            let body = reqwest::Body::wrap_stream(stream);
+
+            let mut total_read = 0u64;
+            let mut last_emit = std::time::Instant::now();
+            let throttle = std::time::Duration::from_millis(500);
+            let app_emitter = app_clone.clone();
+            let emit_job_id = job_id.clone();
+
+            // 拦截并包装流，计算精确进度并注入 500ms 节流防风暴
+            let progress_stream = stream.map(move |result| {
+                match result {
+                    Ok(bytes_mut) => {
+                        let chunk_size = bytes_mut.len() as u64;
+                        total_read += chunk_size;
+
+                        let now = std::time::Instant::now();
+                        if now.duration_since(last_emit) >= throttle || total_read == file_size {
+                            // 将视频上传阶段映射至 0% ~ 90% (留 10% 给收尾工作)
+                            let pct = ((total_read as f64 / file_size as f64) * 90.0) as u8;
+                            let _ = app_emitter.emit(
+                                "upload-progress",
+                                serde_json::json!({ "id": &emit_job_id, "progress": pct }),
+                            );
+                            last_emit = now;
+                        }
+                        // 强制显式声明返回值类型，切断推断发散 (遵守 ONBOARDING.md 规则 4)
+                        Ok::<bytes::Bytes, std::io::Error>(bytes_mut.freeze())
+                    }
+                    Err(e) => Err(e),
+                }
+            });
+
+            let body = reqwest::Body::wrap_stream(progress_stream);
 
             // 动态匹配 Content-Type 以迎合 OSS 签名 (防 403 挂起)
             let mime_type = if local_path_clone.to_lowercase().ends_with(".mov") {
@@ -455,11 +487,6 @@ async fn process_video_asset(
             } else {
                 "video/mp4"
             };
-
-            let _ = app_clone.emit(
-                "upload-progress",
-                serde_json::json!({ "id": job_id, "progress": 10 }),
-            );
 
             let video_res = client
                 .put(&token_res.video_upload_url)
