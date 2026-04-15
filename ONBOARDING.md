@@ -329,3 +329,15 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **品牌一致性防线**: 后续新增的任何提示词、UI 占位符、引导页或报错文案中，**绝对禁止**退化使用泛指的 "AI" 或 "系统"。必须且只能使用产品级专属代号 "ClipMind"。
+
+## 📝 [阶段更新] 流式输出防抖与渲染风暴隔离 (Render-Thrashing Prevention)
+
+**1. 架构与状态流转 (Architecture State):**
+- 针对 AI 长文本流式输出场景，确立了“瞬时 DOM 对齐”的滚动策略。废弃了由 `smooth` 动画主导的滚动视图更新，避免与 React 的高频 Re-render 产生生命周期冲突。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (动画帧碰撞与白屏黑洞)**: 严禁在 AI 流式输出（如 `useChat` 的 `messages` 依赖变化时）使用 `messagesEndRef.current.scrollIntoView({ behavior: "smooth" })`。
+- **血泪教训**: `smooth` 会触发浏览器底层的异步重排动画（约 300ms）。在几十毫秒一次的 token 流式吐出时，高频的 DOM 更新会不断打断并重置动画帧，导致合成器线程排队碰撞。轻则视觉剧烈抽搐，重则触发 React `Maximum update depth` 或撑爆 V8 引擎导致白屏崩溃。
+
+**3. 新共识与规范 (New Conventions):**
+- **流式滚动规范**: 在需要跟随高频流式内容自动滚动的场景中，必须且只能使用 `behavior: "auto"` 或直接操作 `scrollTop` 实现无缝瞬时对齐。

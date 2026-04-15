@@ -100,9 +100,15 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     useCanvasStore.getState().clearDirtyState();
   }, [projectId, initialMessages.length]);
 
-  // 4. 自动滚动到底部
+  // 4. 自动滚动到底部 (防抖动与白屏崩溃防线)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // [架构师干预] 严禁在流式高频渲染（如 AI 逐字输出）时使用 behavior: "smooth"。
+    // "smooth" 会触发浏览器的异步插值动画，在极短时间内的连续调用会导致动画帧排队碰撞，
+    // 进而引发致命的渲染风暴 (Render-Thrashing) 并导致 markdown 畸形解析或白屏。
+    // 必须使用 "auto" 或直接阻断平滑过渡。
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
+    }
   }, [messages]);
 
   const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
