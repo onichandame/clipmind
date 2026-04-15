@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.52",
+    "@alicloud/pop-core": "^1.8.0",
     "@clipmind/db": "workspace:*",
     "@hono/node-server": "^1.11.0",
     "ai": "latest",

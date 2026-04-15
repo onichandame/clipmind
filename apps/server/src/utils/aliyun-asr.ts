@@ -2,6 +2,8 @@ import { assets } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { serverConfig } from "../env";
+// @ts-ignore
+import Core from '@alicloud/pop-core';
 
 /**
  * 提交阿里云录音文件识别任务 (FileTrans)
@@ -19,17 +21,40 @@ export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) 
   console.log(`🚀 [ASR Pipeline] 正在向阿里云提交识别任务, AssetID: ${assetId}`);
 
   try {
-    // TODO: 替换为真实的 @alicloud/pop-core 客户端调用
-    // 需将 serverConfig.PUBLIC_WEBHOOK_DOMAIN + '/api/asr-callback' 作为回调地址传入
-    // const response = await client.request('SubmitTask', { ... });
-    const mockTaskId = `aliyun_task_${Date.now()}`;
+    const client = new Core({
+      accessKeyId: serverConfig.ALIYUN_ACCESS_KEY_ID,
+      accessKeySecret: serverConfig.ALIYUN_ACCESS_KEY_SECRET,
+      endpoint: 'https://filetrans.cn-shanghai.aliyuncs.com',
+      apiVersion: '2018-08-17'
+    });
 
-    // 更新状态机：标记为处理中
+    const task = {
+      appkey: appKey,
+      file_link: audioOssUrl,
+      version: "4.0",
+      enable_words: false,
+      enable_callback: true,
+      callback_url: `${serverConfig.PUBLIC_WEBHOOK_DOMAIN}/api/asr-callback`
+    };
+
+    const response: any = await client.request(
+      'SubmitTask',
+      { Task: JSON.stringify(task) },
+      { method: 'POST' }
+    );
+
+    if (response.StatusText !== 'SUCCESS') {
+      throw new Error(`Aliyun Reject: ${response.StatusText}`);
+    }
+
+    const taskId = response.TaskId;
+
+    // 更新状态机：标记为处理中，记录真实的任务 ID
     await db.update(assets)
-      .set({ asrTaskId: mockTaskId, asrStatus: 'processing' })
+      .set({ asrTaskId: taskId, asrStatus: 'processing' })
       .where(eq(assets.id, assetId));
 
-    console.log(`✅ [ASR Pipeline] 任务提交成功, TaskId: ${mockTaskId}`);
+    console.log(`✅ [ASR Pipeline] 任务提交成功, 真实 TaskId: ${taskId}`);
   } catch (error) {
     await db.update(assets).set({ asrStatus: 'failed' }).where(eq(assets.id, assetId));
     console.error(`❌ [ASR Pipeline] 任务提交失败:`, error);
