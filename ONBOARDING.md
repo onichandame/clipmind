@@ -458,3 +458,17 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 ### 🛑 四、 架构红线与避坑指南 (DON'Ts)
 - **DON'T DO (私有资产暴露)**：严禁在 `submitAliyunAsrTask` 中直接将 `objectKey` 拼接域名传给阿里云。Bucket 是私有的，不带签名的 URL 会被直接拦截导致 ASR 静默失败。
 - **DON'T DO (阻塞 OSS 回调)**：在 `oss-callback.ts` 触发 `submitAliyunAsrTask` 时，必须是异步 `Promise.catch`。绝对禁止 `await`，不能让调用阿里云的网络开销拖住给 OSS 响应 200 OK 的时间。
+
+## 📝 [阶段更新] OSS 流式直传真实进度与节流防风暴重构
+
+**1. 架构与状态流转 (Architecture State):**
+- 彻底移除了 `process_video_asset` 中关于视频直传进度的硬编码 (10% 突跳 90%) 假死现象。
+- 引入了 `futures_util::StreamExt::map` 作为中间件拦截 `FramedRead` 产生的异步字节流，实现了基于真实 I/O 消耗的精确进度追踪。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (进度盲猜与假死)**: 严禁在长耗时的异步网络请求前后硬编码发送首尾进度状态。必须深入底层流式 I/O 提取真实的 `chunk_size` 累加。
+- **DON'T DO (IPC 风暴与内存积压)**: 极速的分块读取会产生海量的循环迭代。如果在流式拦截器中毫无节制地调用 `app.emit`，会瞬间导致 V8 引擎假死。必须在闭包中引入 `std::time::Instant` 状态，强制实施 500ms 节流。
+- **生命周期逃逸与推断黑洞**: 在 `StreamExt::map` 的闭包中，必须使用 `move` 关键字捕获克隆后的 `AppHandle` 和变量，并且在最后 `Ok` 返回时强制显式声明类型 `Ok::<bytes::Bytes, std::io::Error>(bytes_mut.freeze())`，以防 Rust 编译器陷入泛型推断死循环。
+
+**3. 新共识与规范 (New Conventions):**
+- **零拷贝与类型冻结**: 在处理 `reqwest` 的 `Body::wrap_stream` 边界时，统一采用 `tokio_util` 的 `BytesMut` 结合 `.freeze()` 的方式转换为安全的不可变 `Bytes`，实现全程零拷贝传递。
