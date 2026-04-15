@@ -377,3 +377,19 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **标准交互与视觉底线**: 后续系统中新增的任何受控 Modal/Dialog 弹窗组件，必须标配双态主题支持，且必须实现“外部遮罩关闭 + 内部冒泡阻断”的安全交互双重防线。
+
+## 📝 [阶段更新] 端云多轨并发落盘与私有资产分发重构 (OSS Signed URLs)
+
+**1. 架构与状态流转 (Architecture State):**
+- **彻底的存储与分发分离**: 确立了“数据库只存 Key，接口动态分发”的安全架构。前端提交以及数据库落盘的音视频、缩略图路径，现已全部规范为纯粹的 OSS Object Key（如 `assets/{id}/video.mp4`）。
+- **动态鉴权防线**: 彻底废弃了在前端硬编码 OSS 域名或在后端简单拼接绝对路径的做法。对于私有 Bucket 资产，统一在 `GET /api/assets` 路由层由 `ossClient.signatureUrl` 动态签发附带 `Expires` 和 `Signature` 的临时授信链接。
+- **HTTPS 强制化 (Secure Context)**: `ossClient` 已全量注入 `secure: true` 选项，确保桌面端 Tauri (基于 WebKit/WebView2) 不会因为“混合内容 (Mixed Content)”安全策略而拦截未加密的媒体流。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (抽象泄漏)**: 严禁将底层物理存储基座的配置（如云端 Bucket 域名）暴露给纯展示层的前端环境配置 (`env.ts`) 中，必须严格遵守端云解耦底线。
+- **DON'T DO (Reqwest 静默吞错陷阱)**: 严禁在 Rust 层调用 `reqwest` 执行 `PUT` 直传后，仅简单执行 `.await?`。只要 HTTP 握手成功，即使 OSS 返回 `403 Forbidden`，Reqwest 也会将其包装为 `Ok(Response)` 返回。**必须强制校验 `!response.status().is_success()` 并抛出真实错误**，否则会导致直传失败却依然向服务端上报落盘请求的“假死”灾难。
+- **血泪教训 (Content-Type 大小写敏感血案)**: 阿里云 OSS 的防篡改签名机制严格校验 `Content-Type`。若客户端上传 `.MOV`，Rust 会智能匹配为 `video/quicktime` 请求头；但若后端未强制执行 `.toLowerCase()`，会因判定失效而签发 `video/mp4` 权限。这一字节级别的非对齐，会直接导致 `SignatureDoesNotMatch` 拒绝访问。
+
+**3. 新共识与规范 (New Conventions):**
+- **端云类型严格对齐**: 任何涉及客户端请求构建与云端预签名计算的双端协作，其核心输入变量（如文件后缀、MIME Type）在两端都必须进行严格的标准化降维处理（强制小写/去空），杜绝大小写引发的安全拦截。
+- **借用检查防御**: 在 Rust 中调用 `response.text().await` 提取错误信息时，会发生所有权转移 (Move)。若后续还需要获取 `response.status()`，必须提前 `let status = response.status();` 进行克隆缓存，严禁引发 `borrow of moved value` 编译中断。
