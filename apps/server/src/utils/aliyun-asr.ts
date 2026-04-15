@@ -1,5 +1,6 @@
-import { db, assets } from "@clipmind/db";
+import { assets } from "@clipmind/db";
 import { eq } from "drizzle-orm";
+import { db } from "../db";
 
 /**
  * 提交阿里云录音文件识别任务 (FileTrans)

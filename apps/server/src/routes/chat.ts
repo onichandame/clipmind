@@ -1,8 +1,9 @@
 import { Hono } from "hono";
-import { db, projectOutlines } from "@clipmind/db";
+import { projectOutlines } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
 import { z } from "zod";
+import { db } from "../db";
 
 const app = new Hono();
 
@@ -19,7 +20,9 @@ app.post("/", async (c) => {
       dynamicSystemPrompt += `**CRITICAL: The user has manually edited this outline since you last saw it.** You MUST base any future modifications on this exact current content, not your previous memory of it.\n\n`;
     }
     dynamicSystemPrompt += `=== CURRENT OUTLINE CONTENT ===\n${currentOutline}\n===============================\n\n`;
-    dynamicSystemPrompt += `When calling \`updateOutline\`, you must provide the FULL updated markdown content, combining the user's manual edits with your new additions.`;
+    dynamicSystemPrompt += `When calling \`updateOutline\`, you must provide the FULL updated markdown content, combining the user's manual edits with your new additions.\n\n`;
+    dynamicSystemPrompt += `**DON'T DO (聊天区霸屏)**: 严禁在普通的对话回复中直接倾泻数百字的大纲、长篇转录总结或复杂的结构化长文本。这会撑爆聊天气泡，破坏用户的沉浸式体验与视觉焦点。\n\n`;
+    dynamicSystemPrompt += `**规范 (极简对话流)**: 在通过工具完成内容写入后，你在对话区的回复必须保持极致克制。仅需提供一句简短的状态通报即可（例如：“大纲已生成并推送到右侧画布，请审阅或修改。”），**绝对禁止**在聊天区重复复述已写入工作区的内容。\n\n`;
   }
 
   const model = createAIModel();
