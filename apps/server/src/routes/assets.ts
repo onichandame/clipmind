@@ -8,7 +8,20 @@ const app = new Hono();
 app.get("/", async (c) => {
   try {
     const allAssets = await db.select().from(assets).orderBy(desc(assets.createdAt));
-    return c.json(allAssets);
+    
+    // 架构升级：基于现有环境变量动态拼装 OSS 绝对路径 (DRY 原则)
+    const region = process.env.ALIYUN_OSS_REGION || '';
+    const bucket = process.env.ALIYUN_OSS_BUCKET || '';
+    const baseUrl = `https://${bucket}.${region}.aliyuncs.com`;
+    
+    const mappedAssets = allAssets.map(asset => ({
+      ...asset,
+      ossUrl: asset.ossUrl ? `${baseUrl}/${asset.ossUrl}` : asset.ossUrl,
+      audioOssUrl: asset.audioOssUrl ? `${baseUrl}/${asset.audioOssUrl}` : asset.audioOssUrl,
+      thumbnailUrl: asset.thumbnailUrl ? `${baseUrl}/${asset.thumbnailUrl}` : asset.thumbnailUrl,
+    }));
+
+    return c.json(mappedAssets);
   } catch (error) {
     console.error('❌ 获取资产列表失败:', error);
     return c.json({ error: 'Database Error' }, 500);
