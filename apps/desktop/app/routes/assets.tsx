@@ -216,7 +216,22 @@ export default function AssetsLibrary() {
             {assets.map((asset) => (
               <div key={asset.id} className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 shadow-sm dark:shadow-none">
                 <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden transition-colors">
-                  <Film className="w-8 h-8 text-zinc-400 dark:text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
+                  {asset.thumbnailUrl ? (
+                    <>
+                      <img 
+                        src={asset.thumbnailUrl} 
+                        alt={asset.filename}
+                        className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        onError={(e) => { 
+                          e.currentTarget.style.display = 'none'; 
+                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                      <Film className="hidden w-8 h-8 text-zinc-400 dark:text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
+                    </>
+                  ) : (
+                    <Film className="w-8 h-8 text-zinc-400 dark:text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
+                  )}
                   <button
                     onClick={(e) => handleDeleteClick(e, asset.id, asset.filename)}
                     className="absolute top-2 left-2 p-1.5 bg-black/50 hover:bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200 backdrop-blur-sm z-10"
