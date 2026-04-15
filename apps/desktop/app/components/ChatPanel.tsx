@@ -32,6 +32,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const outlineContent = useCanvasStore((s) => s.outlineContent);
   const isDirty = useCanvasStore((s) => s.isDirty);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
+  const setEditingPlan = useCanvasStore((s) => s.setEditingPlan);
 
   const { messages, setMessages, sendMessage, status, } = useChat({
     id: projectId,
@@ -88,6 +89,31 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       }
     }
   }, [messages, status, setOutlineContent, setActiveMode]);
+
+  // [架构师干预] 监听剪辑方案生成结果并推送至独立视图
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    // 提取最新一条消息中的工具调用
+    const lastMsg = messages[messages.length - 1];
+    const planPart = lastMsg?.parts?.find((p: any) => {
+      const invocation = p.type === 'tool-invocation' ? p.toolInvocation : p;
+      const toolName = invocation?.toolName || p.type;
+      const state = invocation?.state || p.state;
+      return toolName?.includes('generateEditingPlan') &&
+        (state === 'result' || (invocation?.args && Object.keys(invocation.args).length > 0));
+    });
+
+    // 提取 args（兼容旧版和 v6 的提取层级）
+    const args = planPart?.toolInvocation?.args || planPart?.args;
+
+    if (args && typeof args === 'object' && !Array.isArray(args)) {
+      setEditingPlan(args);
+      if (useCanvasStore.getState().activeMode !== 'plan') {
+        setActiveMode('plan');
+      }
+    }
+  }, [messages, setEditingPlan, setActiveMode]);
 
   // 3. 状态强制同步 (SPA 刚需)
   // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，
@@ -181,8 +207,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                         );
                       }
                       return (
-                        <div key={index} className="mt-4 mb-2">
-                          <EditingPlanCard plan={invocation.args} />
+                        <div key={index} className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-3 py-2 rounded-lg border border-emerald-500/20 my-2 mt-3">
+                          <div className="text-lg leading-none">✨</div>
+                          <span className="text-sm font-medium">剪辑方案已生成，已推送至右侧画布。</span>
                         </div>
                       );
                     } else {

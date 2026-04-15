@@ -6,8 +6,9 @@ import { Menu, ShoppingBasket } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
 import { useBasketStore } from "../store/useBasketStore";
 import { Button } from "./Button";
+import { PlanCanvas } from "./canvas/PlanCanvas";
 
-type CanvasMode = "outline" | "footage" | "split";
+type CanvasMode = "outline" | "footage" | "plan" | "split";
 
 interface OutlineData {
   contentMd: string;
@@ -22,6 +23,7 @@ interface CanvasPanelProps {
 const modeLabels: Record<CanvasMode, string> = {
   outline: "📝 策划大纲",
   footage: "🎬 素材检索",
+  plan: "📋 剪辑方案",
   split: "✨ 交付视图",
 };
 
@@ -84,7 +86,7 @@ export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
 
           {/* 宽屏态：模式选择器 */}
           <div className="hidden lg:flex bg-zinc-100 dark:bg-zinc-800/50 p-1 rounded-lg border border-zinc-200 dark:border-zinc-700/30 transition-colors">
-            {(["outline", "footage", "split"] as CanvasMode[]).map((mode) => (
+            {(["outline", "footage", "plan", "split"] as CanvasMode[]).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setActiveMode(mode)}
@@ -129,7 +131,7 @@ export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
           <div className="flex flex-col gap-3">
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">切换视图</span>
             <div className="grid grid-cols-1 gap-2">
-              {(["outline", "footage", "split"] as CanvasMode[]).map((mode) => (
+              {(["outline", "footage", "plan", "split"] as CanvasMode[]).map((mode) => (
                 <Button
                   key={mode}
                   variant={activeMode === mode ? "primary" : "secondary"}
@@ -191,6 +193,8 @@ export function CanvasPanel({ outline, onToggleBasket }: CanvasPanelProps) {
               </p>
             </div>
           )
+        ) : activeMode === "plan" ? (
+          <PlanCanvas />
         ) : (
           <div className="flex items-center justify-center h-full text-zinc-500 italic">
             {activeMode} 视图开发中...
