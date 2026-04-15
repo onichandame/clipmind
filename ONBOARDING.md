@@ -316,3 +316,16 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **强制阅读协议**: 正式将 `https://ai-sdk.dev/llms.txt` 列为 AI 开发的必读规范。所有涉及 Vercel AI SDK 的开发任务，必须首要核对该文档以确保代码符合当前的 LLM 交互协议。
+
+## 📝 [阶段更新] ClipMind 品牌化与硬编码清理 (Persona Unified)
+
+**1. 架构与状态流转 (Architecture State):**
+- **统一化自称**: 移除了前端 `ChatPanel.tsx` 顶部的 "AI 助理" 以及聊天气泡中的 "AI" 占位符。系统界面与后端的 System Prompt 全面统一定制为 **ClipMind** (简写 CM)。
+- **去账号化**: 删除了 `GlobalSidebar.tsx` 左下角硬编码的用户头像（Avatar）占位符结构，进一步聚焦于核心的创作工作流。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (黑洞目录扫描)**: 严禁在 Monorepo / Tauri 架构下使用全局 `grep` 或 `find` 而不显式物理阻断 `target` (Rust 编译产物)、`node_modules` 和 `dist` 等重灾区。这会导致毁灭性的 I/O 阻塞和系统假死。必须建立 `--exclude-dir` 和 `-prune` 的防御性探测肌肉记忆。
+- **DON'T DO (排版溢出陷阱)**: 在微小尺寸的容器（如 `w-7 h-7` 的气泡头像）中，严禁强行填入长文本（如 "ClipMind"）。必须采用缩写（"CM"）或 SVG 图标，防止撑爆 Flex 布局和破坏视觉完整性。
+
+**3. 新共识与规范 (New Conventions):**
+- **品牌一致性防线**: 后续新增的任何提示词、UI 占位符、引导页或报错文案中，**绝对禁止**退化使用泛指的 "AI" 或 "系统"。必须且只能使用产品级专属代号 "ClipMind"。

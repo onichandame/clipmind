@@ -61,11 +61,6 @@ export function GlobalSidebar() {
         >
           {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
         </div>
-
-        {/* User Avatar */}
-        <div className="cursor-pointer hover:ring-2 hover:ring-[#6D5DFB]/50 rounded-full transition-all">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-zinc-700 to-zinc-600 border border-zinc-500"></div>
-        </div>
       </div>
     </div>
   );

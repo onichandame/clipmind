@@ -127,7 +127,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-800/60 backdrop-blur-sm z-10 transition-colors">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-xs transition-colors">✨</div>
-          <h1 className="text-sm font-medium text-zinc-900 dark:text-zinc-200 transition-colors">AI 助理</h1>
+          <h1 className="text-sm font-medium text-zinc-900 dark:text-zinc-200 transition-colors">ClipMind</h1>
         </div>
       </div>
 
@@ -139,7 +139,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               {!isUser && (
                 <div className="w-7 h-7 mt-1 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mr-3 flex-shrink-0 border border-zinc-200 dark:border-zinc-700/50 transition-colors">
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium transition-colors">AI</span>
+                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium transition-colors">CM</span>
                 </div>
               )}
               <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed transition-colors ${isUser ? "bg-zinc-900 dark:bg-zinc-800 text-white dark:text-zinc-100 rounded-2xl rounded-tr-sm border border-transparent dark:border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-700 dark:text-zinc-300"}`}>
