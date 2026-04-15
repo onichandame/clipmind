@@ -210,8 +210,65 @@ app.post("/", async (c) => {
           existingMessages = existingProject[0].uiMessages as UIMessage[];
         }
 
-        // 将用户的最新消息和 AI 生成的 messages (包含 parts/tool calls) 拼接落盘
-        const updatedMessages = [...existingMessages, lastUserMessage, ...response.messages];
+        // [架构红线修复] Vercel AI SDK v6 协议对齐
+        // response.messages 是 CoreMessage[]，含有单独的 role: "tool"。
+        // 必须将其强行降维并缝合为前端 useChat 认识的 UIMessage (融合 tool-invocation 至 parts 中)
+        const sanitizedAiMessages: any[] = [];
+
+        for (const msg of response.messages) {
+          if (msg.role === 'assistant') {
+            let textContent = "";
+            const parts: any[] = [];
+
+            if (typeof msg.content === "string") {
+              textContent = msg.content;
+              parts.push({ type: "text", text: msg.content });
+            } else if (Array.isArray(msg.content)) {
+              for (const part of msg.content) {
+                if (part.type === "text") {
+                  textContent += part.text;
+                  parts.push(part);
+                } else if (part.type === "tool-call") {
+                  parts.push({
+                    type: "tool-invocation",
+                    toolInvocation: {
+                      state: "call",
+                      toolCallId: part.toolCallId,
+                      toolName: part.toolName,
+                      args: part.args
+                    }
+                  });
+                }
+              }
+            }
+
+            sanitizedAiMessages.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              content: textContent,
+              parts: parts
+            });
+          } else if (msg.role === "tool" && Array.isArray(msg.content)) {
+            // 遇到独立的工具结果消息，向前追溯并注入到对应的 assistant parts 中，不创建新独立消息
+            for (const toolResult of msg.content) {
+              if (toolResult.type === "tool-result") {
+                const targetAssistant = sanitizedAiMessages.find(m =>
+                  m.parts?.some((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId)
+                );
+                if (targetAssistant && targetAssistant.parts) {
+                  const targetPart = targetAssistant.parts.find((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId);
+                  if (targetPart) {
+                    targetPart.toolInvocation.state = "result";
+                    targetPart.toolInvocation.result = toolResult.result;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // 将用户的最新消息和缝合好的 UIMessages 拼接落盘
+        const updatedMessages = [...existingMessages, lastUserMessage, ...sanitizedAiMessages];
 
         await db.update(projects)
           .set({ uiMessages: updatedMessages })
