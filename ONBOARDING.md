@@ -518,3 +518,16 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **单行文本防御组合**: 后续在处理类似单行进度条、状态徽章等 Flex 布局时，必须将 `shrink-0`（防挤压）与 `whitespace-nowrap`（防折行）作为标配防御组合注入，然后再配合相对宽裕的预设宽度（如 `w-28`）保证垂直对齐。
+
+## 📝 [阶段更新] 上传区状态闭环与竞态条件 (Race Condition) 防御
+
+**1. 架构与状态流转 (Architecture State):**
+- 实现了 `assets.tsx` 内部的上传区自动收起闭环。废弃了提升状态至父组件 (Context/Props) 的过度设计方案，改为在路由内部通过 `useEffect` 嗅探 `jobs` 队列的终态（`ready` 或 `error`）。
+- 引入了 3 秒的视觉缓冲期，在任务全量完成后平滑地销毁任务流（隐藏上传区）。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (无脑重置与竞态截断)**: 严禁在异步延时回调（如 `setTimeout`）中直接执行绝对的状态覆盖（如 `setJobs([])`）。如果用户在倒计时期间拖入了新素材，粗暴的重置会把正在排队或上传的新任务直接“谋杀”，造成严重的数据截断。
+
+**3. 新共识与规范 (New Conventions):**
+- **原子化校验防线**: 所有基于延时的状态销毁，必须在执行瞬间使用 `set(current => ...)` 提取最新状态快照进行二次比对。一旦发现状态已不符合销毁条件（如加入了新任务），必须立即 `return current` 放弃操作。
+- **内存泄漏防御**: 所有挂载了 `setTimeout` 的 `useEffect`，必须在其开头拦截空状态（如 `if (jobs.length === 0) return;`），并在结尾强制返回 `clearTimeout` 清理函数。

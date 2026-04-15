@@ -159,6 +159,30 @@ export default function AssetsLibrary() {
     }
   };
 
+  // 架构师注入：任务全完成后的延时清理逻辑 (自动关闭上传区)
+  useEffect(() => {
+    if (jobs.length === 0) return;
+
+    // 检查是否所有任务都已到达终态 ('ready' 或 'error')
+    const allFinished = jobs.every(j => j.status === 'ready' || j.status === 'error');
+    
+    if (allFinished) {
+      const timer = setTimeout(() => {
+        // 利用 setState 的回调形式，执行终态双重校验 (防 Race Condition)
+        setJobs(currentJobs => {
+          const stillAllFinished = currentJobs.every(j => j.status === 'ready' || j.status === 'error');
+          if (stillAllFinished) {
+            return []; // 清空任务，从而触发 jobs.length === 0 隐去上传区
+          }
+          return currentJobs; // 期间有新任务加入，放弃清理
+        });
+      }, 3000); // 留出 3 秒展示成功状态的视觉缓冲期
+
+      // 清理函数：如果在 3 秒内 jobs 数组发生变化（如加入新任务），立即撤销销毁计划
+      return () => clearTimeout(timer);
+    }
+  }, [jobs]);
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-8 font-sans transition-colors duration-200">
       <div className="flex items-center justify-between mb-8 max-w-7xl mx-auto">
