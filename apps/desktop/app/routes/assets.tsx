@@ -1,5 +1,6 @@
 import { env } from '../env';
 import { Button } from "../components/Button";
+import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
 import { useState, useEffect } from "react";
 import { useRevalidator, useLoaderData } from "react-router";
 import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud, Trash2 } from "lucide-react";
@@ -12,6 +13,7 @@ interface Asset {
   id: string;
   filename: string;
   objectKey: string;
+  thumbnailUrl?: string;
   fileSize: number;
   duration: number;
   status: 'ready' | 'processing' | 'error';
@@ -109,12 +111,17 @@ export default function AssetsLibrary() {
     };
   }, []);
 
-  const handleDelete = async (e: React.MouseEvent, id: string, filename: string) => {
-    e.stopPropagation();
-    if (!window.confirm(`确定要永久删除素材 "${filename}" 吗？\n注意：此操作不可逆。`)) return;
+  const [deletingAsset, setDeletingAsset] = useState<{id: string, filename: string} | null>(null);
 
+  const handleDeleteClick = (e: React.MouseEvent, id: string, filename: string) => {
+    e.stopPropagation();
+    setDeletingAsset({ id, filename });
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingAsset) return;
     try {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets/${deletingAsset.id}`, { method: 'DELETE' });
       if (res.ok) {
         revalidator.revalidate(); // 乐观重新拉取数据
       } else {
@@ -122,6 +129,8 @@ export default function AssetsLibrary() {
       }
     } catch (error) {
       console.error('删除请求出错:', error);
+    } finally {
+      setDeletingAsset(null);
     }
   };
 
@@ -189,6 +198,14 @@ export default function AssetsLibrary() {
             ))}
           </div>
         )}
+        {deletingAsset && (
+          <DeleteConfirmModal
+            title="确认删除素材？"
+            description={`确定要永久删除素材 "${deletingAsset.filename}" 吗？\n注意：此操作不可逆。`}
+            onCancel={() => setDeletingAsset(null)}
+            onConfirm={confirmDelete}
+          />
+        )}
         {assets.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 border-2 border-dashed border-zinc-300 dark:border-zinc-800 rounded-xl text-zinc-500 bg-zinc-50/50 dark:bg-transparent transition-colors">
             <svg className="w-12 h-12 mb-4 opacity-50 text-zinc-400 dark:text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"></path></svg>
@@ -201,7 +218,7 @@ export default function AssetsLibrary() {
                 <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden transition-colors">
                   <Film className="w-8 h-8 text-zinc-400 dark:text-zinc-600 group-hover:scale-110 transition-transform duration-300" />
                   <button
-                    onClick={(e) => handleDelete(e, asset.id, asset.filename)}
+                    onClick={(e) => handleDeleteClick(e, asset.id, asset.filename)}
                     className="absolute top-2 left-2 p-1.5 bg-black/50 hover:bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200 backdrop-blur-sm z-10"
                     title="删除素材"
                   >

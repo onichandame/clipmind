@@ -351,3 +351,16 @@
 
 **3. 新共识与规范 (New Conventions):**
 - **流式滚动规范**: 在需要跟随高频流式内容自动滚动的场景中，必须且只能使用 `behavior: "auto"` 或直接操作 `scrollTop` 实现无缝瞬时对齐。
+
+## 📝 [阶段更新] 全局弹窗组件通用化与显式状态流转
+
+**1. 架构与状态流转 (Architecture State):**
+- 彻底抛弃了原生浏览器 `window.confirm` 的丑陋拦截，将其替换为受控的 `DeleteConfirmModal` React 组件。
+- 实现了 `DeleteConfirmModal` 的通用化重构。它不再硬编码针对“项目 (Project)”的文案，而是通过开放 `title` 和 `description` Props，成功复用于 `assets.tsx` 的资产删除链路与 `home.tsx` 的项目删除链路。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (隐式参数陷阱)**: 严禁在设计跨域复用的基础组件时，依赖默认缺省参数去处理主要业务线（如用缺省值代表 Project，用显式传参代表 Asset）。所有业务链路的调用必须保持**绝对显式 (Explicit)** 的对称设计，防止后续增加业务线时产生逻辑脑裂。
+- **DON'T DO (经验主义与幽灵路径)**: 严禁凭借经验盲猜文件路径。在进行全局搜索和替换时，必须基于 `find` 或 `grep` 的绝对输出证据进行寻址。本次在寻找 Project 路由时，差点因为预判 `projects.tsx` 而导致脚本崩溃。
+
+**3. 新共识与规范 (New Conventions):**
+- **原生降级废除**: 此后 ClipMind 桌面端中任何涉及“毁灭性操作（删除、覆盖等）”的拦截器，必须强制采用统一样式的受控 Modal 组件（如 `DeleteConfirmModal`），绝对禁止再出现原生 `window.confirm`。

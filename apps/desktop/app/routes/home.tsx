@@ -177,6 +177,8 @@ export default function Home() {
       {/* Delete Confirmation Modal */}
       {deleteId && (
         <DeleteConfirmModal
+          title="确认删除项目？"
+          description={`此操作将永久删除该项目对应的策划大纲并清空素材篮子。底层的全局素材库不会受到影响。`}
           onCancel={() => setDeleteId(null)}
           onConfirm={() => confirmDelete(deleteId)}
         />
