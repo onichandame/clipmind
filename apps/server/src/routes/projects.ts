@@ -34,14 +34,13 @@ app.post('/', async (c) => {
     const GREETING = "你好！我是你的创作助理 ClipMind。今天打算怎么开启工作？是想先聊聊灵感、策划一个新短视频大纲，还是脑子里已经有确切的画面，直接去库里精准找素材片段？";
 
     // 1. 物理创建项目记录（包含初始 Greeting 消息）
+    // [Arch] 读写分离：使用纯净 CoreMessage 结构入库
     await db.insert(projects).values({
       id: newId,
       title: "未命名大纲",
       uiMessages: [{
-        id: crypto.randomUUID(),
         role: 'assistant',
         content: GREETING,
-        parts: [{ type: 'text', text: GREETING }],
       }],
     });
 
@@ -73,18 +72,74 @@ app.get('/:id', async (c) => {
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
 
-    const initialMessages = (() => {
-      try {
-        return projectRes[0].uiMessages || [];
-      } catch {
-        return [{ id: 'fallback', role: 'assistant', content: ' ', parts: [{ type: 'text', text: ' ' }] }];
+    // [Arch] 读写分离重构 (读链路)：将底层 CoreMessage 动态投影为前端 UIMessage
+    const rawMessages = projectRes[0].uiMessages || [];
+    const initialMessages: any[] = [];
+
+    if (Array.isArray(rawMessages)) {
+      for (const msg of rawMessages) {
+        if (msg.role === 'user' || msg.role === 'system') {
+          initialMessages.push({
+            id: msg.id || crypto.randomUUID(),
+            role: msg.role,
+            content: typeof msg.content === 'string' ? msg.content : '',
+            parts: typeof msg.content === 'string' ? [{ type: 'text', text: msg.content }] : msg.content
+          });
+        } else if (msg.role === 'assistant') {
+          let textContent = "";
+          const parts: any[] = [];
+
+          if (typeof msg.content === "string") {
+            textContent = msg.content;
+            parts.push({ type: "text", text: msg.content });
+          } else if (Array.isArray(msg.content)) {
+            for (const part of msg.content) {
+              if (part.type === "text") {
+                textContent += part.text;
+                parts.push(part);
+              } else if (part.type === "tool-call") {
+                parts.push({
+                  type: "tool-invocation",
+                  toolInvocation: {
+                    state: "call",
+                    toolCallId: part.toolCallId,
+                    toolName: part.toolName,
+                    args: part.args
+                  }
+                });
+              }
+            }
+          }
+          initialMessages.push({
+            id: msg.id || crypto.randomUUID(),
+            role: "assistant",
+            content: textContent,
+            parts: parts
+          });
+        } else if (msg.role === "tool" && Array.isArray(msg.content)) {
+          // 将工具结果回填至 UIMessage 的 parts 中
+          for (const toolResult of msg.content) {
+            if (toolResult.type === "tool-result") {
+              const targetAssistant = initialMessages.find(m =>
+                m.parts?.some((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId)
+              );
+              if (targetAssistant && targetAssistant.parts) {
+                const targetPart = targetAssistant.parts.find((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId);
+                if (targetPart) {
+                  targetPart.toolInvocation.state = "result";
+                  targetPart.toolInvocation.result = toolResult.result;
+                }
+              }
+            }
+          }
+        }
       }
-    })();
+    }
 
     return c.json({
       project: projectRes[0],
       outline: outlineRes.length > 0 ? outlineRes[0] : null,
-      initialMessages: initialMessages
+      initialMessages: initialMessages.length > 0 ? initialMessages : [{ id: 'fallback', role: 'assistant', content: ' ', parts: [{ type: 'text', text: ' ' }] }]
     });
   } catch (error) {
     console.error("Failed to fetch project details:", error);

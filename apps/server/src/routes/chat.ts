@@ -34,7 +34,13 @@ app.post("/", async (c) => {
 
   const model = createAIModel();
 
-  const safeMessages = await convertToModelMessages(messages);
+  // [Arch] 读写分离重构 (写链路)：抛弃前端传入的伪造历史，以数据库中的 CoreMessage 为单一真理源
+  const existingProject = await db.select({ uiMessages: projects.uiMessages }).from(projects).where(eq(projects.id, projectId)).limit(1);
+  const coreHistory: any[] = (existingProject[0]?.uiMessages as any[]) || [];
+
+  const lastUserMsg = messages[messages.length - 1];
+  const safeMessages = [...coreHistory, { role: 'user', content: lastUserMsg.content }];
+
   const MAX_STEPS = 5;
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
@@ -210,65 +216,9 @@ app.post("/", async (c) => {
           existingMessages = existingProject[0].uiMessages as UIMessage[];
         }
 
-        // [架构红线修复] Vercel AI SDK v6 协议对齐
-        // response.messages 是 CoreMessage[]，含有单独的 role: "tool"。
-        // 必须将其强行降维并缝合为前端 useChat 认识的 UIMessage (融合 tool-invocation 至 parts 中)
-        const sanitizedAiMessages: any[] = [];
-
-        for (const msg of response.messages) {
-          if (msg.role === 'assistant') {
-            let textContent = "";
-            const parts: any[] = [];
-
-            if (typeof msg.content === "string") {
-              textContent = msg.content;
-              parts.push({ type: "text", text: msg.content });
-            } else if (Array.isArray(msg.content)) {
-              for (const part of msg.content) {
-                if (part.type === "text") {
-                  textContent += part.text;
-                  parts.push(part);
-                } else if (part.type === "tool-call") {
-                  parts.push({
-                    type: "tool-invocation",
-                    toolInvocation: {
-                      state: "call",
-                      toolCallId: part.toolCallId,
-                      toolName: part.toolName,
-                      args: part.args
-                    }
-                  });
-                }
-              }
-            }
-
-            sanitizedAiMessages.push({
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: textContent,
-              parts: parts
-            });
-          } else if (msg.role === "tool" && Array.isArray(msg.content)) {
-            // 遇到独立的工具结果消息，向前追溯并注入到对应的 assistant parts 中，不创建新独立消息
-            for (const toolResult of msg.content) {
-              if (toolResult.type === "tool-result") {
-                const targetAssistant = sanitizedAiMessages.find(m =>
-                  m.parts?.some((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId)
-                );
-                if (targetAssistant && targetAssistant.parts) {
-                  const targetPart = targetAssistant.parts.find((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId);
-                  if (targetPart) {
-                    targetPart.toolInvocation.state = "result";
-                    targetPart.toolInvocation.result = toolResult.result;
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // 将用户的最新消息和缝合好的 UIMessages 拼接落盘
-        const updatedMessages = [...existingMessages, lastUserMessage, ...sanitizedAiMessages];
+        // [Arch] 读写分离重构 (写链路)：100% 底层数据无损落盘。
+        // 直接将原生 CoreMessage 追加，不进行任何转换！
+        const updatedMessages = [...existingMessages, { role: 'user', content: lastUserMessage.content }, ...response.messages];
 
         await db.update(projects)
           .set({ uiMessages: updatedMessages })
