@@ -642,3 +642,18 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 - **案发现场**：阿里云处理成功，但 Node 后端没有任何日志，触发了阿里云的指数退避重试并最终死信。
 - **根本原因**：写好了 `asr-callback.ts`，却忘记在 `index.ts` 中通过 `app.route` 挂载它，导致阿里云吃到了 404 闭门羹。
 - **防线铁律**：每写一个对外的 Webhook 接口，第一步先去主入口挂载，并用 `curl` 或 Postman 打一个空包验证 `400 Bad Request`，证明大门是敞开的。
+
+## 📝 [阶段更新] 端侧连环并发风暴与 IPC 崩溃治愈 (OOM & V8 Trap)
+
+**1. 架构与状态流转 (Architecture State):**
+- 移除了前端 `assets.tsx` 中的冗余的全局 `upload-progress` 事件监听器，修复了多任务并发时 React 闭包互相覆盖导致的“进度冻结”死锁。
+- 修复了 Rust 层 `ffmpeg-progress` 的 JSON 序列化发射协议，使其正确匹配前端的 `{ log: string }` 结构。
+- 移除了 Rust 侧边车脱壳并发上传阶段冗余的缩略图 `File::open` 读取块，阻断了 IO 句柄的翻倍抢夺。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (IPC 事件洪水与 V8 崩溃)**: 在使用 Tauri 处理诸如文件流读取或外部进程输出时，**绝对禁止**省略时间节流阀，更**禁止**在限流判断中混入无意义的短路逻辑（如 `|| uploaded == file_size`）。这会导致极小文件在读取末尾时瞬间击穿限流阀，一秒内向前端 V8 引擎发射数以万计的事件，直接导致 `NeedDebuggerBreak trap` 致命崩溃。
+- **DON'T DO (物理文件重复打开并发读)**: 在脱壳后台（如 `tokio::spawn`）并发循环中，**严禁**因为“代码复制”导致对同一个物理临时文件（如缩略图）进行多次并发 `File::open` 与 Stream 转化。这会在多任务堆叠时极速消耗操作系统的 IO 句柄和内存缓冲池，引发底层内存溢出 (OOM)。
+
+**3. 新共识与规范 (New Conventions):**
+- **严守唯一监听器原则**: 前端处理高频跨进程消息（IPC events）时，只允许全局存在唯一的 `listen` 监听器，并在组件卸载时强制解绑。
+- **节流阀基准线**: 后端 Rust 发送所有的非关键性进度事件（如上传进度、FFmpeg 输出），统一锚定 `500ms` 为最低安全限流间隔，防风暴拦截逻辑只认 `Instant`，不认其他条件。

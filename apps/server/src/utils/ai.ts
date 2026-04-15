@@ -10,17 +10,19 @@ export function requireOpenAIKey(): string {
   return key;
 }
 
-export function createAIModel() {
-  const modelId = process.env.AI_CHAT_MODEL || "gpt-4o-mini";
+// 导出全局唯一的 OpenAI Provider 实例，供全链路复用
+export function getAIProvider() {
   const baseURL = process.env.OPENAI_BASE_URL;
-
-  const provider = createOpenAI({
+  return createOpenAI({
     apiKey: requireOpenAIKey(),
     ...(baseURL ? { baseURL } : {}),
   });
+}
 
+export function createAIModel() {
+  const modelId = process.env.AI_CHAT_MODEL || "gpt-4o-mini";
   // 关键修复：显式使用 .chat()，避免 SDK 默认去请求不支持的 /responses 端点
-  return provider.chat(modelId);
+  return getAIProvider().chat(modelId);
 }
 
 export const SYSTEM_PROMPT = `You are ClipMind, an AI-powered video creation assistant.

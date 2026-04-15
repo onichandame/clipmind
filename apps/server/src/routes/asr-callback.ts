@@ -2,8 +2,34 @@ import { Hono } from "hono";
 import { assets, assetChunks } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
+import { generateEmbeddings } from "../utils/embeddings";
+import { upsertVectors } from "../utils/qdrant";
 
 const app = new Hono();
+
+async function processVectorization(assetId: string, chunks: any[]) {
+  try {
+    console.log(`[Vectorization] Starting task for asset ${assetId}...`);
+    const texts = chunks.map(c => c.transcriptText);
+    const vectors = await generateEmbeddings(texts);
+    
+    const points = chunks.map((chunk, i) => ({
+      id: chunk.id,
+      vector: vectors[i],
+      payload: {
+        assetId: chunk.assetId,
+        startTime: chunk.startTime,
+        endTime: chunk.endTime,
+        text: chunk.transcriptText
+      }
+    }));
+
+    await upsertVectors(points);
+    console.log(`✅ [Vectorization] Asset ${assetId} synced to Qdrant successfully.`);
+  } catch (error) {
+    console.error(`❌ [Vectorization] Task failed for asset ${assetId}:`, error);
+  }
+}
 
 app.post("/", async (c) => {
   try {
@@ -47,6 +73,8 @@ app.post("/", async (c) => {
 
         await db.insert(assetChunks).values(chunksToInsert);
         console.log(`✅ ASR 切片落盘成功：资产 ${assetId}，共生成 ${chunksToInsert.length} 条 RAG 索引片段。`);
+        
+        processVectorization(assetId, chunksToInsert).catch(console.error);
       }
     } else {
       // 失败状态流转

@@ -13,6 +13,10 @@ const serverEnvSchema = z.object({
   ALIYUN_ACCESS_KEY_SECRET: z.string().min(1, "缺少 ALIYUN_ACCESS_KEY_SECRET"),
   ALIYUN_ASR_APPKEY: z.string().min(1, "缺少 ALIYUN_ASR_APPKEY"),
   PUBLIC_WEBHOOK_DOMAIN: z.string().url({ message: "PUBLIC_WEBHOOK_DOMAIN 必须是合法的 URL" }),
+  OPENAI_API_KEY: z.string().min(1, "缺少 OPENAI_API_KEY"),
+  OPENAI_BASE_URL: z.string().url({ message: "OPENAI_BASE_URL 必须是合法的 URL" }),
+  QDRANT_URL: z.string().url({ message: "QDRANT_URL 必须是合法的 URL" }),
+  QDRANT_API_KEY: z.string().optional(),
 });
 
 export const serverConfig = serverEnvSchema.parse(process.env);
