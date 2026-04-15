@@ -420,12 +420,15 @@ async fn process_video_asset(
     // 克隆一份用于清理兜底
     let temp_thumb_cleanup = temp_thumb.clone();
 
+    // 提取业务文件名透传
+    let filename_clone = filename.clone();
+
     // 约束 4 & 5: 开启 tokio::spawn 异步上传，不阻塞主流程
     tokio::spawn(async move {
         let client = Client::new();
 
         let async_flow: Result<(), String> = async {
-            let token_payload = serde_json::json!({ "filename": "video.mp4" });
+            let token_payload = serde_json::json!({ "filename": filename_clone });
             let token_res = client
                 .post(format!("{}/api/upload-token", server_url))
                 .json(&token_payload)
@@ -458,7 +461,7 @@ async fn process_video_asset(
                 serde_json::json!({ "id": job_id, "progress": 10 }),
             );
 
-            client
+            let video_res = client
                 .put(&token_res.video_upload_url)
                 .header(CONTENT_LENGTH, file_size)
                 .header(CONTENT_TYPE, mime_type)
@@ -466,6 +469,12 @@ async fn process_video_asset(
                 .send()
                 .await
                 .map_err(|e| e.to_string())?;
+
+            if !video_res.status().is_success() {
+                let status = video_res.status();
+                let err_text = video_res.text().await.unwrap_or_default();
+                return Err(format!("视频直传被 OSS 拒绝! 状态码: {}, 错误信息: {}", status, err_text));
+            }
 
             let _ = app_clone.emit(
                 "upload-progress",
@@ -481,6 +490,20 @@ async fn process_video_asset(
                         .header(CONTENT_LENGTH, meta.len())
                         .header(CONTENT_TYPE, "image/jpeg")
                         .body(reqwest::Body::wrap_stream(thumb_stream))
+                        .send()
+                        .await;
+                }
+            }
+
+            // 轨道 2: 音频轨道直传 (用于后端 ASR)
+            if let Ok(audio_file) = tokio::fs::File::open(&temp_audio).await {
+                if let Ok(meta) = audio_file.metadata().await {
+                    let audio_stream = FramedRead::new(audio_file, BytesCodec::new());
+                    let _ = client
+                        .put(&token_res.audio_upload_url)
+                        .header(CONTENT_LENGTH, meta.len())
+                        .header(CONTENT_TYPE, "audio/aac")
+                        .body(reqwest::Body::wrap_stream(audio_stream))
                         .send()
                         .await;
                 }
