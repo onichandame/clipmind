@@ -2,7 +2,7 @@ import { useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { WorkspaceLayout } from "../components/WorkspaceLayout";
 import { Loader2 } from "lucide-react";
-import { env } from "~/env";
+import { env } from '../env';
 
 export default function ProjectWorkspace() {
   const { projectId } = useParams();
