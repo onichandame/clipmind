@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { projectOutlines } from "@clipmind/db";
+import { projectOutlines, editingPlans } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
 import { z } from "zod";
@@ -15,6 +15,9 @@ app.post("/", async (c) => {
 
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
   let dynamicSystemPrompt = SYSTEM_PROMPT;
+
+  dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
+
   if (currentOutline) {
     dynamicSystemPrompt += `\n\n## Current Project State\n\n`;
     dynamicSystemPrompt += `The user has an existing outline on the canvas. `;
@@ -59,6 +62,40 @@ app.post("/", async (c) => {
     },
 
     tools: {
+      generateEditingPlan: tool({
+        description: "基于素材检索结果，生成结构化的剪辑方案（Editing Plan）并持久化到数据库。禁止在对话中输出大段方案，必须调用此工具。",
+        inputSchema: z.object({
+          title: z.string().describe("剪辑方案的标题"),
+          platform: z.string().describe("目标发布平台（如抖音、B站、小红书等）"),
+          targetDuration: z.number().describe("目标视频时长（秒）"),
+          clips: z.array(z.object({
+            startTime: z.number().describe("切片起始时间（毫秒）"),
+            endTime: z.number().describe("切片结束时间（毫秒）"),
+            text: z.string().describe("切片台词内容"),
+            description: z.string().describe("编导对该切片的剪辑意图与画面描述")
+          })).describe("选用的视频切片列表")
+        }).strict(),
+        execute: async (args) => {
+          try {
+            if (!args || !args.title || !args.clips || !Array.isArray(args.clips)) {
+              console.warn("⚠️ [AI WARN] generateEditingPlan 拦截到空传参，已触发重试");
+              return { success: false, error: "Missing required parameters. 'title' and 'clips' are mandatory." };
+            }
+            await db.insert(editingPlans).values({
+              id: crypto.randomUUID(),
+              projectId: projectId,
+              title: args.title,
+              platform: args.platform,
+              targetDuration: args.targetDuration,
+              clips: args.clips
+            });
+            return { success: true, message: '剪辑方案已成功生成并保存至数据库' };
+          } catch (dbError) {
+            console.error("❌ generateEditingPlan 数据库写入失败:", dbError);
+            return { success: false, error: "Database error during editing plan insertion" };
+          }
+        }
+      }),
       updateOutline: tool({
         description: "生成、覆盖或修改当前的视频 Markdown 大纲。注意：你必须提供 contentMd 参数。",
         inputSchema: z.object({ contentMd: z.string().describe('最新版本的完整 Markdown 内容') }).strict(),

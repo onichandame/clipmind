@@ -62,3 +62,15 @@ export const basketItems = mysqlTable('basket_items', {
   sortRank: varchar('sort_rank', { length: 255 }).notNull(),
   addedAt: timestamp('added_at').defaultNow().notNull(),
 });
+
+export const editingPlans = mysqlTable('editing_plans', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  projectId: varchar('project_id', { length: 36 })
+    .notNull()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  title: varchar('title', { length: 255 }).notNull(),
+  platform: varchar('platform', { length: 100 }),
+  targetDuration: int('target_duration'),
+  clips: json('clips'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
