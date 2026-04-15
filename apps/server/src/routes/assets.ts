@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { db, assets } from "@clipmind/db";
+import { assets } from "@clipmind/db";
 import { desc, eq } from "drizzle-orm";
+import { db } from "../db";
 
 const app = new Hono();
 

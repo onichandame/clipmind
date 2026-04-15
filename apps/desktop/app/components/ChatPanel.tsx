@@ -147,7 +147,6 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 {(() => {
                   const msg = message;
                   let textToRender = msg?.parts?.filter(p => p.type === 'text').map(p => p.text).join('') || ``
-                  console.log(`text to render: `, textToRender)
 
                   if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
 
