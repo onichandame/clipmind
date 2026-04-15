@@ -174,13 +174,13 @@ export default function AssetsLibrary() {
         {jobs.length > 0 && (
           <div className="mb-8 p-4 bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800/80 rounded-xl space-y-3 transition-colors">
             <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2 transition-colors">
-              <Activity className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> 并发处理管道
+              <Activity className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> 上传区
             </h2>
             {jobs.map(job => (
               <div key={job.id} className="flex items-center gap-4 bg-white dark:bg-zinc-950 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800/50 shadow-sm dark:shadow-none transition-colors">
                 <div className="flex-1 truncate text-sm text-zinc-800 dark:text-zinc-300 transition-colors">{job.filename}</div>
                 <div className="flex-[2] flex items-center gap-3 text-xs">
-                  <span className={`w-20 font-medium ${job.status === 'compressing' ? 'text-amber-400 animate-pulse' : job.status === 'uploading' ? 'text-blue-400' : job.status === 'ready' ? 'text-emerald-400' : 'text-zinc-500'}`}>
+                  <span className={`w-28 shrink-0 whitespace-nowrap font-medium ${job.status === 'compressing' ? 'text-amber-400 animate-pulse' : job.status === 'uploading' ? 'text-blue-400' : job.status === 'ready' ? 'text-emerald-400' : 'text-zinc-500'}`}>
                     {job.status === 'queued' && '等待中...'}
                     {job.status === 'compressing' && '⚙️ 极速处理中'}
                     {job.status === 'uploading' && `☁️ 上传中 ${job.progress}%`}

@@ -507,3 +507,14 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **目录即生命周期**: 后续任何新增的媒体轨道（Track），必须统一放置在 `assets/{assetId}/` 的物理边界内。底层清理任务只认 `assetId`，不再关心具体的轨道业务文件。
+
+## 📝 [阶段更新] 进度条排版折行与 Tailwind Flex 宽度陷阱
+
+**1. 架构与状态流转 (Architecture State):**
+- 优化了资产列表 (`assets.tsx`) 的状态与进度条渲染层。修复了因文本超长导致的 Flex 子容器折行与高度撑破问题，确保了极速处理与直传状态下的视觉稳定性。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (硬编码宽度陷阱)**: 严禁在包含动态长度文本（如不断增长的进度百分比、含 Emoji 的状态文字）的 Flex 子项中，仅依靠硬编码短宽度（如 `w-20`）进行限制。当内容超限时，默认的 Flex 行为会允许文本折行，直接破坏整体行高与排版。
+
+**3. 新共识与规范 (New Conventions):**
+- **单行文本防御组合**: 后续在处理类似单行进度条、状态徽章等 Flex 布局时，必须将 `shrink-0`（防挤压）与 `whitespace-nowrap`（防折行）作为标配防御组合注入，然后再配合相对宽裕的预设宽度（如 `w-28`）保证垂直对齐。
