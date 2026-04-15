@@ -36,10 +36,26 @@ app.post("/", async (c) => {
 
   // [Arch] 读写分离重构 (写链路)：抛弃前端传入的伪造历史，以数据库中的 CoreMessage 为单一真理源
   const existingProject = await db.select({ uiMessages: projects.uiMessages }).from(projects).where(eq(projects.id, projectId)).limit(1);
-  const coreHistory: any[] = (existingProject[0]?.uiMessages as any[]) || [];
+  const rawHistory: any[] = (existingProject[0]?.uiMessages as any[]) || [];
+
+  // 清洗防线：确保从数据库读出的历史记录严格符合 CoreMessage，防止被早期脏数据污染
+  const coreHistory = rawHistory.map((msg: any) => {
+    if (msg.role === 'tool') return msg;
+    return {
+      role: msg.role,
+      content: typeof msg.content === 'string'
+        ? msg.content
+        : (Array.isArray(msg.content) ? (msg.content.some((c: any) => c.type === 'tool-call') ? msg.content : msg.content.map((c: any) => c.text || '').join('\n')) : '')
+    };
+  });
 
   const lastUserMsg = messages[messages.length - 1];
-  const safeMessages = [...coreHistory, { role: 'user', content: lastUserMsg.content }];
+  // 核心大修：绝对禁止手动拼接 { content: lastUserMsg.content }！
+  // AI SDK v6 的前端 UIMessage 中 content 可能为空，真实文本在 parts 数组中。
+  // 必须调用官方 convertToModelMessages 将其安全提取提纯为 CoreMessage。
+  const userCoreMessages = await convertToModelMessages([lastUserMsg]);
+
+  const safeMessages = [...coreHistory, ...userCoreMessages];
 
   const MAX_STEPS = 5;
 
@@ -217,8 +233,8 @@ app.post("/", async (c) => {
         }
 
         // [Arch] 读写分离重构 (写链路)：100% 底层数据无损落盘。
-        // 直接将原生 CoreMessage 追加，不进行任何转换！
-        const updatedMessages = [...existingMessages, { role: 'user', content: lastUserMessage.content }, ...response.messages];
+        // 写入经过安全清洗的 coreHistory，结合官方规范解析的 userCoreMessages
+        const updatedMessages = [...coreHistory, ...userCoreMessages, ...response.messages];
 
         await db.update(projects)
           .set({ uiMessages: updatedMessages })
