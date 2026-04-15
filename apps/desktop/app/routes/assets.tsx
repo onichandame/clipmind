@@ -49,15 +49,6 @@ export default function AssetsLibrary() {
     setJobs(prev => prev.map(j => j.id === id ? { ...j, ...updates } : j));
   };
 
-  // 全局挂载来自 Rust 的进度流监听器
-  useEffect(() => {
-    let unlisten: () => void;
-    listen<{ id: string, progress: number }>('upload-progress', (event) => {
-      updateJob(event.payload.id, { progress: event.payload.progress });
-    }).then(f => { unlisten = f; });
-    return () => { if (unlisten) unlisten(); };
-  }, []);
-
   const handleSelectFiles = async () => {
     // 兼容大写后缀名 (如相机直接导出的 .MOV / .MP4)
     const selected = await open({ multiple: true, filters: [{ name: 'Videos', extensions: ['mp4', 'mov', 'MP4', 'MOV'] }] });

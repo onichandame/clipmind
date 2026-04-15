@@ -60,11 +60,12 @@ async fn upload_asset(
 
         uploaded += bytes_read as u64;
 
-        if last_emit.elapsed() >= throttle || uploaded == file_size {
-          let progress = ((uploaded as f64 / file_size as f64) * 100.0) as u8;
-          let _ = app_handle.emit("upload-progress", serde_json::json!({ "id": &id_for_emit, "progress": progress }));
-          last_emit = std::time::Instant::now();
-        }
+        // 核心修复 (防 IPC 风暴)：强制移除 `|| uploaded == file_size` 的穿透漏洞，仅依赖时间节流
+          if last_emit.elapsed() >= std::time::Duration::from_millis(500) {
+            let progress = ((uploaded as f64 / file_size as f64) * 100.0) as u8;
+            let _ = app_handle.emit("upload-progress", serde_json::json!({ "id": &id_for_emit, "progress": progress }));
+            last_emit = std::time::Instant::now();
+          }
 
         // 核心修复：明确指明 Yield 的类型是 Result<Bytes, std::io::Error>
         yield Ok::<bytes::Bytes, std::io::Error>(bytes::Bytes::copy_from_slice(&buffer[..bytes_read]));
@@ -352,12 +353,16 @@ async fn process_video_asset(
         .args([
             "-i",
             &local_path_clone,
-            // 音频抽取配置
+            // 音频抽取配置：严格降维至 16kHz/单声道 以迎合阿里云 ASR 模型
             "-vn",
             "-c:a",
             "aac",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
             "-b:a",
-            "128k",
+            "32k", // 16kHz 单声道 32k 码率足矣，极限压缩上传体积
             &temp_audio,
             // 截帧配置 (0.5秒处截1帧)
             "-ss",
@@ -399,7 +404,11 @@ async fn process_video_asset(
             }
 
             if last_emit.elapsed() > Duration::from_millis(500) {
-                let _ = app_ffmpeg.emit("ffmpeg-progress", &line);
+                // 修复：对齐前端期望的 { log: string } 结构
+                let _ = app_ffmpeg.emit(
+                    "ffmpeg-progress",
+                    serde_json::json!({ "log": line.to_string() }),
+                );
                 last_emit = Instant::now();
             }
         }
@@ -535,20 +544,6 @@ async fn process_video_asset(
                         .header(CONTENT_LENGTH, meta.len())
                         .header(CONTENT_TYPE, "audio/aac")
                         .body(reqwest::Body::wrap_stream(audio_stream))
-                        .send()
-                        .await;
-                }
-            }
-
-            // 轨道 3: 缩略图直传
-            if let Ok(thumb_file) = tokio::fs::File::open(&temp_thumb).await {
-                if let Ok(meta) = thumb_file.metadata().await {
-                    let thumb_stream = FramedRead::new(thumb_file, BytesCodec::new());
-                    let _ = client
-                        .put(&token_res.thumb_upload_url)
-                        .header(CONTENT_LENGTH, meta.len())
-                        .header(CONTENT_TYPE, "image/jpeg")
-                        .body(reqwest::Body::wrap_stream(thumb_stream))
                         .send()
                         .await;
                 }
