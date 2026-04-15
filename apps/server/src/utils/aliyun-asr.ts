@@ -11,6 +11,9 @@ import Core from '@alicloud/pop-core';
  * @param audioOssUrl 需要识别的音频公网/预签名 URL
  */
 export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) {
+  console.log("\n------------------------------------------");
+  console.log(`[DEBUG: Aliyun-ASR] 1. submitAliyunAsrTask 被调用`);
+  console.log(`[DEBUG: Aliyun-ASR] 接收参数 - assetId: ${assetId}, audioOssUrl: ${audioOssUrl}`);
   // 架构师红线：此处依赖阿里云鉴权，实际项目中须在 env 中配置 AK/SK
   const appKey = serverConfig.ALIYUN_ASR_APPKEY;
   if (!appKey) {
@@ -37,11 +40,15 @@ export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) 
       callback_url: `${serverConfig.PUBLIC_WEBHOOK_DOMAIN}/api/asr-callback`
     };
 
+    console.log(`[DEBUG: Aliyun-ASR] 2. 组装的发往阿里云的 Task Payload:`, JSON.stringify(task));
+
     const response: any = await client.request(
       'SubmitTask',
       { Task: JSON.stringify(task) },
       { method: 'POST' }
     );
+
+    console.log(`[DEBUG: Aliyun-ASR] 3. 阿里云返回的原始 Response:`, JSON.stringify(response));
 
     if (response.StatusText !== 'SUCCESS') {
       throw new Error(`Aliyun Reject: ${response.StatusText}`);

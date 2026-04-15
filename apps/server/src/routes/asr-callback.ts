@@ -7,7 +7,10 @@ const app = new Hono();
 
 app.post("/", async (c) => {
   try {
+    console.log("\n******************************************");
+    console.log("[DEBUG: ASR-Callback] 1. 收到阿里云的回调 POST 请求!");
     const body = await c.req.json();
+    console.log("[DEBUG: ASR-Callback] 2. 回调请求体:", JSON.stringify(body));
     
     // 依据阿里云 FileTrans Webhook 官方结构解析
     const taskId = body.TaskId;
