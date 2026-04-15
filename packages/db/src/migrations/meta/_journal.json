@@ -71,6 +71,13 @@
       "when": 1776151312500,
       "tag": "0009_aspiring_captain_britain",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1776225568615,
+      "tag": "0010_fuzzy_thaddeus_ross",
+      "breakpoints": true
     }
   ]
 }

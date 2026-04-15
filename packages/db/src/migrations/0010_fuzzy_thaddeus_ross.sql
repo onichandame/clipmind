@@ -1,0 +1,1 @@
+ALTER TABLE `assets` ADD `thumbnail_url` varchar(1024);
