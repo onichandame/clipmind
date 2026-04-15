@@ -484,3 +484,15 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - ASR 任务提交必须强依赖 `serverConfig.PUBLIC_WEBHOOK_DOMAIN` 作为回调基地址，确保本地开发与线上部署的网络链路具有自适应性。
+
+## 📝 [阶段更新] OSS 幽灵资产巡检 DDD 重构与白名单黑洞修复 (Data Loss Prevention)
+
+**1. 架构与状态流转 (Architecture State):**
+- **DDD 聚合根防线**: 彻底重构了 `cleanup-dangling-oss.ts` 的巡检逻辑。废弃了通过 `ossUrl`、`audioOssUrl` 等具名轨道字段拼接白名单的脆弱做法。
+- **目录级物理校验**: 确立了以 `assetId` 为核心的领域聚合根判定标准。现有的巡检逻辑会直接提取 OSS 文件路径中的 `assetId`（如 `assets/{assetId}/...`），只要该 ID 在数据库中存活，该目录下的所有轨道文件（含未来新增的字幕、水印等）均受绝对保护。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (白名单黑洞与数据误删)**: **绝对禁止**在遍历校验物理资产时，依赖数据库中硬编码的字段列（如只查 video 和 audio）去生成放行白名单。我们在新增 `thumbnailUrl` 时忘记更新巡检任务，导致合法的缩略图被当成幽灵资产大面积误删。业务层级的字段扩展绝不能影响底层存储的安全底线。
+
+**3. 新共识与规范 (New Conventions):**
+- **目录即生命周期**: 后续任何新增的媒体轨道（Track），必须统一放置在 `assets/{assetId}/` 的物理边界内。底层清理任务只认 `assetId`，不再关心具体的轨道业务文件。
