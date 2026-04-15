@@ -672,3 +672,15 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **手动基建边界**: 数据库 (PostgreSQL/MySQL) 的 Schema 变更由 Drizzle 的 Migration 管理；但向量数据库 (Qdrant) 的 Collection 与 Payload 索引建立，必须作为纯粹的 IaC/运维脚本手动执行，代码层只负责 `Upsert` 纯净的数据点。
+
+## 📝 [阶段更新] 数据生命周期治理与 Qdrant 幽灵向量清除 (Data Lifecycle Governance)
+
+**1. 架构与状态流转 (Architecture State):**
+- **生命周期闭环**: 补齐了向量数据库的删除链路。在 `DELETE /api/assets/:id` 路由中，当 MySQL 记录物理删除后，同步触发 Qdrant 的 Filter 删除接口，按 `assetId` 抹除关联切片。
+- **非阻塞降级 (Fire-and-Forget)**: Qdrant 的删除网络请求被刻意设计为不阻断主线程 (`.catch` 兜底)，确保外部向量引擎的网络抖动绝不影响核心业务资产库的物理销毁。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (误判删除失败与过度优化)**: 严禁在调用 Qdrant 删除 Point 后，因为观测到 Segment (段) 和 Shard (分片) 数量未变而判定为存在 Bug。Qdrant 底层采用类似 LSM-Tree 的不可变段结构，删除仅仅是打上 Tombstone (墓碑) 标记。真正的物理空间回收依赖于后台的异步 Compaction (压缩/合并) 机制。绝对禁止为了立刻释放磁盘而在业务代码中强行调用 Qdrant 的 Optimizer API，这会引发毁灭性的集群 IO 风暴。
+
+**3. 新共识与规范 (New Conventions):**
+- **单一数据源原则**: 任何衍生数据（如 ASR 文本、RAG 向量）的生命周期，必须严格依附于顶级实体 Asset。删除 Asset 必须触发全链路联动的“雪崩删除”。
