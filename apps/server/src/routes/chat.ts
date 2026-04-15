@@ -4,6 +4,8 @@ import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
 import { z } from "zod";
 import { db } from "../db";
+import { generateEmbeddings } from "../utils/embeddings";
+import { searchVectors } from "../utils/qdrant";
 
 const app = new Hono();
 
@@ -86,9 +88,38 @@ app.post("/", async (c) => {
         }
       }),
       searchFootage: tool({
-        description: "Search footage",
-        inputSchema: z.object({ query: z.string() }),
-        execute: async ({ }) => { return { clips: [], total: 0, message: "Mock" }; }
+        description: "根据用户查询的文本意图，在全局视频素材库（Qdrant）中进行向量语义检索，寻找最匹配的视频文本切片。当用户询问具体视频内容或需要补充素材时调用此工具。",
+        inputSchema: z.object({
+          query: z.string().describe('用于执行语义检索的查询关键词'),
+          limit: z.number().min(1).max(20).optional().default(20).describe('期望返回的视频片段最大数量（上限20）')
+        }),
+        execute: async ({ query, limit }) => {
+          try {
+            console.log(`[RAG] LLM 触发向量检索: query="${query}", limit=${limit}`);
+            const embeddings = await generateEmbeddings([query]);
+            if (!embeddings || embeddings.length === 0) {
+              return { success: false, error: "生成文本向量失败" };
+            }
+
+            // 全局搜索视频切片
+            const qdrantResults = await searchVectors(embeddings[0], limit);
+
+            // 过滤提取核心 payload，剥离高维向量数组，降低 LLM Context Token 消耗
+            const clips = qdrantResults.map((p: any) => ({
+              score: p.score,
+              assetId: p.payload?.assetId,
+              text: p.payload?.text,
+              startTime: p.payload?.startTime,
+              endTime: p.payload?.endTime,
+            }));
+
+            console.log(`[RAG] 检索完成，召回 ${clips.length} 条相关切片`);
+            return { success: true, clips, total: clips.length };
+          } catch (error) {
+            console.error("❌ RAG 检索失败:", error);
+            return { success: false, error: "向量数据库检索异常" };
+          }
+        }
       }),
     },
   });

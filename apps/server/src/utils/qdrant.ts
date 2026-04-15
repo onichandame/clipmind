@@ -73,3 +73,26 @@ export async function upsertVectors(points: { id: string, vector: number[], payl
 
   if (!res.ok) throw new Error(`Qdrant Upsert failed: ${await res.text()}`);
 }
+
+export async function searchVectors(queryVector: number[], topK: number = 20) {
+  const config = getQdrantConfig();
+  // 防御性编程：强制限制最大召回量，防止撑爆大模型 Context
+  const limit = Math.min(topK, 20);
+  
+  const res = await fetch(`${config.url}/collections/${COLLECTION_NAME}/points/search`, {
+    method: 'POST',
+    headers: config.headers,
+    body: JSON.stringify({
+      vector: queryVector,
+      limit: limit,
+      with_payload: true
+    })
+  });
+
+  if (!res.ok) {
+    throw new Error(`Qdrant Search failed: ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  return data.result || [];
+}
