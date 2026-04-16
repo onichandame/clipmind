@@ -26,6 +26,7 @@ export const fetchHotTopics = async () => {
         } catch (e) { console.error('[Job] 百度抓取失败:', e); }
 
         updateHotTopicsCache(topicsMarkdown);
+        console.log('[Job] 聚合后的热点内容:\n', topicsMarkdown);
         console.log('[Job] 全网热点更新完毕。');
     } catch (error) {
         console.error('[Job] fetchHotTopics 发生致命错误:', error);

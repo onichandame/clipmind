@@ -70,6 +70,9 @@ app.post("/", async (c) => {
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
   const finalSystemPrompt = dynamicSystemPrompt + `\n\n【系统高优先级指令】：在执行完任何工具（Tool）后，你绝对不能静默结束对话。你必须在收到工具结果后，追加一段面向用户的自然语言（Text）说明，告知用户工具的执行结果或下一步建议！`;
+  console.log('--- [Debug] Dynamic System Prompt ---');
+  console.log(finalSystemPrompt);
+  console.log('-------------------------------------');
 
 
   const result = streamText({
