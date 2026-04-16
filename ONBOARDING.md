@@ -791,3 +791,19 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **2. 新共识与规范 (New Conventions):**
 - **隔离测试原则**: 任何涉及外部复杂 JSON 结构解析的逻辑，在写入业务主体前，必须先在独立的 `.js` 脚本中进行 Mock 数据沙盒测试，确保提取路径 100% 精准无误。
+
+## 📝 [阶段更新] Tauri 生产环境沙盒逃逸与原生极速下载 (Content-Disposition Hack)
+
+**1. 架构与状态流转 (Architecture State):**
+- **需求闭环**: 实现了基于剪辑方案 (Editing Plan) 切片的精准溯源与单文件极速下载。
+- **后端 JIT 提权 (projects.ts)**: 在下发项目详情时，拦截 `retrievedClips` 数组，通过 `assetId` 关联查询底层 `assets` 表获取真实的 `ossUrl`。随后，利用阿里云 SDK 动态签发一个带有 `response: { 'content-disposition': 'attachment; filename="..."' }` 头的临时 URL，并赋值给 `videoUrl` 吐给前端。
+- **前端极简交互 (EditingPlanCard.tsx)**: 在素材缩略图上挂载透明悬浮按钮，移除所有无效的批量下载逻辑。点击按钮时，动态创建 `<a>` 标签并赋予后端的 `videoUrl` 触发下载。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (前端 Fetch OOM 黑洞)**: 在 Tauri 环境下处理动辄几十上百兆的视频下载，**绝对禁止**前端使用 `fetch -> blob` 的方式强行拉取。这会撑爆 V8 引擎内存，导致沙盒直接 OOM 崩溃。
+- **DON'T DO (Tauri Shell 权限拦截)**: 严禁在 `<a>` 标签上使用 `target="_blank"`。Tauri 会将其视为调用系统浏览器打开外部网页的危险行为，直接因缺少 `shell:allow-open` 权限而拦截 (`shell.open not allowed`)。
+- **DON'T DO (跨域 download 属性失效)**: 严禁试图用前端的 `a.download = "xxx.mp4"` 去重命名跨域 (如 OSS 域名) 的文件。浏览器同源策略会无情忽略该属性，并报 Warning。必须且只能由后端在签发时通过 `Content-Disposition` 响应头来接管文件名。
+- **DON'T DO (变量溯源断层)**: 永远不要试图从大模型生成的数据结构 (如 `clip`) 中直接读取物理资源 URL。大模型只负责生成逻辑意图，真正的物理资源地址必须从后端打通的素材池 (`retrievedClips`) 中进行溯源映射 (`sourceClip`) 获取。
+
+**3. 新共识与规范 (New Conventions):**
+- **沙盒逃逸第一准则 (Attachment Hack)**: 在 Tauri/Electron 等桌面端 Webview 架构中，实现文件静默下载的最优、最安全路径是：前端只负责触发一个普通链接，**把“强行下载”的指令全部交给服务端的 `Content-Disposition: attachment` 响应头。** Webview 一旦嗅探到该 Header，会瞬间放弃渲染并移交操作系统的原生下载管理器，彻底绕过一切内存与权限墙。
