@@ -8,7 +8,7 @@ import { useBasketStore } from "../store/useBasketStore";
 import { Button } from "./Button";
 import { PlanCanvas } from "./canvas/PlanCanvas";
 
-type CanvasMode = "outline" | "footage" | "plan" | "split";
+type CanvasMode = "outline" | "footage" | "plan";
 
 interface OutlineData {
   contentMd: string;
@@ -31,7 +31,7 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
   const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
   const retrievedClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
-  
+
   console.log("🕵️‍♂️ [Probe CanvasPanel] activeMode:", activeMode, "| clips length:", retrievedClips?.length);
   const basketItems = useBasketStore((state) => state.items);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -90,7 +90,7 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
 
           {/* 宽屏态：模式选择器 */}
           <div className="hidden lg:flex bg-zinc-100 dark:bg-zinc-800/50 p-1 rounded-lg border border-zinc-200 dark:border-zinc-700/30 transition-colors">
-            {(["outline", "footage", "plan", "split"] as CanvasMode[]).map((mode) => (
+            {(["outline", "footage", "plan"] as CanvasMode[]).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setActiveMode(mode)}
@@ -135,7 +135,7 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
           <div className="flex flex-col gap-3">
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">切换视图</span>
             <div className="grid grid-cols-1 gap-2">
-              {(["outline", "footage", "plan", "split"] as CanvasMode[]).map((mode) => (
+              {(["outline", "footage", "plan"] as CanvasMode[]).map((mode) => (
                 <Button
                   key={mode}
                   variant={activeMode === mode ? "primary" : "secondary"}

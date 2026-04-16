@@ -769,3 +769,15 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **边界清晰原则**: 所有带背景色的消息气泡或卡片容器，必须显式声明 `border` 及双态边框颜色（如 `border border-zinc-200 dark:border-zinc-700/50`），防止在同色系背景下发生视觉粘连。
+
+## 📝 [阶段修复] 视图切换器空位留白与状态枚举对齐 (Enum Sync)
+
+**1. 架构与状态流转 (Architecture State):**
+- 修复了 `CanvasPanel.tsx` 顶部视图切换器右侧的多余留白问题。
+- 剔除了废弃的 `"split"` 视图模式，使得渲染数组与 `modeLabels` 字典严格对齐（`"outline", "footage", "plan"`）。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (枚举未对齐导致幽灵 UI)**: 严禁在通过 `.map()` 渲染 UI 列表时，使用未在 Label/翻译字典中定义键值的枚举项。这会导致 React 渲染出没有文本内容的“幽灵空按钮”，从而破坏 Flex 布局并在视觉上形成极其隐蔽的多余留白。
+
+**3. 新共识与规范 (New Conventions):**
+- **单一真理源对齐**: 当使用强类型（如 `CanvasMode`）驱动 UI 渲染时，实际被用于 `.map()` 的数组必须与提供展示文案的 Record 字典（如 `modeLabels`）保持键值数量的绝对一致。
