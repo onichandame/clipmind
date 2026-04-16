@@ -39,6 +39,7 @@ export const projects = mysqlTable('projects', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().onUpdateNow().notNull(), // 用于 Dashboard 排序
   uiMessages: json('ui_messages').default([]), // UI 消息历史（简化结构）
+  retrievedClips: json('retrieved_clips').default([]), // [Arch] 独立持久化的素材检索结果，脱离聊天历史
 });
 
 export const projectOutlines = mysqlTable('project_outlines', {

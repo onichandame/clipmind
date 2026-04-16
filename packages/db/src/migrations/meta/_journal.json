@@ -85,6 +85,13 @@
       "when": 1776258488575,
       "tag": "0011_gigantic_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1776305938799,
+      "tag": "0012_massive_hannibal_king",
+      "breakpoints": true
     }
   ]
 }
