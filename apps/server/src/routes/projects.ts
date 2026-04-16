@@ -151,6 +151,26 @@ app.get('/:id', async (c) => {
       });
     }
 
+    // [Arch] 读链路 JIT 签发：拦截 editingPlans，将物理 Object Key 重新签发为下载/预览 URL
+    if (Array.isArray(projectData.editingPlans)) {
+      projectData.editingPlans = projectData.editingPlans.map((plan: any) => {
+        if (Array.isArray(plan.clips)) {
+          plan.clips = plan.clips.map((clip: any) => {
+            const signedClip = { ...clip };
+            if (clip.thumbnailUrl && !clip.thumbnailUrl.startsWith('http')) {
+              signedClip.thumbnailUrl = ossClient.signatureUrl(clip.thumbnailUrl, { expires: 7200, secure: true });
+            }
+            if (clip.videoUrl && !clip.videoUrl.startsWith('http')) {
+              // 签发下载授权，强迫浏览器下载而不是在线播放
+              signedClip.videoUrl = ossClient.signatureUrl(clip.videoUrl, { expires: 7200, secure: true, response: { 'content-disposition': `attachment; filename="${clip.fileName || 'clipmind_video.mp4'}"` } });
+            }
+            return signedClip;
+          });
+        }
+        return plan;
+      });
+    }
+
     return c.json({
       project: projectData,
       outline: outlineRes.length > 0 ? outlineRes[0] : null,

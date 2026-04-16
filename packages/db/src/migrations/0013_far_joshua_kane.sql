@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `editing_plans` json DEFAULT ('[]');
