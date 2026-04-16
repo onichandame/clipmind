@@ -191,19 +191,33 @@ app.post("/", async (c) => {
                   // 动态签发 2 小时有效期的 HTTPS 链接
                   signedThumb = ossClient.signatureUrl(a.thumbnailUrl, { expires: 7200, secure: true });
                 }
-                assetMap[a.id] = { filename: a.filename || '未知素材', thumbnailUrl: signedThumb };
+                // [Arch] 拦截点：同时保存用于签发的签名 URL 和用于落盘的纯净 Object Key
+                assetMap[a.id] = { filename: a.filename || '未知素材', rawThumb: a.thumbnailUrl, signedThumb };
               }
             }
 
-            // 缝合元数据与预签名 URL
-            const clips = baseClips.map((c: any) => ({
+            // 1. 用于分发给大模型和前端的视图层 Clips (包含临时授信 URL)
+            const viewClips = baseClips.map((c: any) => ({
               ...c,
               filename: c.assetId ? (assetMap[c.assetId]?.filename || '未知素材') : '未知素材',
-              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.thumbnailUrl || null) : null
+              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.signedThumb || null) : null
             }));
 
-            console.log(`[RAG] 检索完成，召回 ${clips.length} 条相关切片`);
-            return { success: true, clips, total: clips.length };
+            // 2. 用于持久化落盘的物理层 Clips (纯净的 Object Key)
+            const dbClips = baseClips.map((c: any) => ({
+              ...c,
+              filename: c.assetId ? (assetMap[c.assetId]?.filename || '未知素材') : '未知素材',
+              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.rawThumb || null) : null
+            }));
+
+            console.log(`[RAG] 检索完成，召回 ${viewClips.length} 条相关切片`);
+            
+            // [Arch] 读写分离写链路：绝对禁止将 Expires 链接写入数据库，必须存入 dbClips
+            await db.update(projects)
+              .set({ retrievedClips: dbClips, updatedAt: new Date() })
+              .where(eq(projects.id, projectId));
+
+            return { success: true, clips: viewClips, total: viewClips.length };
           } catch (error) {
             console.error("❌ RAG 检索失败:", error);
             return { success: false, error: "向量数据库检索异常" };

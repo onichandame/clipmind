@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { db } from '../db';
 import { projects, basketItems, projectOutlines } from '@clipmind/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
+import { ossClient } from '../utils/oss';
 
 const app = new Hono();
 
@@ -136,8 +137,22 @@ app.get('/:id', async (c) => {
       }
     }
 
+    // [Arch] 读链路 JIT 签发：拦截 retrievedClips，将物理 Object Key 重新签发为 2 小时临时 URL
+    const projectData = projectRes[0] as any;
+    if (Array.isArray(projectData.retrievedClips)) {
+      projectData.retrievedClips = projectData.retrievedClips.map((clip: any) => {
+        if (clip.thumbnailUrl && !clip.thumbnailUrl.startsWith('http')) {
+          return {
+            ...clip,
+            thumbnailUrl: ossClient.signatureUrl(clip.thumbnailUrl, { expires: 7200, secure: true })
+          };
+        }
+        return clip;
+      });
+    }
+
     return c.json({
-      project: projectRes[0],
+      project: projectData,
       outline: outlineRes.length > 0 ? outlineRes[0] : null,
       initialMessages: initialMessages.length > 0 ? initialMessages : [{ id: 'fallback', role: 'assistant', content: ' ', parts: [{ type: 'text', text: ' ' }] }]
     });
