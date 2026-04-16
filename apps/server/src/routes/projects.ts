@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../db';
-import { projects, basketItems, projectOutlines } from '@clipmind/db/schema';
+import { projects, basketItems, projectOutlines, editingPlans } from '@clipmind/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
 import { ossClient } from '../utils/oss';
 
@@ -72,6 +72,7 @@ app.get('/:id', async (c) => {
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
+    const planRes = await db.select().from(editingPlans).where(eq(editingPlans.projectId, id));
 
     // [Arch] 读写分离重构 (读链路)：将底层 CoreMessage 动态投影为前端 UIMessage
     const rawMessages = projectRes[0].uiMessages || [];
@@ -139,6 +140,10 @@ app.get('/:id', async (c) => {
 
     // [Arch] 读链路 JIT 签发：拦截 retrievedClips，将物理 Object Key 重新签发为 2 小时临时 URL
     const projectData = projectRes[0] as any;
+
+    // [Arch] 缝合脑裂：将物理表查询到的 planRes 注入 projectData，供前端画布流式卡片渲染
+    projectData.editingPlans = planRes;
+
     if (Array.isArray(projectData.retrievedClips)) {
       projectData.retrievedClips = projectData.retrievedClips.map((clip: any) => {
         if (clip.thumbnailUrl && !clip.thumbnailUrl.startsWith('http')) {
