@@ -717,18 +717,30 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 - **安全召回阈值**: 全局检索默认限制召回数为 20（Top-K=20），严格防止海量视频切片撑爆模型的 Context Window 导致 429 报错或长文本幻觉。
 - **端侧处理分离**: Qdrant 仅作为纯粹的高维空间计算引擎，文本向量化必须在 Node 层调用大模型 Embedding API 完成后，再将纯数字向量打入 Qdrant。当前为纯稠密向量（Dense Vector）语义检索，暂未开启 BM25 全文混合检索。
 
-## 📝 [阶段更新] 素材检索与 AI SDK v6 状态机陷阱修复 (Retrieval & Vercel AI SDK)
+## 📝 [阶段跃迁] DDD 聚合根防线与状态水合断层修复 (Domain Data vs Ephemeral State)
 
 **1. 架构与状态流转 (Architecture State):**
-- **项目级状态隔离**: 彻底推翻了扁平化的全局 Store，`useCanvasStore` 现已升级为基于 `projectId` 的字典隔离架构 (`Record<string, ProjectState>`)。有效阻断了多项目并发操作时的状态串库 (Data Bleeding)。
-- **DDD 与后端直出 (哑视图防线)**: 在素材检索链路中，彻底斩断了前端拿到 `assetId` 后反复发起 `fetch` 轮询数据库获取 URL 的 N+1 渲染风暴。现已全量重构为在 Node 端 `chat.ts` 内部，利用 Drizzle 的 `inArray` 批量查询 MySQL 并直签 OSS 链接，确保前端仅作为纯粹的“哑视图 (Dumb UI)”消费数据。
+- **核心论断 (DDD)**：**素材检索结果（`retrievedClips`）和剪辑方案（`editingPlan`）是系统的核心业务资产（Domain Data），而聊天消息（Chat Messages）仅仅是瞬态的交互过程（Ephemeral State）。**
+- **写链路 (The Write Path)**：彻底废弃了将业务数据塞入 AI SDK 历史记录的脆弱做法。现在，当大模型触发 `searchFootage` 等工具时，后端在工具的 `execute` 内部执行完运算后，直接将纯净数据**物理落盘**到 `projects` 表的专属 JSON 字段中。
+- **读链路与水合 (Hydration)**：前端路由 `projects.$projectId.tsx` 的 Loader 在页面刷新时，直接从后端的 `GET /api/projects/:id` 接口获取项目实体，并直接将 `retrievedClips` 注入 `useCanvasStore`。前端彻底抛弃了在历史记录里“倒序捞针”的瞎子提取法。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
-- **DON'T DO (AI SDK v6 协议漂移与状态黑盒)**: **绝对禁止**在前端硬编码拦截 `toolInvocation.state === 'result'` 去断言工具调用完毕！Vercel AI SDK v6 在处理复杂多模态工具或流式终态时，存在严重的内部协议漂移。
-- **防线铁律**: 提取工具调用结果时，必须全量兼容探测 `.output`、`.result` 以及 `.args` 对象，并且必须显式放行 `output-available` 与 `done` 状态。否则极易导致前端逻辑死锁在 Loading 态，无法向下一步状态流转。
+- **DON'T DO (状态重载断层 & Agentic 陷阱)**：**绝对禁止**前端尝试从 `messages` 数组中提取工具调用结果来恢复页面状态！在引入 `maxSteps: 5` 的多步推理后，AI 在调用工具后会继续输出总结性文本。这会导致工具调用被深埋在历史记录中间。页面刷新时，前端如果只看最后一条消息，必然变成“瞎子”，导致画布静默白屏。
+- **DON'T DO (Hook 军规越界)**：**绝对禁止**将 `useEffect` 等水合逻辑放在组件内任何带有 `return` 的条件拦截（如 `if (isLoading) return ...`）之后！这会引发 React 引擎抛出 `Rendered more hooks than during the previous render` 的死亡报错，当场崩溃。
 
 **3. 新共识与规范 (New Conventions):**
-- **废弃交付视图**: 根据最新产品决策，彻底移除了冗余的 `split` (交付视图) 链路与画布。所有的 AI 编导输出均收敛至独立的 `PlanCanvas` 剪辑方案卡片中，保持交互和视觉的极致克制。
+- **UI 纯粹化 (Dumb UI)**：`ChatPanel` 现仅负责在**实时流式生成中**（`status === 'streaming'`）捕获增量结果并乐观更新 UI，**绝不再负责**历史记录的持久化提取与状态重建。
+
+## 📝 [架构红线] OSS 动态签发与生命周期错位防御 (JIT Pre-signing)
+
+**1. 架构与状态流转 (Architecture State):**
+- **JIT 动态签发 (Just-In-Time)**：确立了“数据库只存纯粹 Object Key，接口动态分发”的安全底线。后端向前端返回任何包含私有媒体资产（如 `retrievedClips` 中的 `thumbnailUrl`）的 JSON 响应前，必须在路由出口处拦截，并使用 `ossClient.signatureUrl` 临时包裹一层带有 2 小时有效期的 HTTPS 链接。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (生命周期错位 - Time-of-Check to Time-of-Use)**：**绝对禁止**在后端工具执行落盘时，将带有 `?Expires=...&Signature=...` 的预签名 URL 直接塞进数据库的 JSON 字段保存！如果这样做，用户在 2 小时后刷新页面，数据库吐出的将是一堆过期的死链，前端会瞬间面临满屏的 `403 Forbidden` 废墟。
+
+**3. 新共识与规范 (New Conventions):**
+- **内外数据结构分叉**：在编写复杂的后端业务逻辑（如 RAG 检索组装）时，必须在内存中实施数据结构的分叉。构建两份 Payload：一份 `viewClips`（带有签名 URL）用于当前 HTTP 请求立刻返回给前端大模型消费；另一份 `dbClips`（仅保留原生的 Raw Object Key）用于异步更新数据库。
 
 ## 📝 [架构升级] 消息持久化 CQRS 重构与 CoreMessage 协议对齐 (Zero-Overhead Persistence)
 
