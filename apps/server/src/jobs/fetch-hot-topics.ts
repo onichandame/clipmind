@@ -18,9 +18,13 @@ export const fetchHotTopics = async () => {
                 const data = await baiduRes.json() as any;
                 topicsMarkdown += '### 🟥 百度热搜 (Top 10)\n';
                 // 仅提取纯文本 word，舍弃冗余 UI 数据，降低 LLM Token 消耗
-                data.data?.cards?.[0]?.content?.slice(0, 10).forEach((item: any, index: number) => {
-                    topicsMarkdown += `${index + 1}. ${item.word || '未知热词'}\n`;
-                });
+                // [Bugfix] 穿透百度幽灵嵌套的第二层 content 数组
+                const hotList = data.data?.cards?.[0]?.content?.[0]?.content;
+                if (Array.isArray(hotList)) {
+                    hotList.slice(0, 10).forEach((item: any, index: number) => {
+                        topicsMarkdown += `${index + 1}. ${item.word || '未知热词'}\n`;
+                    });
+                }
                 topicsMarkdown += '\n';
             }
         } catch (e) { console.error('[Job] 百度抓取失败:', e); }
