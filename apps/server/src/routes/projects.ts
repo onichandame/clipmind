@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../db';
-import { projects, basketItems, projectOutlines, editingPlans } from '@clipmind/db/schema';
+import { projects, basketItems, projectOutlines, editingPlans, assets } from '@clipmind/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
 import { ossClient } from '../utils/oss';
 
@@ -151,15 +151,34 @@ app.get('/:id', async (c) => {
     console.log(`======================================\n`);
 
     if (Array.isArray(projectData.retrievedClips)) {
-      projectData.retrievedClips = projectData.retrievedClips.map((clip: any) => {
+      // [Arch] JIT 签发升级：遍历并异步补齐原片下载链接
+      for (let i = 0; i < projectData.retrievedClips.length; i++) {
+        const clip = projectData.retrievedClips[i];
+
+        // 1. 签名缩略图
         if (clip.thumbnailUrl && !clip.thumbnailUrl.startsWith('http')) {
-          return {
-            ...clip,
-            thumbnailUrl: ossClient.signatureUrl(clip.thumbnailUrl, { expires: 7200, secure: true })
-          };
+          clip.thumbnailUrl = ossClient.signatureUrl(clip.thumbnailUrl, { expires: 7200, secure: true });
         }
-        return clip;
-      });
+
+        // 2. 溯源防线：根据 assetId 去底层查出真实视频 ossUrl，并强制签发下载 Header
+        if (clip.assetId) {
+          try {
+            const [assetRecord] = await db.select({ ossUrl: assets.ossUrl }).from(assets).where(eq(assets.id, clip.assetId));
+            if (assetRecord && assetRecord.ossUrl) {
+              // 编码文件名防中文乱码
+              const safeFilename = encodeURIComponent(clip.filename || 'clipmind_video.mp4');
+              clip.videoUrl = ossClient.signatureUrl(assetRecord.ossUrl, {
+                expires: 7200,
+                secure: true,
+                // 注入强制下载响应头，绕过前端 iframe/沙盒预览拦截
+                response: { 'content-disposition': `attachment; filename="${safeFilename}"` }
+              });
+            }
+          } catch (e) {
+            console.error(`🚨 无法为素材切片注入下载链接 (AssetID: ${clip.assetId})`, e);
+          }
+        }
+      }
     }
 
     // [Arch] 读链路 JIT 签发：拦截 editingPlans，将物理 Object Key 重新签发为下载/预览 URL
