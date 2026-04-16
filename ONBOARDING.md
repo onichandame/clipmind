@@ -781,3 +781,13 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **单一真理源对齐**: 当使用强类型（如 `CanvasMode`）驱动 UI 渲染时，实际被用于 `.map()` 的数组必须与提供展示文案的 Record 字典（如 `modeLabels`）保持键值数量的绝对一致。
+
+## 📝 [阶段更新] 全网热点情报抓取与动态注入 (Bugfix & JSON 嵌套陷阱)
+
+**1. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (盲信数据结构与幽灵嵌套)**: 
+  - **百度 Wise API 陷阱**: 在解析第三方 API 时，严禁仅凭外层字段名进行主观推断。百度热搜的 JSON 数据中，热词列表被包裹在令人匪夷所思的“双层 content”结构中 (`data.cards[0].content[0].content`)。
+  - **静默失败防线**: 之前由于少写了一层 `.[0]?.content`，导致取到的全是 `undefined`，并触发了兜底逻辑，使得大模型收到了满屏的“未知热词”。
+
+**2. 新共识与规范 (New Conventions):**
+- **隔离测试原则**: 任何涉及外部复杂 JSON 结构解析的逻辑，在写入业务主体前，必须先在独立的 `.js` 脚本中进行 Mock 数据沙盒测试，确保提取路径 100% 精准无误。
