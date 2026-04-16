@@ -144,6 +144,12 @@ app.get('/:id', async (c) => {
     // [Arch] 缝合脑裂：将物理表查询到的 planRes 注入 projectData，供前端画布流式卡片渲染
     projectData.editingPlans = planRes;
 
+    console.log(`\n======================================`);
+    console.log(`📍 [PROBE 2 - READ] 拦截 GET /projects/:id`);
+    console.log(`[planRes 数组长度]:`, planRes?.length);
+    console.log(`[下发前端的 editingPlans]:`, JSON.stringify(projectData.editingPlans).slice(0, 150) + "...");
+    console.log(`======================================\n`);
+
     if (Array.isArray(projectData.retrievedClips)) {
       projectData.retrievedClips = projectData.retrievedClips.map((clip: any) => {
         if (clip.thumbnailUrl && !clip.thumbnailUrl.startsWith('http')) {

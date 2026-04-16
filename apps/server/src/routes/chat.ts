@@ -117,14 +117,23 @@ app.post("/", async (c) => {
               console.warn("⚠️ [AI WARN] generateEditingPlan 拦截到空传参，已触发重试");
               return { success: false, error: "Missing required parameters. 'title' and 'clips' are mandatory." };
             }
-            await db.insert(editingPlans).values({
+            
+            const insertPayload = {
               id: crypto.randomUUID(),
               projectId: projectId,
               title: args.title,
               platform: args.platform,
               targetDuration: args.targetDuration,
               clips: args.clips
-            });
+            };
+            console.log(`\n======================================`);
+            console.log(`📍 [PROBE 1 - WRITE] 准备落盘 EditingPlan!`);
+            console.log(`[Payload 预览]:`, JSON.stringify(insertPayload).slice(0, 150) + "...");
+            
+            await db.insert(editingPlans).values(insertPayload);
+            console.log(`📍 [PROBE 1.5 - WRITE SUCCESS] 数据库写入无报错！`);
+            console.log(`======================================\n`);
+            
             return { success: true, message: '剪辑方案已成功生成并保存至数据库' };
           } catch (dbError) {
             console.error("❌ generateEditingPlan 数据库写入失败:", dbError);
