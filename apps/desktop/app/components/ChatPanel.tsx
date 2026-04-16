@@ -189,11 +189,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
           return (
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               {!isUser && (
-                <div className="w-7 h-7 mt-1 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center mr-3 flex-shrink-0 border border-zinc-200 dark:border-zinc-700/50 transition-colors">
-                  <span className="text-[10px] text-zinc-500 dark:text-zinc-400 font-medium transition-colors">CM</span>
+                <div className="w-7 h-7 mt-1 rounded-lg bg-indigo-600 flex items-center justify-center mr-3 flex-shrink-0 shadow-sm transition-colors">
+                  <span className="text-[12px] text-white font-semibold transition-colors">C</span>
                 </div>
               )}
-              <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed transition-colors ${isUser ? "bg-zinc-900 dark:bg-zinc-800 text-white dark:text-zinc-100 rounded-2xl rounded-tr-sm border border-transparent dark:border-zinc-700/50 shadow-sm" : "bg-transparent text-zinc-700 dark:text-zinc-300"}`}>
+              <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed transition-colors ${isUser ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-2xl rounded-tr-sm border border-transparent dark:border-zinc-700/50 shadow-sm" : "bg-white dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 rounded-2xl rounded-tl-sm border border-zinc-200 dark:border-zinc-700/50 shadow-sm"}`}>
                 {/* 1. 纯文本渲染 & 工具状态回显 (拦截空炮消息) */}
                 {(() => {
                   const msg = message;
@@ -202,7 +202,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                   if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
 
                   return (
-                    <div className={`prose prose-sm ${isUser ? 'prose-invert' : 'dark:prose-invert'} max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-200 dark:prose-pre:border-zinc-800 transition-colors`}>
+                    <div className={`prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-200 dark:prose-pre:border-zinc-800 transition-colors`}>
                       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
                     </div>
                   );

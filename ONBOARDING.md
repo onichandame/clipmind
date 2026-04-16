@@ -744,3 +744,16 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **前端哑终端化 (Dumb Terminal)**: 前端 `useChat` 现已被剥夺所有历史状态控制权和落盘权。任何需要与大模型交互的网络请求，后端必须无视前端发来的历史记录，强制从数据库 `projects` 表中提取经过强类型清洗的 `CoreMessage` 上下文。
+
+## 📝 [阶段更新] 聊天面板双态主题适配与 UI 规范闭环 (Theme Consistency)
+
+**1. 架构与状态流转 (Architecture State):**
+- 统一了 `ChatPanel` 中所有消息气泡与头像的视觉规范，全面适配了 Tailwind v4 的 Light/Dark 双态主题。
+- Agent 头像组件从硬编码的灰底圆角统一升级为品牌强关联的紫底方块 (`bg-indigo-600 rounded-lg text-white`)，并精简占位符为 `C`。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (单态黑白陷阱)**: 严禁在气泡容器中使用单纯的 `bg-zinc-900 text-white` 等单态配置，这在 Light 模式下会形成突兀的“黑斑”。必须使用响应式组合（如 `bg-zinc-100 dark:bg-zinc-800`）。
+- **DON'T DO (Prose 幽灵特异性踩坑)**: 在修复主题时，再次印证了 `@tailwindcss/typography` 的霸道特性。对于跟随系统主题动态变色的气泡，必须显式传入 `dark:prose-invert`（严禁在浅色背景下直接用 `prose-invert`），否则内部文字会反转成白色，变成灾难性的“隐形墨水”。
+
+**3. 新共识与规范 (New Conventions):**
+- **边界清晰原则**: 所有带背景色的消息气泡或卡片容器，必须显式声明 `border` 及双态边框颜色（如 `border border-zinc-200 dark:border-zinc-700/50`），防止在同色系背景下发生视觉粘连。
