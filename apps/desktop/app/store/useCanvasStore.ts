@@ -4,7 +4,7 @@ type CanvasMode = 'outline' | 'footage' | 'plan';
 
 interface ProjectState {
   outlineContent: string;
-  editingPlan: any | null;
+  editingPlans: any[];
   isDirty: boolean;
   lastModifiedBy: 'user' | 'agent' | 'system';
   retrievedClips: any[];
@@ -12,7 +12,7 @@ interface ProjectState {
 
 const initialProjectState: ProjectState = {
   outlineContent: '',
-  editingPlan: null,
+  editingPlans: [],
   isDirty: false,
   lastModifiedBy: 'system',
   retrievedClips: [],
@@ -25,9 +25,8 @@ interface CanvasState {
 
   // 动作
   setOutlineContent: (projectId: string, content: string, modifiedBy: 'user' | 'agent' | 'system') => void;
-  setEditingPlan: (projectId: string, plan: any) => void;
+  setEditingPlans: (projectId: string, plans: any[]) => void;
   clearDirtyState: (projectId: string) => void;
-  setRetrievedClips: (projectId: string, clips: any[]) => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
@@ -50,10 +49,11 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     };
   }),
 
-  setEditingPlan: (projectId, plan) => set((state) => {
+  setEditingPlans: (projectId, plans) => set((state) => {
+    console.log(`📍 [PROBE 3 - STORE] Zustand 接收到更新! Project: ${projectId}, Plans数量: ${plans?.length}`);
     const pState = state.projects[projectId] || { ...initialProjectState };
     return {
-      projects: { ...state.projects, [projectId]: { ...pState, editingPlan: plan } }
+      projects: { ...state.projects, [projectId]: { ...pState, editingPlans: plans } }
     };
   }),
 

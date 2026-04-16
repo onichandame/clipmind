@@ -6,9 +6,10 @@ interface PlanCanvasProps {
 }
 
 export function PlanCanvas({ projectId }: PlanCanvasProps) {
-  const editingPlan = useCanvasStore((state) => state.projects[projectId]?.editingPlan);
+  const editingPlans = useCanvasStore((state) => state.projects[projectId]?.editingPlans || []);
+  const retrievedClips = useCanvasStore((state) => state.projects[projectId]?.retrievedClips || []);
 
-  if (!editingPlan) {
+  if (editingPlans.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-zinc-500 space-y-4">
         <div className="text-4xl">📋</div>
@@ -19,8 +20,10 @@ export function PlanCanvas({ projectId }: PlanCanvasProps) {
 
   return (
     <div className="h-full overflow-y-auto p-8 bg-zinc-50 dark:bg-zinc-950">
-      <div className="max-w-4xl mx-auto">
-        <EditingPlanCard plan={editingPlan} />
+      <div className="max-w-4xl mx-auto flex flex-col gap-8">
+        {editingPlans.map((plan, idx) => (
+          <EditingPlanCard key={idx} plan={plan} retrievedClips={retrievedClips} />
+        ))}
       </div>
     </div>
   );

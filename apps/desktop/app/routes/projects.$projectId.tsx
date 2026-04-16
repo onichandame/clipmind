@@ -9,6 +9,7 @@ import { useCanvasStore } from "../store/useCanvasStore";
 export default function ProjectWorkspace() {
   const { projectId } = useParams();
   const setRetrievedClips = useCanvasStore((s) => s.setRetrievedClips);
+  const setEditingPlans = useCanvasStore((s) => s.setEditingPlans);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['project', projectId],
@@ -25,8 +26,9 @@ export default function ProjectWorkspace() {
   useEffect(() => {
     if (projectId && data?.project) {
       setRetrievedClips(projectId, (data.project as any).retrievedClips || []);
+      setEditingPlans(projectId, (data.project as any).editingPlans || []);
     }
-  }, [projectId, data?.project, setRetrievedClips]);
+  }, [projectId, data?.project, setRetrievedClips, setEditingPlans]);
 
   if (isLoading) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 transition-colors"><Loader2 className="w-8 h-8 animate-spin" /></div>;
   if (error || !data?.project) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-red-500 font-bold transition-colors">项目不存在</div>;

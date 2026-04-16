@@ -87,30 +87,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     }
   }, [messages, status, setOutlineContent, setActiveMode, projectId]);
 
-  // [架构师干预] 监听剪辑方案生成结果并推送至独立视图
-  useEffect(() => {
-    if (messages.length === 0) return;
-
-    // 提取最新一条消息中的工具调用
-    const lastMsg = messages[messages.length - 1];
-    const planPart = lastMsg?.parts?.find((p: any) => {
-      const invocation = p.type === 'tool-invocation' ? p.toolInvocation : p;
-      const toolName = invocation?.toolName || p.type;
-      const state = invocation?.state || p.state;
-      return toolName?.includes('generateEditingPlan') &&
-        (state === 'result' || (invocation?.args && Object.keys(invocation.args).length > 0));
-    });
-
-    // 提取 args（兼容旧版和 v6 的提取层级）
-    const args = planPart?.toolInvocation?.args || planPart?.args;
-
-    if (args && typeof args === 'object' && !Array.isArray(args)) {
-      setEditingPlan(projectId, args);
-      if (useCanvasStore.getState().activeMode !== 'plan') {
-        setActiveMode('plan');
-      }
-    }
-  }, [messages, setEditingPlan, setActiveMode, projectId]);
+  // [Arch] 已移除旧版的 "监听剪辑方案生成结果并推送至独立视图" 的 useEffect
+  // 原因：该操作在流式输出中会导致极端的高频状态同步（Render Thrashing），引发死循环。
+  // 当前架构已将持久化收敛至后端，前端仅需等待重新拉取即可。
 
   // [架构师干预] 监听素材检索结果并推送至检索视图
   useEffect(() => {
@@ -216,22 +195,22 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
                   // [架构师规范] 精准拦截目标工具，并确保在 prose 外层渲染，防止 Markdown 样式污染
                   if (toolName?.includes('generateEditingPlan')) {
-                    if (state === 'result' || (invocation.args && Object.keys(invocation.args).length > 0)) {
-                      // 防御性 Fallback：确保传入的确实是合法的对象
-                      if (typeof invocation.args !== 'object' || Array.isArray(invocation.args)) {
-                        return (
+                    if (state === 'result') {
+                      // 检查后端是否明确返回了错误
+                      if (invocation.result && invocation.result.success === false) {
+                         return (
                           <div key={index} className="mt-4 mb-2 p-3 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
-                            ⚠️ 方案解析异常，等待重试...
+                            ⚠️ 方案解析失败: {invocation.result.error || '未知错误'}
                           </div>
                         );
                       }
                       return (
                         <div key={index} className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-3 py-2 rounded-lg border border-emerald-500/20 my-2 mt-3">
                           <div className="text-lg leading-none">✨</div>
-                          <span className="text-sm font-medium">剪辑方案已生成，已推送至右侧画布。</span>
+                          <span className="text-sm font-medium">剪辑方案已生成并保存！🎬</span>
                         </div>
                       );
-                    } else {
+                    } else if (state === 'call' || state === 'partial-call') {
                       // 流式传输过程中的优雅占位
                       return (
                         <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3 animate-pulse">
