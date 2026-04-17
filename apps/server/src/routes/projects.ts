@@ -233,4 +233,36 @@ app.put('/:id/messages', async (c) => {
   }
 });
 
+// [Arch] 局部增量更新 (PATCH) - 支持项目名称等元数据修改
+app.patch('/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+
+  const updatePayload: Record<string, any> = { updatedAt: new Date() };
+
+  // 遵循 PATCH 原则，仅处理传递的增量字段
+  if (body.title !== undefined) {
+    if (typeof body.title !== 'string' || body.title.trim() === '') {
+      return c.json({ error: 'title must be a non-empty string' }, 400);
+    }
+    updatePayload.title = body.title.trim();
+  }
+
+  if (Object.keys(updatePayload).length === 1) {
+    return c.json({ success: true, message: 'No fields to update' });
+  }
+
+  try {
+    await db.update(projects)
+      .set(updatePayload)
+      .where(eq(projects.id, id));
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('Failed to patch project:', error);
+    return c.json({ error: 'Failed to update project' }, 500);
+  }
+});
+
+export default app;
+
 export default app;
