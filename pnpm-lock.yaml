@@ -188,8 +188,8 @@ importers:
   packages/db:
     dependencies:
       drizzle-orm:
-        specifier: '*'
-        version: 0.38.4(@opentelemetry/api@1.9.0)(@types/react@19.2.14)(mysql2@3.21.1(@types/node@22.19.17))(postgres@3.4.9)(react@19.2.5)
+        specifier: ^0.45.2
+        version: 0.45.2(@opentelemetry/api@1.9.0)(gel@2.2.0)(mysql2@3.21.1(@types/node@22.19.17))(postgres@3.4.9)
       mysql2:
         specifier: ^3.21.1
         version: 3.21.1(@types/node@22.19.17)
@@ -5877,6 +5877,13 @@ snapshots:
       '@opentelemetry/api': 1.9.0
       gel: 2.2.0
       mysql2: 3.21.1(@types/node@20.19.39)
+      postgres: 3.4.9
+
+  drizzle-orm@0.45.2(@opentelemetry/api@1.9.0)(gel@2.2.0)(mysql2@3.21.1(@types/node@22.19.17))(postgres@3.4.9):
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.0
+      gel: 2.2.0
+      mysql2: 3.21.1(@types/node@22.19.17)
       postgres: 3.4.9
 
   dunder-proto@1.0.1:
