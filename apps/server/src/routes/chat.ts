@@ -98,6 +98,39 @@ app.post("/", async (c) => {
     },
 
     tools: {
+      manage_footage_basket: tool({
+        description: '筛选、保留、剔除或替换候选素材至篮子。当用户要求挑选素材或管理篮子时调用。',
+        inputSchema: z.object({
+          action: z.enum(['add', 'remove', 'replace', 'clear']),
+          targetClips: z.array(z.object({
+            assetId: z.string(),
+            startTime: z.number(),
+            endTime: z.number(),
+            reason: z.string()
+          })).optional(),
+        }),
+        execute: async ({ action, targetClips }) => {
+          const project = await db.select({ selectedBasket: projects.selectedBasket }).from(projects).where(eq(projects.id, projectId)).limit(1);
+          let currentBasket = (project[0]?.selectedBasket as any[]) || [];
+
+          if (action === 'clear') {
+            currentBasket = [];
+          } else if (action === 'replace' && targetClips) {
+            currentBasket = targetClips;
+          } else if (action === 'add' && targetClips) {
+            currentBasket = [...currentBasket, ...targetClips];
+          } else if (action === 'remove' && targetClips) {
+            const removeIds = targetClips.map(c => c.assetId);
+            currentBasket = currentBasket.filter(c => !removeIds.includes(c.assetId));
+          }
+
+          await db.update(projects)
+            .set({ selectedBasket: currentBasket, updatedAt: new Date() })
+            .where(eq(projects.id, projectId));
+
+          return { success: true, action, count: currentBasket.length };
+        }
+      }),
       generateEditingPlan: tool({
         description: "基于素材检索结果，生成结构化的剪辑方案（Editing Plan）并持久化到数据库。禁止在对话中输出大段方案，必须调用此工具。",
         inputSchema: z.object({
@@ -117,7 +150,7 @@ app.post("/", async (c) => {
               console.warn("⚠️ [AI WARN] generateEditingPlan 拦截到空传参，已触发重试");
               return { success: false, error: "Missing required parameters. 'title' and 'clips' are mandatory." };
             }
-            
+
             const insertPayload = {
               id: crypto.randomUUID(),
               projectId: projectId,
@@ -129,11 +162,11 @@ app.post("/", async (c) => {
             console.log(`\n======================================`);
             console.log(`📍 [PROBE 1 - WRITE] 准备落盘 EditingPlan!`);
             console.log(`[Payload 预览]:`, JSON.stringify(insertPayload).slice(0, 150) + "...");
-            
+
             await db.insert(editingPlans).values(insertPayload);
             console.log(`📍 [PROBE 1.5 - WRITE SUCCESS] 数据库写入无报错！`);
             console.log(`======================================\n`);
-            
+
             return { success: true, message: '剪辑方案已成功生成并保存至数据库' };
           } catch (dbError) {
             console.error("❌ generateEditingPlan 数据库写入失败:", dbError);

@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `selected_basket` json DEFAULT ('[]');
