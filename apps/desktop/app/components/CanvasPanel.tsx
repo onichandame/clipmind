@@ -6,6 +6,7 @@ import { Menu, ShoppingBasket } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
 import { Button } from "./Button";
 import { PlanCanvas } from "./canvas/PlanCanvas";
+import { EditableProjectTitle } from "./EditableProjectTitle";
 
 type CanvasMode = "outline" | "footage" | "plan";
 
@@ -16,6 +17,7 @@ interface OutlineData {
 
 interface CanvasPanelProps {
   projectId: string;
+  projectTitle: string;
   outline: OutlineData | null;
   onToggleBasket: () => void;
 }
@@ -26,7 +28,7 @@ const modeLabels: Record<CanvasMode, string> = {
   plan: "📋 剪辑方案",
 };
 
-export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelProps) {
+export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }: CanvasPanelProps) {
   const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
   const retrievedClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
@@ -83,9 +85,14 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
     <div className="flex-1 flex flex-col h-full bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
       {/* 顶部状态栏 */}
       <div className="h-14 border-b border-zinc-200 dark:border-zinc-800/50 flex items-center justify-between px-6 bg-white/80 dark:bg-zinc-900/20 backdrop-blur-md transition-colors duration-200">
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400 transition-colors">当前视图:</span>
 
+        {/* 左侧：可编辑项目名称 */}
+        <div className="flex-1 flex items-center min-w-0 pr-4">
+          <EditableProjectTitle projectId={projectId} initialTitle={projectTitle} className="text-lg truncate" />
+        </div>
+
+        {/* 中间：视图控制器 */}
+        <div className="flex items-center gap-3 justify-center">
           {/* 窄屏态：仅显示当前模式名称 */}
           <span className="lg:hidden text-sm font-bold text-zinc-900 dark:text-zinc-100">
             {modeLabels[activeMode]}

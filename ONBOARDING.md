@@ -821,6 +821,19 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **3. 新共识与规范 (New Conventions):**
 - **UI 状态枚举完备性**: 任何在 Server-Side 注册的新工具（如 `generateEditingPlan`），在引入前端 SDK 渲染气泡时，**必须**同步补齐相关的中文状态文案映射。严禁使用不完备的三元运算符（如 `isOutline ? A : B`），必须覆盖所有已知工具分支，防范“文案指代不明”的展示事故。
 
+## 📝 [阶段演进] 局部增量更新 (PATCH) 与 React Query 水合架构 (Optimistic UI)
+
+**1. 架构与状态流转 (Architecture State):**
+- **后端增量更新 (Hono PATCH)**: 在 `projects.ts` 路由中引入了 `PATCH /:id` 接口。确立了“只处理传递的增量字段，不强制要求全量覆盖”的 RESTful 最佳实践，为未来的元数据扩展留下了纯净的接口底座。
+- **前端无感编辑 (React Query Invalidation)**: 实现了受控的 `<EditableProjectTitle />` 组件。在 `onBlur` 时触发修改，请求成功后通过 `queryClient.invalidateQueries` 使当前项目的缓存失效。React Query 会在后台自动重新拉取数据并刷新视图，实现了无需手动管理 Redux/Zustand 全局状态的无缝水合更新。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (幽灵 404 与 HMR 假死)**: 在修改后端路由文件（如 `projects.ts`）时，**绝对禁止**产生重复的 `export default`。这种微小的 TypeScript 语法错误不会在终端引发核爆级警告，但会导致热更新 (HMR) 进程假死。前端发起的新路由请求会持续遭遇 404，让人误以为是 CORS 或路由挂载的问题。必须养成修改后观察服务端编译状态的肌肉记忆。
+- **DON'T DO (路由参数转义黑洞)**: 在 Bash 脚本中处理 React Router 动态路由文件（如 `projects.$projectId.tsx`）时，**严禁**直接将包含 `$` 的路径裸写进双引号或直接执行。Bash 会将其解析为环境变量（导致路径变成 `projects..tsx` 而报错找不到文件）。必须使用单引号包裹，或者显式使用 `\$` 转义。
+
+**3. 新共识与规范 (New Conventions):**
+- **纯净 PATCH 准则**: 任何后续新增的局部修改接口，必须遵循 PATCH 语义。后端校验逻辑必须具备可选字段容错能力（`if (body.field !== undefined)`），严禁在 PATCH 接口中写死 required 校验。
+
 ## 📝 [阶段跃迁] 素材精挑 (Footage Selection) 状态流转与响应式闭环 (LUI + GUI)
 
 **1. 架构与状态流转 (Architecture State):**

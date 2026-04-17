@@ -36,7 +36,7 @@ export function WorkspaceLayout({ project, outline, initialMessages = [] }: Work
 
       {/* CanvasPanel 容器 (占满剩余 70%) */}
       <div className="flex-1 h-full min-w-0 bg-white dark:bg-zinc-950 relative transition-colors duration-200">
-        <CanvasPanel projectId={project.id} outline={outline} onToggleBasket={() => setIsBasketOpen(!isBasketOpen)} />
+        <CanvasPanel projectId={project.id} projectTitle={project.title} outline={outline} onToggleBasket={() => setIsBasketOpen(!isBasketOpen)} />
       </div>
 
       <BasketSidebar isOpen={isBasketOpen} onToggle={() => setIsBasketOpen(!isBasketOpen)} />
