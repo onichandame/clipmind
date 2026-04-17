@@ -132,8 +132,9 @@ app.post("/", async (c) => {
           } else if (action === 'add' && targetClips) {
             currentBasket = [...currentBasket, ...targetClips];
           } else if (action === 'remove' && targetClips) {
-            const removeIds = targetClips.map(c => c.assetId);
-            currentBasket = currentBasket.filter(c => !removeIds.includes(c.assetId));
+            currentBasket = currentBasket.filter(c =>
+              !targetClips.some(tc => tc.assetId === c.assetId && tc.startTime === c.startTime && tc.endTime === c.endTime)
+            );
           }
 
           await db.update(projects)
