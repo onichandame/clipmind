@@ -861,3 +861,6 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **3. 新共识与规范 (New Conventions):**
 - **力学对称居中法则**: 在顶部导航栏等需要三段式布局（左中右）且中心要求绝对居中的场景，必须强制两侧占位容器采用同等宽度的 `flex-1`，并辅以 `justify-start` / `justify-end` 将中心区块挤至死角。
 - **强制响应式基类**: 组件变体如果包含背景色，必须强制写全双态映射（如 `bg-zinc-100 dark:bg-zinc-800`），零容忍单态硬编码。
+
+**4. 读链路元数据补齐 (Metadata Hydration)**:
+- 在 `GET /api/projects/:id` 的 JIT 签发阶段，必须通过 `assetId` 回表查询并补齐 `filename` 等关键元数据。严禁仅下发加密 URL，否则会导致前端 UI（如素材篮子）无法向用户展示人类可读的原始信息。

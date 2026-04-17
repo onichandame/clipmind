@@ -25,9 +25,19 @@ export function BasketSidebar({ isOpen, onToggle }: BasketSidebarProps) {
   console.log("=========================================");
 
   // [Fix] 响应式 JIT 映射：组件渲染时动态组装，保证 React 状态追踪
+  // 同时升级为复合键匹配并同步 filename 元数据
   const items = selectedBasket.map((item: any) => {
-    const source = retrievedClips.find((c: any) => c.assetId === item.assetId);
-    return { ...item, videoUrl: source?.videoUrl, thumbnailUrl: source?.thumbnailUrl };
+    const source = retrievedClips.find((c: any) =>
+      c.assetId === item.assetId &&
+      c.startTime === item.startTime &&
+      c.endTime === item.endTime
+    );
+    return {
+      ...item,
+      videoUrl: source?.videoUrl,
+      thumbnailUrl: source?.thumbnailUrl,
+      filename: source?.filename
+    };
   });
 
   const handleClear = () => {
@@ -36,9 +46,11 @@ export function BasketSidebar({ isOpen, onToggle }: BasketSidebarProps) {
     }
   };
 
-  const handleRemove = (assetId: string) => {
+  const handleRemove = (clip: any) => {
     if (projectId) {
-      setSelectedBasket(projectId, selectedBasket.filter((i: any) => i.assetId !== assetId));
+      setSelectedBasket(projectId, selectedBasket.filter((i: any) =>
+        !(i.assetId === clip.assetId && i.startTime === clip.startTime && i.endTime === clip.endTime)
+      ));
     }
   };
 
@@ -122,8 +134,8 @@ export function BasketSidebar({ isOpen, onToggle }: BasketSidebarProps) {
                     </div>
 
                     <div className="flex-1 min-w-0 pt-0.5">
-                      <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 truncate" title={item.reason}>
-                        片段 ID: {item.assetId.slice(0, 8)}
+                      <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 truncate" title={item.filename || item.reason}>
+                        {item.filename || `片段 ID: ${item.assetId.slice(0, 8)}`}
                       </p>
                       <div className="flex items-center gap-2 mt-1.5">
                         <span className="text-[10px] font-mono text-zinc-500">
@@ -134,7 +146,7 @@ export function BasketSidebar({ isOpen, onToggle }: BasketSidebarProps) {
 
                     <button
                       type="button"
-                      onClick={() => handleRemove(item.assetId)}
+                      onClick={() => handleRemove(item)}
                       className="p-1.5 text-zinc-400 dark:text-zinc-600 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
                       aria-label="移除该片段"
                     >

@@ -163,8 +163,14 @@ app.get('/:id', async (c) => {
         // 2. 溯源防线：根据 assetId 去底层查出真实视频 ossUrl，并强制签发下载 Header
         if (clip.assetId) {
           try {
-            const [assetRecord] = await db.select({ ossUrl: assets.ossUrl }).from(assets).where(eq(assets.id, clip.assetId));
+            const [assetRecord] = await db.select({ 
+              ossUrl: assets.ossUrl,
+              filename: assets.filename 
+            }).from(assets).where(eq(assets.id, clip.assetId));
+
             if (assetRecord && assetRecord.ossUrl) {
+              // 补齐文件名元数据
+              clip.filename = assetRecord.filename;
               // 编码文件名防中文乱码
               const safeFilename = encodeURIComponent(clip.filename || 'clipmind_video.mp4');
               clip.videoUrl = ossClient.signatureUrl(assetRecord.ossUrl, {
