@@ -864,3 +864,8 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **4. 读链路元数据补齐 (Metadata Hydration)**:
 - 在 `GET /api/projects/:id` 的 JIT 签发阶段，必须通过 `assetId` 回表查询并补齐 `filename` 等关键元数据。严禁仅下发加密 URL，否则会导致前端 UI（如素材篮子）无法向用户展示人类可读的原始信息。
+
+**6. GUI 状态修改的乐观落盘原则 (Optimistic Persist)**:
+- **DON'T DO (只改瞬态)**: 严禁在修改类似 `selectedBasket` 等核心领域资产时，仅仅调用 `useCanvasStore.getState().set...` 更改前端内存。这必然导致刷新后的水合断层。
+- **乐观闭环规范**: 必须采用 `乐观更新 (瞬间渲染 UI) -> 异步 fetch (PATCH 接口) -> 失败回滚 (try-catch 恢复原 Store)` 的标准三步走架构，既保证了本地的极速响应，又捍卫了端云的一致性。
+- **热更新假死防线**: 在修改后端路由入口时，若遇到符合预期却请求失效的情况，需警惕热更新进程假死，必须结合日志探针强制触发重载。

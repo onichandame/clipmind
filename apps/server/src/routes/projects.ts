@@ -144,12 +144,6 @@ app.get('/:id', async (c) => {
     // [Arch] 缝合脑裂：将物理表查询到的 planRes 注入 projectData，供前端画布流式卡片渲染
     projectData.editingPlans = planRes;
 
-    console.log(`\n======================================`);
-    console.log(`📍 [PROBE 2 - READ] 拦截 GET /projects/:id`);
-    console.log(`[planRes 数组长度]:`, planRes?.length);
-    console.log(`[下发前端的 editingPlans]:`, JSON.stringify(projectData.editingPlans).slice(0, 150) + "...");
-    console.log(`======================================\n`);
-
     if (Array.isArray(projectData.retrievedClips)) {
       // [Arch] JIT 签发升级：遍历并异步补齐原片下载链接
       for (let i = 0; i < projectData.retrievedClips.length; i++) {
@@ -245,9 +239,6 @@ app.patch('/:id', async (c) => {
   const body = await c.req.json();
 
   const updatePayload: Record<string, any> = { updatedAt: new Date() };
-
-  console.log(`\n🛑 [Probe Backend] PATCH /api/projects/${id} Triggered`);
-  console.log(`🛑 [Probe Backend] Raw parsed body:`, JSON.stringify(body, null, 2));
 
   // 遵循 PATCH 原则，仅处理传递的增量字段
   if (body.title !== undefined) {

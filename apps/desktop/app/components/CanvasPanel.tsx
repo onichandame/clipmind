@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { env } from '../env';
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
@@ -28,6 +29,7 @@ const modeLabels: Record<CanvasMode, string> = {
   plan: "📋 剪辑方案",
 };
 
+
 export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }: CanvasPanelProps) {
   const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
@@ -37,8 +39,53 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // 辅助函数：判断某个检索结果是否已被选入篮子
-  const isClipSelected = (assetId: string) => {
-    return selectedBasket.some((item: any) => item.assetId === assetId);
+  const isClipSelected = (clip: any) => {
+    return selectedBasket.some((item: any) =>
+      item.assetId === clip.assetId &&
+      item.startTime === clip.startTime &&
+      item.endTime === clip.endTime
+    );
+  };
+
+  // 交互函数：手动 Toggle 素材入篮 (乐观更新 + 异步落盘)
+  const toggleClipSelection = async (clip: any) => {
+    const { setSelectedBasket } = useCanvasStore.getState();
+    const currentBasket = [...selectedBasket];
+    let newBasket;
+
+    if (isClipSelected(clip)) {
+      newBasket = currentBasket.filter((item: any) =>
+        !(item.assetId === clip.assetId && item.startTime === clip.startTime && item.endTime === clip.endTime)
+      );
+    } else {
+      newBasket = [...currentBasket, {
+        assetId: clip.assetId,
+        startTime: clip.startTime,
+        endTime: clip.endTime,
+        reason: "手动精选"
+      }];
+    }
+
+    // 1. 乐观更新 (Optimistic UI) 瞬间点亮卡片
+    setSelectedBasket(projectId, newBasket);
+
+    // 2. 异步回写落盘 (Persist to DB)
+    try {
+      const payload = { selectedBasket: newBasket };
+      const response = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const resData = await response.clone().json().catch(() => ({}));
+
+      if (!response.ok) throw new Error('Failed to persist basket');
+    } catch (error) {
+      console.error("Failed to sync basket, rolling back...", error);
+      // 发生网络错误时，静默回滚到修改前的状态，防止状态水合断层
+      setSelectedBasket(projectId, currentBasket);
+    }
   };
 
   const editor = useEditor({
@@ -222,9 +269,13 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto pb-20">
                 {retrievedClips.map((clip: any, i: number) => {
-                  const selected = isClipSelected(clip.assetId);
+                  const selected = isClipSelected(clip);
                   return (
-                    <div key={i} className={`bg-white dark:bg-zinc-900 border ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} rounded-xl overflow-hidden flex flex-col transition-all group relative`}>
+                    <div
+                      key={i}
+                      onClick={() => toggleClipSelection(clip)}
+                      className={`bg-white dark:bg-zinc-900 border cursor-pointer hover:ring-1 hover:ring-indigo-300 dark:hover:ring-indigo-700 ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} rounded-xl overflow-hidden flex flex-col transition-all group relative`}
+                    >
                       {/* 已精选徽章 */}
                       {selected && (
                         <div className="absolute top-2 right-2 z-10 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1">
