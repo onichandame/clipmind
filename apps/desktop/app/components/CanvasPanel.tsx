@@ -115,27 +115,30 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
           </div>
         </div>
 
-        {/* 宽屏态：素材篮子 (复用 Button 组件) */}
-        <div className="hidden lg:flex">
-          <Button variant="secondary" size="sm" onClick={onToggleBasket} className="gap-2">
-            <ShoppingBasket size={16} />
-            <span>素材篮子</span>
-            {selectedBasket.length > 0 && (
-              <span className="bg-indigo-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-md shadow-inner">
-                {selectedBasket.length}
-              </span>
-            )}
-          </Button>
-        </div>
+        {/* 右侧：操作区 (与左侧 flex-1 对称以保证中部绝对居中) */}
+        <div className="flex-1 flex items-center justify-end gap-2">
+          {/* 宽屏态：素材篮子 (复用 Button 组件) */}
+          <div className="hidden lg:flex">
+            <Button variant="secondary" size="sm" onClick={onToggleBasket} className="gap-2">
+              <ShoppingBasket size={16} />
+              <span>素材篮子</span>
+              {selectedBasket.length > 0 && (
+                <span className="bg-indigo-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-md shadow-inner">
+                  {selectedBasket.length}
+                </span>
+              )}
+            </Button>
+          </div>
 
-        {/* 窄屏态：汉堡菜单唤起按钮 */}
-        <div className="lg:hidden relative">
-          <Button variant="secondary" size="sm" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="px-2">
-            <Menu size={18} />
-            {selectedBasket.length > 0 && (
-              <span className="absolute -top-1 -right-1 bg-red-500 w-2.5 h-2.5 rounded-full border border-zinc-100 dark:border-zinc-900" />
-            )}
-          </Button>
+          {/* 窄屏态：汉堡菜单唤起按钮 */}
+          <div className="lg:hidden relative">
+            <Button variant="secondary" size="sm" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="px-2">
+              <Menu size={18} />
+              {selectedBasket.length > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 w-2.5 h-2.5 rounded-full border border-zinc-100 dark:border-zinc-900" />
+              )}
+            </Button>
+          </div>
         </div>
       </div>
 
