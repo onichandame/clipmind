@@ -29,6 +29,7 @@ interface CanvasState {
   setOutlineContent: (projectId: string, content: string, modifiedBy: 'user' | 'agent' | 'system') => void;
   setEditingPlans: (projectId: string, plans: any[]) => void;
   clearDirtyState: (projectId: string) => void;
+  setSelectedBasket: (projectId: any, basket: any[]) => void
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
