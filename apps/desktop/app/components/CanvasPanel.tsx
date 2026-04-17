@@ -4,7 +4,6 @@ import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import { Menu, ShoppingBasket } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
-import { useBasketStore } from "../store/useBasketStore";
 import { Button } from "./Button";
 import { PlanCanvas } from "./canvas/PlanCanvas";
 
@@ -31,10 +30,14 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
   const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
   const retrievedClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
+  const selectedBasket = useCanvasStore((s) => s.projects[projectId]?.selectedBasket || []);
 
-  console.log("🕵️‍♂️ [Probe CanvasPanel] activeMode:", activeMode, "| clips length:", retrievedClips?.length);
-  const basketItems = useBasketStore((state) => state.items);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  // 辅助函数：判断某个检索结果是否已被选入篮子
+  const isClipSelected = (assetId: string) => {
+    return selectedBasket.some((item: any) => item.assetId === assetId);
+  };
 
   const editor = useEditor({
     extensions: [
@@ -110,9 +113,9 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
           <Button variant="secondary" size="sm" onClick={onToggleBasket} className="gap-2">
             <ShoppingBasket size={16} />
             <span>素材篮子</span>
-            {basketItems.length > 0 && (
+            {selectedBasket.length > 0 && (
               <span className="bg-indigo-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-md shadow-inner">
-                {basketItems.length}
+                {selectedBasket.length}
               </span>
             )}
           </Button>
@@ -122,7 +125,7 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
         <div className="lg:hidden relative">
           <Button variant="secondary" size="sm" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="px-2">
             <Menu size={18} />
-            {basketItems.length > 0 && (
+            {selectedBasket.length > 0 && (
               <span className="absolute -top-1 -right-1 bg-red-500 w-2.5 h-2.5 rounded-full border border-zinc-100 dark:border-zinc-900" />
             )}
           </Button>
@@ -168,9 +171,9 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
               <ShoppingBasket size={18} />
               <span>打开素材篮子</span>
             </div>
-            {basketItems.length > 0 && (
+            {selectedBasket.length > 0 && (
               <span className="bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-md shadow-inner">
-                {basketItems.length} 项
+                {selectedBasket.length} 项
               </span>
             )}
           </Button>
@@ -208,33 +211,43 @@ export function CanvasPanel({ projectId, outline, onToggleBasket }: CanvasPanelP
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto pb-20">
-                {retrievedClips.map((clip: any, i: number) => (
-                  <div key={i} className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm flex flex-col transition-colors group">
-                    {/* 缩略图区域 */}
-                    <div className="w-full h-32 bg-zinc-100 dark:bg-zinc-800 relative">
-                      {clip.thumbnailUrl ? (
-                        <img src={clip.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-zinc-400 text-2xl">🎬</div>
+                {retrievedClips.map((clip: any, i: number) => {
+                  const selected = isClipSelected(clip.assetId);
+                  return (
+                    <div key={i} className={`bg-white dark:bg-zinc-900 border ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} rounded-xl overflow-hidden flex flex-col transition-all group relative`}>
+                      {/* 已精选徽章 */}
+                      {selected && (
+                        <div className="absolute top-2 right-2 z-10 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                          已精选
+                        </div>
                       )}
-                      <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono">
-                        {(clip.startTime / 1000).toFixed(1)}s - {(clip.endTime / 1000).toFixed(1)}s
+                      {/* 缩略图区域 */}
+                      <div className={`w-full h-32 relative ${selected ? 'opacity-90' : ''}`}>
+                        {clip.thumbnailUrl ? (
+                          <img src={clip.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover bg-zinc-100 dark:bg-zinc-800" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 text-zinc-400 text-2xl">🎬</div>
+                        )}
+                        <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono shadow-sm">
+                          {(clip.startTime / 1000).toFixed(1)}s - {(clip.endTime / 1000).toFixed(1)}s
+                        </div>
+                      </div>
+                      {/* 文本区域 */}
+                      <div className="p-4 flex flex-col gap-3 flex-1">
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded shrink-0">
+                            Score: {clip.score?.toFixed(2) || 'N/A'}
+                          </span>
+                          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 truncate" title={clip.filename}>
+                            {clip.filename || '未知素材'}
+                          </span>
+                        </div>
+                        <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-3 leading-relaxed">{clip.text}</p>
                       </div>
                     </div>
-                    {/* 文本区域 */}
-                    <div className="p-4 flex flex-col gap-3 flex-1">
-                      <div className="flex justify-between items-center gap-2">
-                        <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded shrink-0">
-                          Score: {clip.score?.toFixed(2) || 'N/A'}
-                        </span>
-                        <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 truncate" title={clip.filename}>
-                          {clip.filename || '未知素材'}
-                        </span>
-                      </div>
-                      <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-3 leading-relaxed">{clip.text}</p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

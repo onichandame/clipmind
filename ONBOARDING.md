@@ -820,3 +820,17 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **UI 状态枚举完备性**: 任何在 Server-Side 注册的新工具（如 `generateEditingPlan`），在引入前端 SDK 渲染气泡时，**必须**同步补齐相关的中文状态文案映射。严禁使用不完备的三元运算符（如 `isOutline ? A : B`），必须覆盖所有已知工具分支，防范“文案指代不明”的展示事故。
+
+## 📝 [阶段跃迁] 素材精挑 (Footage Selection) 状态流转与响应式闭环 (LUI + GUI)
+
+**1. 架构与状态流转 (Architecture State):**
+- **LUI+GUI 双轨联动**: 正式落地了“精选素材篮子 (selectedBasket)”领域模型。AI 可通过 `manage_footage_basket` 工具在服务端直接操作数据库落盘，用户也可在 GUI 侧边栏实时查看与修改。
+- **水合链路收敛 (Hydration CQRS)**: 彻底铲除了 `ChatPanel.tsx` 中基于 `messages` 历史流“倒序捞针”解析 `clips` 的脆弱逻辑。现在 `retrievedClips` 和 `selectedBasket` 的全量水合严格收敛于 React Router 的路由入口阶段 (`projects.$projectId.tsx`)，从 `GET /api/projects/:id` 接口统一拉取，实现了绝对的单一真理源。
+- **JIT 动态映射 (JIT Mapping)**: `selectedBasket` 仅在 DB 和 Store 中持久化纯净的 `assetId` 等元数据。带有安全时效性的 `videoUrl` / `thumbnailUrl` 签名链接，严格通过前端 UI 组件在渲染时，实时去 `retrievedClips` 池中进行内存关联映射，彻底阻断了 URL 过期导致的 403 黑洞。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (Zustand 响应式黑洞)**: 严禁在 React 组件的渲染主体逻辑中使用 `useCanvasStore.getState()` 去读取需要动态更新的数据！这会彻底绕过 Zustand 的依赖收集与订阅机制，导致底层数据更新后 UI 变成一潭死水（空载白屏）。必须且只能使用 Hook 形式 `useCanvasStore(state => ...)`。
+- **DON'T DO (清理不彻底的幽灵变量)**: 在进行 Store 替换重构（如移除 `useBasketStore`）时，绝对不能只删掉 `import` 和头部解构声明。必须全局搜索相关变量（如 `basketItems`），否则极易在深层嵌套的 UI（如窄屏汉堡菜单的数字角标）中引发 `Can't find variable` 的 V8 致命崩溃。
+
+**3. 新共识与规范 (New Conventions):**
+- **高对比度双向 UI 反馈**: 当实现类似“素材入篮”的跨面板联动操作时，源头实体（如左侧检索列表的卡片）必须提供具备高对比度的视觉反馈（如品牌色边框 + “✅ 已精选”绝对定位徽章）。且该反馈必须同时适配 Tailwind v4 的浅色/暗黑双态主题，确保视觉无死角，防范用户重复操作。

@@ -34,7 +34,6 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const isDirty = useCanvasStore((s) => s.projects[projectId]?.isDirty || false);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
   const setEditingPlan = useCanvasStore((s) => s.setEditingPlan);
-  const setRetrievedClips = useCanvasStore((s) => s.setRetrievedClips);
   const revalidator = useRevalidator();
 
   const { messages, setMessages, sendMessage, status, } = useChat({
@@ -114,11 +113,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     // 取出结果 (兼容 AI SDK v6 的 result / output / args 内嵌格式)
     const resultPayload = footagePart?.toolInvocation?.result || footagePart?.result || footagePart?.toolInvocation?.output || footagePart?.output || footagePart?.toolInvocation?.args || footagePart?.args;
 
-    if (resultPayload && Array.isArray(resultPayload.clips)) {
-      setRetrievedClips(projectId, resultPayload.clips);
-      // [Arch] 移除此处的 setActiveMode('footage')。视图跳转已统一收敛至 onFinish 钩子进行判定防冲突。
-    }
-  }, [messages, setRetrievedClips, projectId]);
+    // [Arch] 已移除在此处 setRetrievedClips 的逻辑。
+    // RAG 数据流转已完全收敛至后端的 CQRS 写链路，并通过 React Router 的 Loader (useQuery) 进行统一水合。
+  }, [messages, projectId]);
 
   // 3. 状态强制同步 (SPA 刚需)
   // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，

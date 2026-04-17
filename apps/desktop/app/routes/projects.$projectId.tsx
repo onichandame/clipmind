@@ -10,6 +10,7 @@ export default function ProjectWorkspace() {
   const { projectId } = useParams();
   const setRetrievedClips = useCanvasStore((s) => s.setRetrievedClips);
   const setEditingPlans = useCanvasStore((s) => s.setEditingPlans);
+  const setSelectedBasket = useCanvasStore((s) => (s as any).setSelectedBasket);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['project', projectId],
@@ -27,8 +28,9 @@ export default function ProjectWorkspace() {
     if (projectId && data?.project) {
       setRetrievedClips(projectId, (data.project as any).retrievedClips || []);
       setEditingPlans(projectId, (data.project as any).editingPlans || []);
+      setSelectedBasket(projectId, (data.project as any).selectedBasket || []);
     }
-  }, [projectId, data?.project, setRetrievedClips, setEditingPlans]);
+  }, [projectId, data?.project, setRetrievedClips, setEditingPlans, setSelectedBasket]);
 
   if (isLoading) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 transition-colors"><Loader2 className="w-8 h-8 animate-spin" /></div>;
   if (error || !data?.project) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-red-500 font-bold transition-colors">项目不存在</div>;

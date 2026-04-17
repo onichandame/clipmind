@@ -44,8 +44,20 @@ app.post("/", async (c) => {
   const model = createAIModel();
 
   // [Arch] 读写分离重构 (写链路)：抛弃前端传入的伪造历史，以数据库中的 CoreMessage 为单一真理源
-  const existingProject = await db.select({ uiMessages: projects.uiMessages }).from(projects).where(eq(projects.id, projectId)).limit(1);
+  const existingProject = await db.select({
+    uiMessages: projects.uiMessages,
+    selectedBasket: projects.selectedBasket
+  }).from(projects).where(eq(projects.id, projectId)).limit(1);
   const rawHistory: any[] = (existingProject[0]?.uiMessages as any[]) || [];
+  const currentBasket: any[] = (existingProject[0]?.selectedBasket as any[]) || [];
+
+  if (currentBasket.length > 0) {
+    dynamicSystemPrompt += `\n\n你是 ClipMind (CM)。当前项目的【精选素材篮子】包含以下确切片段：\n`;
+    currentBasket.forEach(clip => {
+      dynamicSystemPrompt += `- [ID: ${clip.assetId}] ${clip.startTime}-${clip.endTime}ms: ${clip.reason || '用户精选'}\n`;
+    });
+    dynamicSystemPrompt += `【约束】：仅基于上述篮子内的素材进行策划。若需新素材，请提示用户先执行“检索”或“加入篮子”。\n\n`;
+  }
 
   // 清洗防线：确保从数据库读出的历史记录严格符合 CoreMessage，防止被早期脏数据污染
   const coreHistory = rawHistory.map((msg: any) => {
@@ -230,7 +242,7 @@ app.post("/", async (c) => {
 
             // 提取去重的 assetIds 防止 N+1 查询
             const assetIds = [...new Set(baseClips.map((c: any) => c.assetId).filter(Boolean))];
-            const assetMap: Record<string, { filename: string, thumbnailUrl: string | null }> = {};
+            const assetMap: Record<string, { filename: string, thumbnailUrl: string | null, signedThumb?: string | null }> = {};
 
             if (assetIds.length > 0) {
               const dbAssets = await db.select({
@@ -246,7 +258,7 @@ app.post("/", async (c) => {
                   signedThumb = ossClient.signatureUrl(a.thumbnailUrl, { expires: 7200, secure: true });
                 }
                 // [Arch] 拦截点：同时保存用于签发的签名 URL 和用于落盘的纯净 Object Key
-                assetMap[a.id] = { filename: a.filename || '未知素材', rawThumb: a.thumbnailUrl, signedThumb };
+                assetMap[a.id] = { filename: a.filename || '未知素材', thumbnailUrl: a.thumbnailUrl, signedThumb };
               }
             }
 
@@ -261,7 +273,7 @@ app.post("/", async (c) => {
             const dbClips = baseClips.map((c: any) => ({
               ...c,
               filename: c.assetId ? (assetMap[c.assetId]?.filename || '未知素材') : '未知素材',
-              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.rawThumb || null) : null
+              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.thumbnailUrl || null) : null
             }));
 
             console.log(`[RAG] 检索完成，召回 ${viewClips.length} 条相关切片`);
@@ -282,8 +294,6 @@ app.post("/", async (c) => {
     onFinish: async ({ response }) => {
       try {
         console.log(`[Chat] streamText 结束，开始持久化对话到 Project: ${projectId}`);
-        // 获取用户的最后一条消息
-        const lastUserMessage = messages[messages.length - 1];
 
         // 获取当前数据库中已有的历史消息
         const existingProject = await db.select({

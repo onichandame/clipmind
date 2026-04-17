@@ -8,6 +8,7 @@ interface ProjectState {
   isDirty: boolean;
   lastModifiedBy: 'user' | 'agent' | 'system';
   retrievedClips: any[];
+  selectedBasket: any[];
 }
 
 const initialProjectState: ProjectState = {
@@ -16,6 +17,7 @@ const initialProjectState: ProjectState = {
   isDirty: false,
   lastModifiedBy: 'system',
   retrievedClips: [],
+  selectedBasket: [],
 };
 
 interface CanvasState {
@@ -71,6 +73,13 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     const pState = state.projects[projectId] || { ...initialProjectState };
     return {
       projects: { ...state.projects, [projectId]: { ...pState, retrievedClips: clips } }
+    };
+  }),
+
+  setSelectedBasket: (projectId: any, basket: any[]) => set((state: any) => {
+    const pState = state.projects[projectId] || { ...initialProjectState };
+    return {
+      projects: { ...state.projects, [projectId]: { ...pState, selectedBasket: basket } }
     };
   })
 }));
