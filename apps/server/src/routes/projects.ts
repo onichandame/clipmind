@@ -163,9 +163,9 @@ app.get('/:id', async (c) => {
         // 2. 溯源防线：根据 assetId 去底层查出真实视频 ossUrl，并强制签发下载 Header
         if (clip.assetId) {
           try {
-            const [assetRecord] = await db.select({ 
+            const [assetRecord] = await db.select({
               ossUrl: assets.ossUrl,
-              filename: assets.filename 
+              filename: assets.filename
             }).from(assets).where(eq(assets.id, clip.assetId));
 
             if (assetRecord && assetRecord.ossUrl) {
@@ -246,12 +246,22 @@ app.patch('/:id', async (c) => {
 
   const updatePayload: Record<string, any> = { updatedAt: new Date() };
 
+  console.log(`\n🛑 [Probe Backend] PATCH /api/projects/${id} Triggered`);
+  console.log(`🛑 [Probe Backend] Raw parsed body:`, JSON.stringify(body, null, 2));
+
   // 遵循 PATCH 原则，仅处理传递的增量字段
   if (body.title !== undefined) {
     if (typeof body.title !== 'string' || body.title.trim() === '') {
       return c.json({ error: 'title must be a non-empty string' }, 400);
     }
     updatePayload.title = body.title.trim();
+  }
+
+  if (body.selectedBasket !== undefined) {
+    if (!Array.isArray(body.selectedBasket)) {
+      return c.json({ error: 'selectedBasket must be an array' }, 400);
+    }
+    updatePayload.selectedBasket = body.selectedBasket;
   }
 
   if (Object.keys(updatePayload).length === 1) {
