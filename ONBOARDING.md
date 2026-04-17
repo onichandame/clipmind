@@ -807,3 +807,16 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **沙盒逃逸第一准则 (Attachment Hack)**: 在 Tauri/Electron 等桌面端 Webview 架构中，实现文件静默下载的最优、最安全路径是：前端只负责触发一个普通链接，**把“强行下载”的指令全部交给服务端的 `Content-Disposition: attachment` 响应头。** Webview 一旦嗅探到该 Header，会瞬间放弃渲染并移交操作系统的原生下载管理器，彻底绕过一切内存与权限墙。
+
+## 📝 [阶段修复] Agentic Loop 状态机竞态与 UI 映射穿透防线
+
+**1. 架构与状态流转 (Architecture State):**
+- **视图流转权绝对收敛**: 彻底剥夺了前端游离 `useEffect` 的视图切换控制权。在多步工具调用（大纲 -> 检索 -> 方案）场景中，将画布的最终路由判定绝对收敛于 `onFinish` 钩子，并强制提取 `event.messages` 中**最后一个**执行的工具作为真理源，消除并发抢夺。
+- **读链路补齐**: 在后端查询 `editingPlans` 时补齐了 `orderBy(desc(createdAt))`，确保最新状态永远浮现在 UI 顶端。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (useEffect 并发抢夺焦点)**: **绝对禁止**在多个独立的 `useEffect` 中监听同一份流式 `messages` 去触发视图切换。当多个工具在同一次响应中被触发时，会产生严重的**竞态条件 (Race Condition)**，导致正确的目标视图被旧逻辑幽灵覆写。
+- **DON'T DO (.some() 历史穿透陷阱)**: 严禁使用 `array.some()` 遍历整个历史消息来决定当前的状态跳转。这会导致早期触发的工具（如大纲）形成逻辑黑洞，永远拦截后续的高优跳转请求。必须精准提纯**当前流（或最后一个动作）**的意图。
+
+**3. 新共识与规范 (New Conventions):**
+- **UI 状态枚举完备性**: 任何在 Server-Side 注册的新工具（如 `generateEditingPlan`），在引入前端 SDK 渲染气泡时，**必须**同步补齐相关的中文状态文案映射。严禁使用不完备的三元运算符（如 `isOutline ? A : B`），必须覆盖所有已知工具分支，防范“文案指代不明”的展示事故。

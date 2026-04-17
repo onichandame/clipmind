@@ -1,5 +1,6 @@
 import { env } from '../env';
 import { useRef, useEffect } from "react";
+import { useRevalidator } from "react-router";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart } from "ai";
 import ReactMarkdown from "react-markdown";
@@ -34,6 +35,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
   const setEditingPlan = useCanvasStore((s) => s.setEditingPlan);
   const setRetrievedClips = useCanvasStore((s) => s.setRetrievedClips);
+  const revalidator = useRevalidator();
 
   const { messages, setMessages, sendMessage, status, } = useChat({
     id: projectId,
@@ -53,15 +55,22 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     },
     onFinish: (event) => {
       console.log("🛑 [网络层探针] 触发 onFinish，流被正常解析并结束！", JSON.stringify(event));
+      // [Arch] 强制触发 Router Loader 重新拉取后端数据，实现方案与素材的水合 (Hydration)
+      revalidator.revalidate();
 
-      const hasOutline = event.messages.some((msg) => msg?.parts.some(p => isToolUIPart(p) && p.type === `tool-updateOutline`));
-      const hasFootage = event.messages.some((msg) => msg?.parts.some(p => isToolUIPart(p) && p.type === `tool-searchFootage`));
+      // [Arch] 动态优先级：提取本次流中最后一个被调用的工具，以决定最终的视图归属
+      const allTools = event.messages.flatMap(m => m.parts?.filter(p => isToolUIPart(p)).map(p => p.type) || []);
+      const lastTool = allTools[allTools.length - 1];
 
-      if (hasOutline) {
-        setActiveMode("outline");
-        queryClient.invalidateQueries({ queryKey: ['project', projectId] });
-      } else if (hasFootage) {
+      if (lastTool === 'tool-generateEditingPlan') {
+        setActiveMode("plan");
+      } else if (lastTool === 'tool-searchFootage') {
         setActiveMode("footage");
+      } else if (lastTool === 'tool-updateOutline') {
+        setActiveMode("outline");
+      }
+
+      if (lastTool) {
         queryClient.invalidateQueries({ queryKey: ['project', projectId] });
       }
 
@@ -107,11 +116,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
     if (resultPayload && Array.isArray(resultPayload.clips)) {
       setRetrievedClips(projectId, resultPayload.clips);
-      if (useCanvasStore.getState().activeMode !== 'footage') {
-        setActiveMode('footage');
-      }
+      // [Arch] 移除此处的 setActiveMode('footage')。视图跳转已统一收敛至 onFinish 钩子进行判定防冲突。
     }
-  }, [messages, setRetrievedClips, setActiveMode, projectId]);
+  }, [messages, setRetrievedClips, projectId]);
 
   // 3. 状态强制同步 (SPA 刚需)
   // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，
@@ -198,7 +205,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                     if (state === 'result') {
                       // 检查后端是否明确返回了错误
                       if (invocation.result && invocation.result.success === false) {
-                         return (
+                        return (
                           <div key={index} className="mt-4 mb-2 p-3 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
                             ⚠️ 方案解析失败: {invocation.result.error || '未知错误'}
                           </div>
@@ -224,6 +231,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                   // 兼容旧版以及其它工具 (大纲更新、素材检索等)
                   const isCalling = state === 'streaming' || state === 'input-streaming' || state === 'input-available' || state === 'partial-call';
                   const isOutline = toolName?.includes('updateOutline');
+                  const isPlan = toolName?.includes('generateEditingPlan');
 
                   return (
                     <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3">
@@ -233,7 +241,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                         <div className="text-lg leading-none">✨</div>
                       )}
                       <span className="text-sm font-medium">
-                        {isCalling ? (isOutline ? "正在构思大纲..." : "正在检索素材...") : (isOutline ? "大纲已更新" : "素材检索完成")}
+                        {isCalling
+                          ? (isOutline ? "正在构思大纲..." : isPlan ? "正在生成剪辑方案..." : "正在检索素材...")
+                          : (isOutline ? "大纲已同步" : isPlan ? "剪辑方案生成完毕" : "素材检索完成")}
                       </span>
                     </div>
                   );

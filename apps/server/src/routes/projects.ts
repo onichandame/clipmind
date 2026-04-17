@@ -72,7 +72,7 @@ app.get('/:id', async (c) => {
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
-    const planRes = await db.select().from(editingPlans).where(eq(editingPlans.projectId, id));
+    const planRes = await db.select().from(editingPlans).where(eq(editingPlans.projectId, id)).orderBy(desc(editingPlans.createdAt));
 
     // [Arch] 读写分离重构 (读链路)：将底层 CoreMessage 动态投影为前端 UIMessage
     const rawMessages = projectRes[0].uiMessages || [];
