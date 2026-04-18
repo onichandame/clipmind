@@ -52,17 +52,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build Tauri App
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VITE_API_BASE_URL: "https://clipmind.prodream.cn"
-          TARGET_TRIPLE: ${{ matrix.target }}
-        with:
-          projectPath: apps/desktop
-          args: --target ${{ matrix.target }}
-          tagName: v__VERSION__
-          releaseName: 'ClipMind v__VERSION__'
-          releaseBody: 'Automated release of ClipMind Desktop Client.'
-          releaseDraft: true
-          prerelease: false
+          - name: Build Tauri App
+            uses: tauri-apps/tauri-action@v0
+            env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              VITE_API_BASE_URL: "https://clipmind.prodream.cn"
+              TARGET_TRIPLE: ${{ matrix.target }}
+              APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+              APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+              APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+              APPLE_ID: ${{ secrets.APPLE_ID }}
+              APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+              APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+            with:
+              projectPath: apps/desktop
+              args: --target ${{ matrix.target }}
+              tagName: v__VERSION__
+              releaseName: 'ClipMind v__VERSION__'
+              releaseBody: |
+                Automated release of ClipMind Desktop Client.
+                
+                **🍎 macOS Apple Silicon (M1~M4) Users:**
+                If you see an "App is damaged" error, it is due to strict macOS Gatekeeper checks on unnotarized apps. Run this command in Terminal to bypass:
+                `sudo xattr -cr /Applications/ClipMind.app`
+              releaseDraft: true
+              prerelease: false

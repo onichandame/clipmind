@@ -869,3 +869,15 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 - **DON'T DO (只改瞬态)**: 严禁在修改类似 `selectedBasket` 等核心领域资产时，仅仅调用 `useCanvasStore.getState().set...` 更改前端内存。这必然导致刷新后的水合断层。
 - **乐观闭环规范**: 必须采用 `乐观更新 (瞬间渲染 UI) -> 异步 fetch (PATCH 接口) -> 失败回滚 (try-catch 恢复原 Store)` 的标准三步走架构，既保证了本地的极速响应，又捍卫了端云的一致性。
 - **热更新假死防线**: 在修改后端路由入口时，若遇到符合预期却请求失效的情况，需警惕热更新进程假死，必须结合日志探针强制触发重载。
+
+## 📝 [阶段修复] macOS Apple Silicon (M系列) 产物损坏警告与 Gatekeeper 防线 (Notarization & Quarantine)
+
+**1. 架构与状态流转 (Architecture State):**
+- **CI/CD 签名预留**: 在 `.github/workflows/build.yml` 中正式为 macOS 矩阵注入了 Apple 开发者证书相关的环境变量（`APPLE_CERTIFICATE`、`APPLE_TEAM_ID` 等），为后续自动签名与公证 (Notarization) 铺平道路。
+- **降级自救通道**: 在 GitHub Release Body 及 `README.md` 中注入了终端解锁指南，保障在无证书测试期间，内测用户仍可通过原生命令强行绕过拦截。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (物理损坏幻觉)**: 当在 M1~M4 设备上打开 aarch64 产物遇到“App 已损坏，无法打开”警告时，**绝对禁止**立刻怀疑是 Rust 交叉编译工具链或 GitHub Actions 产物发生了物理损坏。这 100% 是由于未经苹果公证的第三方应用，被 macOS Gatekeeper 强行打上了 `com.apple.quarantine` 隔离标签。
+
+**3. 新共识与规范 (New Conventions):**
+- **隔离剥离纪律**: 在正式引入企业级 Apple Developer 证书之前，开发团队及内测用户在安装 ClipMind 测试包时，必须养成将 App 拖入应用程序目录后，执行 `sudo xattr -cr /Applications/ClipMind.app` 强行剥离隔离标签的肌肉记忆。
