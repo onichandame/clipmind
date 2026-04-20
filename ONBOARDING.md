@@ -908,3 +908,7 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **4. 踩坑与教训：Prose 插件的隐形墨水陷阱 (Typography Trap)**
 - **DON'T DO**: 严禁在浅色/白底模式下，对包含 `@tailwindcss/typography` (`prose`) 的深色背景气泡仅使用 `text-white`。`prose` 插件具有极高的特异性（Specificity），它会强行把 `<p>` 标签渲染为深灰色。如果不根据气泡颜色显式切换 `prose-invert`，就会导致深色气泡中出现“隐形墨水”的灾难。
 - **规范**: 恒定深色背景的区块（如用户气泡）必须强制硬编码引入 `prose-invert`，而跟随系统主题的区块则使用 `dark:prose-invert`。
+
+**5. 踩坑与教训：状态幻觉与数据驱动导航 (Data-Driven Navigation)**
+- **DON'T DO**: 严禁在多步表单或向导组件（如 Step Pills）中，仅仅依靠当前的“活跃视图 (activeMode)”来反推前置步骤是否完成。这种盲猜逻辑极其脆弱，会产生严重的状态幻觉（例如：一旦用户跳步浏览，状态指示器就会错乱）。
+- **规范**: 必须坚守 SSOT (单一真理源) 原则。向导组件的“完成态 (Done)”必须且只能通过校验底层领域模型实体（如 `currentProject.outlineContent`, `currentProject.editingPlans`）的真实数据是否落盘来决定。

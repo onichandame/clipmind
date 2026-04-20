@@ -24,6 +24,7 @@ const sanitizeSchema = {
       const setActiveMode = useCanvasStore((s) => s.setActiveMode);
       const activeMode = useCanvasStore((s) => s.activeMode);
       const projectTitle = useCanvasStore((s) => s.projects[projectId]?.title);
+      const currentProject = useCanvasStore((s) => s.projects[projectId]);
       const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -171,32 +172,28 @@ const sanitizeSchema = {
               <div className="w-6 h-6 rounded-lg bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold shadow-lg shadow-indigo-500/20">C</div>
             </div>
             
-            {/* Step Pills */}
-            <div className="flex gap-1.5 mt-2">
-              {[
-                { id: 'outline', label: '① 热点', modes: ['outline'] },
-                { id: 'footage', label: '② 素材', modes: ['footage'] },
-                { id: 'plan', label: '③ 剪辑', modes: ['plan'] }
-              ].map(step => {
-                const isActive = step.modes.includes(activeMode);
-                const isDone = (activeMode === 'plan' && step.id !== 'plan') || (activeMode === 'footage' && step.id === 'outline');
-                
-                return (
+              {/* Step Pills */}
+              <div className="flex gap-1.5 mt-2">
+                {[
+                  { id: 'outline', num: '①', text: '热点', isActive: activeMode === 'outline', isDone: !!currentProject?.outlineContent },
+                  { id: 'footage', num: '②', text: '素材', isActive: activeMode === 'footage', isDone: ((currentProject?.retrievedClips?.length || 0) > 0) || ((currentProject?.selectedBasket?.length || 0) > 0) },
+                  { id: 'plan', num: '③', text: '剪辑', isActive: activeMode === 'plan', isDone: (currentProject?.editingPlans?.length || 0) > 0 }
+                ].map(step => (
                   <div 
                     key={step.id} 
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition-all ${
-                      isActive 
+                    className={`px-2.5 py-1 flex items-center gap-1 rounded-full text-[10px] font-bold transition-all ${
+                      step.isActive 
                         ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20" 
-                        : isDone 
+                        : step.isDone 
                           ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20" 
                           : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-transparent"
                     }`}
                   >
-                    {step.label}
+                    <span>{step.isDone && !step.isActive ? '✓' : step.num}</span>
+                    <span>{step.text}</span>
                   </div>
-                )
-              })}
-            </div>
+                ))}
+              </div>
           </div>
 
       {/* Messages Area */}
