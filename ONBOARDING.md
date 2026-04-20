@@ -904,3 +904,7 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
 - **DON'T DO (丢失冷启动抓手)**: 严禁在优化文案时，为了追求结构精简而删掉“灵感发现/看热点”等破冰引导。这会直接导致无明确意图的用户在空白界面流失。
 
+
+**4. 踩坑与教训：Prose 插件的隐形墨水陷阱 (Typography Trap)**
+- **DON'T DO**: 严禁在浅色/白底模式下，对包含 `@tailwindcss/typography` (`prose`) 的深色背景气泡仅使用 `text-white`。`prose` 插件具有极高的特异性（Specificity），它会强行把 `<p>` 标签渲染为深灰色。如果不根据气泡颜色显式切换 `prose-invert`，就会导致深色气泡中出现“隐形墨水”的灾难。
+- **规范**: 恒定深色背景的区块（如用户气泡）必须强制硬编码引入 `prose-invert`，而跟随系统主题的区块则使用 `dark:prose-invert`。

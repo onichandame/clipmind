@@ -20,9 +20,11 @@ const sanitizeSchema = {
   attributes: { ...defaultSchema.attributes, code: [...(defaultSchema.attributes?.code || []), "className"] },
 };
 
-export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
-  const setActiveMode = useCanvasStore((s) => s.setActiveMode);
-  const queryClient = useQueryClient();
+    export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
+      const setActiveMode = useCanvasStore((s) => s.setActiveMode);
+      const activeMode = useCanvasStore((s) => s.activeMode);
+      const projectTitle = useCanvasStore((s) => s.projects[projectId]?.title);
+      const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
 
@@ -157,13 +159,45 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   return (
     <div className="flex flex-col h-full bg-transparent">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-800/60 backdrop-blur-sm z-10 transition-colors">
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded bg-indigo-100 dark:bg-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-xs transition-colors">✨</div>
-          <h1 className="text-sm font-medium text-zinc-900 dark:text-zinc-200 transition-colors">ClipMind</h1>
-        </div>
-      </div>
+          {/* Header */}
+          <div className="flex flex-col px-5 pt-4 pb-3 border-b border-zinc-200 dark:border-zinc-800/60 backdrop-blur-sm z-10 transition-colors">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex flex-col">
+                <a href="/" className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 hover:text-indigo-500 transition-colors font-bold mb-0.5">← 工作台</a>
+                <h1 className="text-[13px] font-bold text-zinc-900 dark:text-zinc-100 transition-colors tracking-tight">
+                  {projectTitle || "未命名项目"}
+                </h1>
+              </div>
+              <div className="w-6 h-6 rounded-lg bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold shadow-lg shadow-indigo-500/20">C</div>
+            </div>
+            
+            {/* Step Pills */}
+            <div className="flex gap-1.5 mt-2">
+              {[
+                { id: 'outline', label: '① 热点', modes: ['outline'] },
+                { id: 'footage', label: '② 素材', modes: ['footage'] },
+                { id: 'plan', label: '③ 剪辑', modes: ['plan'] }
+              ].map(step => {
+                const isActive = step.modes.includes(activeMode);
+                const isDone = (activeMode === 'plan' && step.id !== 'plan') || (activeMode === 'footage' && step.id === 'outline');
+                
+                return (
+                  <div 
+                    key={step.id} 
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition-all ${
+                      isActive 
+                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20" 
+                        : isDone 
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20" 
+                          : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-transparent"
+                    }`}
+                  >
+                    {step.label}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
@@ -176,7 +210,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                   <span className="text-[12px] text-white font-semibold transition-colors">C</span>
                 </div>
               )}
-              <div className={`max-w-[85%] px-4 py-2.5 text-[14px] leading-relaxed transition-colors ${isUser ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-2xl rounded-tr-sm border border-transparent dark:border-zinc-700/50 shadow-sm" : "bg-white dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 rounded-2xl rounded-tl-sm border border-zinc-200 dark:border-zinc-700/50 shadow-sm"}`}>
+                  <div className={`max-w-[85%] px-4 py-2.5 text-[13px] leading-relaxed transition-all ${
+                    isUser 
+                      ? "bg-indigo-600 text-white rounded-2xl rounded-tr-sm shadow-md shadow-indigo-500/10 font-medium" 
+                      : "bg-zinc-100/50 dark:bg-zinc-800/40 text-zinc-800 dark:text-zinc-200 rounded-2xl rounded-tl-sm border border-zinc-200/60 dark:border-zinc-700/40 shadow-sm"
+                  }`}>
                 {/* 1. 纯文本渲染 & 工具状态回显 (拦截空炮消息) */}
                 {(() => {
                   const msg = message;
@@ -184,11 +222,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
                   if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
 
-                  return (
-                    <div className={`prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-200 dark:prose-pre:border-zinc-800 transition-colors`}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
-                    </div>
-                  );
+                      return (
+                        <div className={`prose prose-sm ${isUser ? 'prose-invert' : 'dark:prose-invert'} max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-200 dark:prose-pre:border-zinc-800 transition-colors`}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
+                        </div>
+                      );
                 })()}
 
                 {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) */}
@@ -244,11 +282,16 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                       </span>
                     </div>
                   );
-                })}
+                  })}
+                </div>
+                {isUser && (
+                  <div className="w-7 h-7 mt-1 rounded-full bg-zinc-800 dark:bg-zinc-200 flex items-center justify-center ml-3 flex-shrink-0 shadow-sm transition-colors">
+                    <span className="text-[11px] text-white dark:text-zinc-800 font-semibold transition-colors">我</span>
+                  </div>
+                )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
         <div ref={messagesEndRef} />
       </div>
 
