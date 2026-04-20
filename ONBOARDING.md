@@ -881,3 +881,16 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 
 **3. 新共识与规范 (New Conventions):**
 - **隔离剥离纪律**: 在正式引入企业级 Apple Developer 证书之前，开发团队及内测用户在安装 ClipMind 测试包时，必须养成将 App 拖入应用程序目录后，执行 `sudo xattr -cr /Applications/ClipMind.app` 强行剥离隔离标签的肌肉记忆。
+
+## 📝 [阶段交接] 热点情报引导与端云初始状态对齐 (Onboarding SSOT)
+
+**1. 架构与状态流转 (Architecture State):**
+- **单一真理源 (SSOT) 闭环**: 明确了新项目创建时的“初始欢迎语 (Greeting)”由且仅由后端 `apps/server/src/routes/projects.ts` 在初始化数据库记录时决定。
+- **功能透出与 Agent 激活**: 在后端的初始欢迎语中显式注入了“全网热点风向标”的引导文案。这不仅解决了用户的“冷启动”困境，更成功引导用户提问，无缝激活了后台定时抓取任务 (`fetch-hot-topics.ts`) 与 LLM System Prompt 之间的联动。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (存量数据幻觉)**: 严禁在修改了后端数据库的默认插入逻辑（如修改欢迎语）后，面对毫无变化的前端历史页面直接怀疑代码未生效。存量项目读取的是数据库里的历史脏数据，测试生命周期初始化逻辑时，**必须新建项目**。
+- **DON'T DO (前端越权硬编码)**: 严禁在前端 `ChatPanel.tsx` 或类似组件中硬编码默认的初始消息（Fallback Messages）。这会与后端的初始化逻辑产生严重的“双重真理源”脑裂，导致极其隐蔽的 UI 幽灵状态。
+
+**3. 新共识与规范 (New Conventions):**
+- **状态流转绝对后置**: 前端对于所有的初始对话状态、欢迎语，必须完全依赖后端的下发（如 `initialMessages`）。前端组件只负责在数据为空时展示 UI 骨架屏或等待状态，绝对禁止擅自填充业务文案。
