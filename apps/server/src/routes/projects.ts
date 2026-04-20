@@ -31,10 +31,10 @@ app.get('/', async (c) => {
 
 app.post('/', async (c) => {
   try {
-    const newId = crypto.randomUUID();
-    const GREETING = "你好！我是你的创作助理 ClipMind。今天打算怎么开启工作？是想先聊聊灵感、策划一个新短视频大纲，还是脑子里已经有确切的画面，直接去库里精准找素材片段？";
+      const newId = crypto.randomUUID();
+      const GREETING = "你好！我是你的创作助理 ClipMind。我已经为你实时抓取了最新的 **全网热点风向标** 🔥。今天打算怎么开启工作？你可以让我结合今日热点策划一个爆款短视频大纲，或者直接去库里精准找素材片段。没灵感的话，随时和我说“看看今天有什么热点”！";
 
-    // 1. 物理创建项目记录（包含初始 Greeting 消息）
+      // 1. 物理创建项目记录（包含初始 Greeting 消息）
     // [Arch] 读写分离：使用纯净 CoreMessage 结构入库
     await db.insert(projects).values({
       id: newId,
