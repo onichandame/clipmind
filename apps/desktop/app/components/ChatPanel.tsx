@@ -71,7 +71,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
       if (lastTool === 'tool-generateEditingPlan') {
         setActiveMode("plan");
-      } else if (lastTool === 'tool-searchFootage') {
+      } else if (lastTool === 'tool-search_assets' || lastTool === 'tool-search_clips') {
         setActiveMode("footage");
       } else if (lastTool === 'tool-updateOutline') {
         setActiveMode("outline");
@@ -106,24 +106,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   // [Arch] 已移除旧版的 "监听剪辑方案生成结果并推送至独立视图" 的 useEffect
   // 原因：该操作在流式输出中会导致极端的高频状态同步（Render Thrashing），引发死循环。
   // 当前架构已将持久化收敛至后端，前端仅需等待重新拉取即可。
-
-  // [架构师干预] 监听素材检索结果并推送至检索视图
-  useEffect(() => {
-    if (messages.length === 0) return;
-    const lastMsg = messages[messages.length - 1];
-    const footagePart = lastMsg?.parts?.find((p: any) => {
-      const invocation = p.type === 'tool-invocation' ? p.toolInvocation : p;
-      const toolName = invocation?.toolName || p.type;
-      const state = invocation?.state || p.state;
-      return toolName?.includes('searchFootage') && (state === 'result' || state === 'output-available' || state === 'done');
-    });
-
-    // 取出结果 (兼容 AI SDK v6 的 result / output / args 内嵌格式)
-    const resultPayload = footagePart?.toolInvocation?.result || footagePart?.result || footagePart?.toolInvocation?.output || footagePart?.output || footagePart?.toolInvocation?.args || footagePart?.args;
-
-    // [Arch] 已移除在此处 setRetrievedClips 的逻辑。
-    // RAG 数据流转已完全收敛至后端的 CQRS 写链路，并通过 React Router 的 Loader (useQuery) 进行统一水合。
-  }, [messages, projectId]);
+  // (旧版拦截 ToolCall 处理 RAG 数据的反模式代码已彻底移除)
 
   // 3. 状态强制同步 (SPA 刚需)
   // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，
@@ -176,27 +159,31 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
           </div>
         </div>
 
-        {/* Step Pills */}
-        <div className="flex gap-1.5 mt-2">
-          {[
-            { id: 'outline', num: '①', text: '热点', isActive: activeMode === 'outline', isDone: !!currentProject?.outlineContent },
-            { id: 'footage', num: '②', text: '素材', isActive: activeMode === 'footage', isDone: ((currentProject?.retrievedClips?.length || 0) > 0) || ((currentProject?.selectedBasket?.length || 0) > 0) },
-            { id: 'plan', num: '③', text: '剪辑', isActive: activeMode === 'plan', isDone: (currentProject?.editingPlans?.length || 0) > 0 }
-          ].map(step => (
-            <div
-              key={step.id}
-              className={`px-2.5 py-1 flex items-center gap-1 rounded-full text-[10px] font-bold transition-all ${step.isActive
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20"
-                  : step.isDone
-                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-                    : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-transparent"
-                }`}
-            >
-              <span>{step.isDone && !step.isActive ? '✓' : step.num}</span>
-              <span>{step.text}</span>
+            {/* Step Pills */}
+            <div className="flex gap-1.5 mt-2">
+              {(projectData?.project?.workflowMode === 'idea' ? [
+                { id: 'outline', num: '①', text: '热点', isActive: activeMode === 'outline', isDone: !!currentProject?.outlineContent },
+                { id: 'footage', num: '②', text: '素材', isActive: activeMode === 'footage', isDone: ((currentProject?.retrievedClips?.length || 0) > 0) || ((currentProject?.selectedBasket?.length || 0) > 0) },
+                { id: 'plan', num: '③', text: '剪辑', isActive: activeMode === 'plan', isDone: (currentProject?.editingPlans?.length || 0) > 0 }
+              ] : [
+                { id: 'footage', num: '①', text: '素材', isActive: activeMode === 'footage', isDone: ((currentProject?.retrievedClips?.length || 0) > 0) || ((currentProject?.selectedBasket?.length || 0) > 0) },
+                { id: 'outline', num: '②', text: '热点', isActive: activeMode === 'outline', isDone: !!currentProject?.outlineContent },
+                { id: 'plan', num: '③', text: '剪辑', isActive: activeMode === 'plan', isDone: (currentProject?.editingPlans?.length || 0) > 0 }
+              ]).map(step => (
+                <div
+                  key={step.id}
+                  className={`px-2.5 py-1 flex items-center gap-1 rounded-full text-[10px] font-bold transition-all ${step.isActive
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20"
+                    : step.isDone
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                      : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-transparent"
+                  }`}
+                >
+                  <span>{step.isDone && !step.isActive ? '✓' : step.num}</span>
+                  <span>{step.text}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
       </div>
 
       {/* Messages Area */}

@@ -65,33 +65,56 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // 辅助函数：判断某个检索结果是否已被选入篮子
-  const isClipSelected = (clip: any) => {
-    return selectedBasket.some((item: any) =>
-      item.assetId === clip.assetId &&
-      item.startTime === clip.startTime &&
-      item.endTime === clip.endTime
-    );
+      // 获取全局素材库素材
+      const { data: allAssets = [] } = useQuery({
+        queryKey: ['assets'],
+        queryFn: async () => {
+          const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets`);
+          if (!res.ok) throw new Error('Failed to fetch assets');
+          return res.json();
+        }
+      });
+
+      // 辅助函数：判断某个资产是否已被选入篮子（现在只认视频整体，不限制片段）
+      const isClipSelected = (assetId: string) => {
+        return selectedBasket.some((item: any) => item.assetId === assetId);
+      };
+
+  // 交互函数：局部唤起上传
+  const handleSelectFiles = async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const { invoke } = await import('@tauri-apps/api/core');
+    const selected = await open({ multiple: true, filters: [{ name: 'Videos', extensions: ['mp4', 'mov', 'MP4', 'MOV'] }] });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+
+    for (const p of paths) {
+      const id = crypto.randomUUID();
+      const filename = p.split(/[\\/]/).pop() || 'video.mp4';
+      // 触发 Rust 并发后台推流，UI 可依赖后续轮询/SSE更新
+      invoke('process_video_asset', {
+        jobId: id,
+        filename,
+        localPath: p,
+        serverUrl: env.VITE_API_BASE_URL
+      }).catch(console.error);
+    }
   };
 
   // 交互函数：手动 Toggle 素材入篮 (乐观更新 + 异步落盘)
-  const toggleClipSelection = async (clip: any) => {
-    const { setSelectedBasket } = useCanvasStore.getState();
-    const currentBasket = [...selectedBasket];
-    let newBasket;
+  const toggleClipSelection = async (assetId: string) => {
+        const { setSelectedBasket } = useCanvasStore.getState();
+        const currentBasket = [...selectedBasket];
+        let newBasket;
 
-    if (isClipSelected(clip)) {
-      newBasket = currentBasket.filter((item: any) =>
-        !(item.assetId === clip.assetId && item.startTime === clip.startTime && item.endTime === clip.endTime)
-      );
-    } else {
-      newBasket = [...currentBasket, {
-        assetId: clip.assetId,
-        startTime: clip.startTime,
-        endTime: clip.endTime,
-        reason: "手动精选"
-      }];
-    }
+        if (isClipSelected(assetId)) {
+          newBasket = currentBasket.filter((item: any) => item.assetId !== assetId);
+        } else {
+          newBasket = [...currentBasket, {
+            assetId: assetId,
+            reason: "手动精选全量视频"
+          }];
+        }
 
     // 1. 乐观更新 (Optimistic UI) 瞬间点亮卡片
     setSelectedBasket(projectId, newBasket);
@@ -294,59 +317,90 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
                 </AccordionSection>
               );
             }
-            if (nodeType === 'footage') {
-              return (
-                <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
-                  {retrievedClips.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-zinc-500 dark:text-zinc-400 space-y-4">
-                      <div className="text-4xl">🎬</div>
-                      <p className="text-sm">暂无检索结果，请在左侧向 ClipMind 描述所需素材</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pr-2">
-                      {retrievedClips.map((clip: any, i: number) => {
-                        const selected = isClipSelected(clip);
-                        return (
-                          <div
-                            key={i}
-                            onClick={() => toggleClipSelection(clip)}
-                            className={`bg-white dark:bg-zinc-900 border cursor-pointer hover:ring-1 hover:ring-indigo-300 dark:hover:ring-indigo-700 ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} rounded-xl overflow-hidden flex flex-col transition-all group relative`}
-                          >
-                            {selected && (
-                              <div className="absolute top-2 right-2 z-10 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1">
-                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                已精选
-                              </div>
-                            )}
-                            <div className={`w-full h-28 relative ${selected ? 'opacity-90' : ''}`}>
-                              {clip.thumbnailUrl ? (
-                                <img src={clip.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover bg-zinc-100 dark:bg-zinc-800" />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 text-zinc-400 text-2xl">🎬</div>
-                              )}
-                              <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono shadow-sm">
-                                {(clip.startTime / 1000).toFixed(1)}s - {(clip.endTime / 1000).toFixed(1)}s
-                              </div>
+                if (nodeType === 'footage') {
+                  return (
+                    <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[60vh] overflow-y-auto pr-2 pb-4 pt-2">
+                        {/* 上传入口卡片 */}
+                        <div
+                          onClick={handleSelectFiles}
+                          className="relative aspect-video rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-900/50 border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all group"
+                        >
+                          <div className="absolute inset-0 flex flex-col items-center justify-center">
+                            <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                              <svg className="w-5 h-5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                             </div>
-                            <div className="p-3 flex flex-col gap-2 flex-1">
-                              <div className="flex justify-between items-center gap-2">
-                                <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded shrink-0">
-                                  Score: {clip.score?.toFixed(2) || 'N/A'}
-                                </span>
-                                <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 truncate" title={clip.filename}>
-                                  {clip.filename || '未知素材'}
-                                </span>
-                              </div>
-                              <p className="text-xs text-zinc-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">{clip.text}</p>
-                            </div>
+                            <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400">上传新素材</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </AccordionSection>
-              );
-            }
+                        </div>
+
+                        {/* 聚光灯模式提示 & 清除按钮 */}
+                        {projectData?.project?.retrievedAssetIds && projectData.project.retrievedAssetIds.length > 0 && (
+                          <div className="col-span-full flex items-center justify-between bg-indigo-50/80 dark:bg-indigo-500/10 px-4 py-2.5 rounded-xl border border-indigo-100 dark:border-indigo-500/20 mb-2">
+                            <span className="text-xs text-indigo-700 dark:text-indigo-300 font-medium flex items-center gap-2">
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                              AI 已为您聚焦 {projectData.project.retrievedAssetIds.length} 个相关素材
+                            </span>
+                            <button
+                              onClick={() => {
+                                // [Arch] 乐观清除 UI 状态，恢复全景视野
+                                queryClient.setQueryData(['project', projectId], (old: any) => old ? { ...old, project: { ...old.project, retrievedAssetIds: [] } } : old);
+                              }}
+                              className="text-[10px] px-2.5 py-1.5 bg-white dark:bg-zinc-800 border border-indigo-200 dark:border-indigo-500/30 rounded shadow-sm hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-indigo-600 dark:text-indigo-300"
+                            >
+                              清除聚焦
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 全局素材库 */}
+                        {allAssets.map((asset: any) => {
+                          const selected = isClipSelected(asset.id);
+                          // 聚光灯核心逻辑：如果有搜索结果，且当前资产不在结果中，且未被精选，则半透明退居幕后
+                          const retrievedIds = projectData?.project?.retrievedAssetIds || [];
+                          const isDimmed = retrievedIds.length > 0 && !retrievedIds.includes(asset.id) && !selected;
+                          
+                          const formatTime = (secs: number) => {
+                            if (!secs) return 'N/A';
+                            const m = Math.floor(secs / 60);
+                            const s = Math.floor(secs % 60);
+                            return `${m}:${s.toString().padStart(2, '0')}`;
+                          };
+                          return (
+                            <div
+                              key={asset.id}
+                              onClick={() => toggleClipSelection(asset.id)}
+                              className={`relative aspect-video rounded-xl overflow-hidden bg-white dark:bg-zinc-900 border cursor-pointer hover:ring-1 hover:ring-indigo-300 dark:hover:ring-indigo-700 ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} ${isDimmed ? 'opacity-30 grayscale-[50%] scale-[0.98]' : 'opacity-100 scale-100'} transition-all duration-500 group`}
+                            >
+                              <div className="absolute inset-0">
+                                {selected && (
+                                  <div className="absolute top-2 right-2 z-20 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1">
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                    已精选
+                                  </div>
+                                )}
+                                {asset.thumbnailUrl ? (
+                                  <img src={asset.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover bg-zinc-100 dark:bg-zinc-800" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 text-zinc-400 text-2xl">🎬</div>
+                                )}
+                                {/* 底部黑色渐变展示文件名 (常驻) */}
+                                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-2 pt-8 flex items-end justify-between gap-2 z-10">
+                                  <div className="text-[10px] font-medium text-zinc-100 truncate flex-1" title={asset.filename}>
+                                    {asset.filename || '未知素材'}
+                                  </div>
+                                  <div className="bg-black/60 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono shadow-sm shrink-0">
+                                    {formatTime(asset.duration)}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </AccordionSection>
+                  );
+                }
             if (nodeType === 'plan') {
               return (
                 <AccordionSection key="plan" id="plan" title="📋 剪辑方案" activeId={activePanelId} setActiveId={setActivePanelId}>

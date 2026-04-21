@@ -625,20 +625,24 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 ## 🩸 架构血泪教训 (ASR 端云全链路篇)
 
 ### 1. IPC 通信风暴与前端 V8 引擎崩溃
+
 - **案发现场**：在 Rust 侧读取视频流直传 OSS 时，通过 `emit` 向前端发送进度。当文件读取到末尾时，高频穿透了条件判断，瞬间发射数千个事件。
 - **物理表现**：Tauri 前端进程直接抛出 `NeedDebuggerBreak trap` 并白屏崩溃 (OOM)。
 - **防线铁律**：所有底层的流式事件上报，**必须且只能使用时间戳节流（如 500ms）**，坚决摒弃 `uploaded == total` 这种容易在文件尾部引发微小波动重试的逻辑判断。
 
 ### 2. 阿里云 ASR 模型采样率错位 (静默秒杀)
+
 - **案发现场**：向阿里云提交任务后返回 `SUCCESS`，但主动查询任务状态时发现报 `41050008 (UNSUPPORTED_SAMPLE_RATE)`，Webhook 永远不会触发。
 - **根本原因**：阿里云的 `AppKey` 强绑定声学模型（如 16kHz 通用模型）。如果底层 FFmpeg 抽离音频时忘记加 `-ar 16000` 降维参数，将 48kHz 的原声扔给云端，会被立刻拒收且无明确报错。
 - **防线铁律**：永远不要信任源视频的音频规格。在 `process_video_asset` 侧边栏任务中，抽离音频必须强制锁定为 `16kHz, 单声道, 32kbps AAC`。
 
 ### 3. OSS 私有资产的云端分发盲区
+
 - **案发现场**：提交给阿里云的 `file_link` 直接填了数据库里的 `ObjectKey`。
 - **防线铁律**：永远不要把 `ObjectKey` 直接传给第三方服务。必须在下发任务前，通过 `ossClient.signatureUrl(url, { expires: 7200 })` 动态签发带有失效时间的 HTTP 预签名链接。
 
 ### 4. 路由黑洞 (The Routing Blackhole)
+
 - **案发现场**：阿里云处理成功，但 Node 后端没有任何日志，触发了阿里云的指数退避重试并最终死信。
 - **根本原因**：写好了 `asr-callback.ts`，却忘记在 `index.ts` 中通过 `app.route` 挂载它，导致阿里云吃到了 404 闭门羹。
 - **防线铁律**：每写一个对外的 Webhook 接口，第一步先去主入口挂载，并用 `curl` 或 Postman 打一个空包验证 `400 Bad Request`，证明大门是敞开的。
@@ -646,48 +650,58 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 ## 📝 [阶段更新] 端侧连环并发风暴与 IPC 崩溃治愈 (OOM & V8 Trap)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - 移除了前端 `assets.tsx` 中的冗余的全局 `upload-progress` 事件监听器，修复了多任务并发时 React 闭包互相覆盖导致的“进度冻结”死锁。
 - 修复了 Rust 层 `ffmpeg-progress` 的 JSON 序列化发射协议，使其正确匹配前端的 `{ log: string }` 结构。
 - 移除了 Rust 侧边车脱壳并发上传阶段冗余的缩略图 `File::open` 读取块，阻断了 IO 句柄的翻倍抢夺。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (IPC 事件洪水与 V8 崩溃)**: 在使用 Tauri 处理诸如文件流读取或外部进程输出时，**绝对禁止**省略时间节流阀，更**禁止**在限流判断中混入无意义的短路逻辑（如 `|| uploaded == file_size`）。这会导致极小文件在读取末尾时瞬间击穿限流阀，一秒内向前端 V8 引擎发射数以万计的事件，直接导致 `NeedDebuggerBreak trap` 致命崩溃。
 - **DON'T DO (物理文件重复打开并发读)**: 在脱壳后台（如 `tokio::spawn`）并发循环中，**严禁**因为“代码复制”导致对同一个物理临时文件（如缩略图）进行多次并发 `File::open` 与 Stream 转化。这会在多任务堆叠时极速消耗操作系统的 IO 句柄和内存缓冲池，引发底层内存溢出 (OOM)。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **严守唯一监听器原则**: 前端处理高频跨进程消息（IPC events）时，只允许全局存在唯一的 `listen` 监听器，并在组件卸载时强制解绑。
 - **节流阀基准线**: 后端 Rust 发送所有的非关键性进度事件（如上传进度、FFmpeg 输出），统一锚定 `500ms` 为最低安全限流间隔，防风暴拦截逻辑只认 `Instant`，不认其他条件。
 
 ## 📝 [阶段更新] RAG 切片向量化与 Qdrant 混合检索基建 (Semantic Search)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **底层基座复用**: 彻底贯彻了“单一真理源”原则。在 `apps/server/src/utils/ai.ts` 中暴露了全局统一的 `getAIProvider`，使得 Embeddings 工具类可以直接复用现有的 OpenRouter (`OPENAI_API_KEY`) 实例，消除了 API Key 分裂的技术债。
 - **异步防线机制 (Fire-and-Forget)**: 在 `asr-callback.ts` 的 Webhook 路由中，彻底剥离了耗时的 Embedding 运算与 Qdrant 网络 I/O。向量化流水线以 `Promise.catch` 的形式被“即发即弃”，保证了向阿里云返回 200 OK 的耗时被压缩在毫秒级，彻底杜绝了重试风暴。
 - **模型与基建对齐**: 废弃了原定的 `bge-m3` (1024维) 方案，为适配基础设施现存的 Qdrant 引擎规格，全量切换至 `text-embedding-3-small` (1536维，余弦相似度)。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (实例化冗余)**: 严禁在不同的工具类（如 `chat.ts`, `embeddings.ts`）中反复调用 `createOpenAI`。必须统一从 `ai.ts` 导入 Provider，防止后续增加统一拦截器或更换 BaseURL 时发生架构脑裂。
 - **DON'T DO (强行阻塞 Webhook)**: 绝对禁止在 `asr-callback.ts` 中 `await processVectorization(...)`。Webhook 的唯一天职是光速响应外部服务并流转核心状态机，附带的重型数据清洗必须丢入后台异步队列。
 - **DON'T DO (自动 DDL 与全表扫描黑洞)**: 严禁依赖应用层的 ORM/代码去自动管理 Qdrant 的 Collection Schema。对于 Payload Indexes，必须**手动在运维侧**建立 `assetId` (Keyword，用于精确隔离查询) 和 `text` (Text，用于 BM25 混合检索) 索引。不建索引会导致每一次带有资产过滤的 RAG 搜索都退化为灾难性的全表扫描。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **手动基建边界**: 数据库 (PostgreSQL/MySQL) 的 Schema 变更由 Drizzle 的 Migration 管理；但向量数据库 (Qdrant) 的 Collection 与 Payload 索引建立，必须作为纯粹的 IaC/运维脚本手动执行，代码层只负责 `Upsert` 纯净的数据点。
 
 ## 📝 [阶段更新] 数据生命周期治理与 Qdrant 幽灵向量清除 (Data Lifecycle Governance)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **生命周期闭环**: 补齐了向量数据库的删除链路。在 `DELETE /api/assets/:id` 路由中，当 MySQL 记录物理删除后，同步触发 Qdrant 的 Filter 删除接口，按 `assetId` 抹除关联切片。
 - **非阻塞降级 (Fire-and-Forget)**: Qdrant 的删除网络请求被刻意设计为不阻断主线程 (`.catch` 兜底)，确保外部向量引擎的网络抖动绝不影响核心业务资产库的物理销毁。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (误判删除失败与过度优化)**: 严禁在调用 Qdrant 删除 Point 后，因为观测到 Segment (段) 和 Shard (分片) 数量未变而判定为存在 Bug。Qdrant 底层采用类似 LSM-Tree 的不可变段结构，删除仅仅是打上 Tombstone (墓碑) 标记。真正的物理空间回收依赖于后台的异步 Compaction (压缩/合并) 机制。绝对禁止为了立刻释放磁盘而在业务代码中强行调用 Qdrant 的 Optimizer API，这会引发毁灭性的集群 IO 风暴。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **单一数据源原则**: 任何衍生数据（如 ASR 文本、RAG 向量）的生命周期，必须严格依附于顶级实体 Asset。删除 Asset 必须触发全链路联动的“雪崩删除”。
 
 ## 📝 [阶段更新] 资产上传状态机收敛与 Qdrant 异步陷阱防线 (State Machine Convergence)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **领域状态收敛 (Single Source of Truth)**: 彻底修复了前端卡片 UI 状态“偷跑”的逻辑漏洞。前端组件现已退化为纯粹的无状态展示层 (Dumb Component)，仅监听单一的 `asset.status` 字段。
 - **端云状态机闭环**: 确立了严格的状态流转纪律：
   1. 落盘瞬间 (`assets.ts`)：状态强制初始化为 `processing`。
@@ -695,177 +709,216 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
   3. 向量化终点 (`processVectorization`)：只有当 Qdrant 物理落盘彻底完成后，才下达最终指令将主状态流转为 `ready`。任何一环异常均流转为 `error`。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (前端视觉篡改)**: 严禁在前端局部的上传队列（Jobs）完成时，通过硬编码文案（如“✅ 资产已就绪”）去误导全局状态。必须将其降级为“上传完毕，AI 接管”，防止与底层耗时的 ASR/向量化任务产生语义冲突。
 - **DON'T DO (Qdrant 异步静默陷阱)**: **绝对禁止**在调用 Qdrant `PUT /points` 接口时省略 `?wait=true` 参数。原生 `fetch` 遇到异步接口返回的 200 OK 会瞬间放行 `await`，导致系统在向量构建完成前就错误地提前流转了就绪状态，形成致命的“假就绪”黑洞。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **强制同步阻塞**: 任何向外部基础设施（如向量数据库）写入并直接影响核心业务状态机流转的网络请求，必须在 URL 或 Payload 中显式开启同步等待模式，绝不能容忍不可观测的后台异步排队。
 - **高对比度 UI 防线**: 对于叠加在复杂媒体（如视频缩略图）之上的状态徽章 (Badge)，严禁使用低透明度 (如 `bg-emerald-500/10`) 设计，必须强制采用高对比度的实体背景与阴影 (`shadow-md`)，确保视觉可读性。
 
 ## 📝 [阶段更新] RAG 工具化与 Agentic 多步检索链路 (Server-Side Tool Calling)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **工具挂载**: 成功将 `search_assets` (向量检索) 注册为 Server-Side Tool，直接注入到 `apps/server/src/routes/chat.ts` 的 `streamText` 中。
 - **多步循环 (Agentic Loop)**: 启用了 `maxSteps: 5`，允许大模型在调用 Qdrant 获取视频切片后，能够继续留在上下文中阅读切片数据，并最终输出自然语言总结给前端。
 - **Token 防御**: 在检索完成后，剥离了高维向量数组，仅将 `score`, `text`, `startTime` 等极简 payload 喂给 LLM，极致节省上下文 Token 消耗。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (默认生命周期截断)**: 严禁在包含 Tool Calling 的 `streamText` 中省略 `maxSteps`。若采用默认值 1，大模型在发出工具调用指令后会立刻终止流，导致用户永远看不到最终的总结文本。
 - **DON'T DO (防假死与哑火)**: 在到达 `maxSteps` 最后一步时，必须通过 `prepareStep` 动态注入系统提示词，强制禁用所有工具并要求大模型必须输出纯文本结论，防止 Agent 陷入无休止的工具调用死循环。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **安全召回阈值**: 全局检索默认限制召回数为 20（Top-K=20），严格防止海量视频切片撑爆模型的 Context Window 导致 429 报错或长文本幻觉。
 - **端侧处理分离**: Qdrant 仅作为纯粹的高维空间计算引擎，文本向量化必须在 Node 层调用大模型 Embedding API 完成后，再将纯数字向量打入 Qdrant。当前为纯稠密向量（Dense Vector）语义检索，暂未开启 BM25 全文混合检索。
 
 ## 📝 [阶段跃迁] DDD 聚合根防线与状态水合断层修复 (Domain Data vs Ephemeral State)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **核心论断 (DDD)**：**素材检索结果（`retrievedClips`）和剪辑方案（`editingPlan`）是系统的核心业务资产（Domain Data），而聊天消息（Chat Messages）仅仅是瞬态的交互过程（Ephemeral State）。**
 - **写链路 (The Write Path)**：彻底废弃了将业务数据塞入 AI SDK 历史记录的脆弱做法。现在，当大模型触发 `searchFootage` 等工具时，后端在工具的 `execute` 内部执行完运算后，直接将纯净数据**物理落盘**到 `projects` 表的专属 JSON 字段中。
 - **读链路与水合 (Hydration)**：前端路由 `projects.$projectId.tsx` 的 Loader 在页面刷新时，直接从后端的 `GET /api/projects/:id` 接口获取项目实体，并直接将 `retrievedClips` 注入 `useCanvasStore`。前端彻底抛弃了在历史记录里“倒序捞针”的瞎子提取法。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (状态重载断层 & Agentic 陷阱)**：**绝对禁止**前端尝试从 `messages` 数组中提取工具调用结果来恢复页面状态！在引入 `maxSteps: 5` 的多步推理后，AI 在调用工具后会继续输出总结性文本。这会导致工具调用被深埋在历史记录中间。页面刷新时，前端如果只看最后一条消息，必然变成“瞎子”，导致画布静默白屏。
 - **DON'T DO (Hook 军规越界)**：**绝对禁止**将 `useEffect` 等水合逻辑放在组件内任何带有 `return` 的条件拦截（如 `if (isLoading) return ...`）之后！这会引发 React 引擎抛出 `Rendered more hooks than during the previous render` 的死亡报错，当场崩溃。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **UI 纯粹化 (Dumb UI)**：`ChatPanel` 现仅负责在**实时流式生成中**（`status === 'streaming'`）捕获增量结果并乐观更新 UI，**绝不再负责**历史记录的持久化提取与状态重建。
 
 ## 📝 [架构红线] OSS 动态签发与生命周期错位防御 (JIT Pre-signing)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **JIT 动态签发 (Just-In-Time)**：确立了“数据库只存纯粹 Object Key，接口动态分发”的安全底线。后端向前端返回任何包含私有媒体资产（如 `retrievedClips` 中的 `thumbnailUrl`）的 JSON 响应前，必须在路由出口处拦截，并使用 `ossClient.signatureUrl` 临时包裹一层带有 2 小时有效期的 HTTPS 链接。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (生命周期错位 - Time-of-Check to Time-of-Use)**：**绝对禁止**在后端工具执行落盘时，将带有 `?Expires=...&Signature=...` 的预签名 URL 直接塞进数据库的 JSON 字段保存！如果这样做，用户在 2 小时后刷新页面，数据库吐出的将是一堆过期的死链，前端会瞬间面临满屏的 `403 Forbidden` 废墟。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **内外数据结构分叉**：在编写复杂的后端业务逻辑（如 RAG 检索组装）时，必须在内存中实施数据结构的分叉。构建两份 Payload：一份 `viewClips`（带有签名 URL）用于当前 HTTP 请求立刻返回给前端大模型消费；另一份 `dbClips`（仅保留原生的 Raw Object Key）用于异步更新数据库。
 
 ## 📝 [架构升级] 消息持久化 CQRS 重构与 CoreMessage 协议对齐 (Zero-Overhead Persistence)
 
 **1. 架构与状态流转 (Architecture State - CQRS):**
+
 - **单一真理源 (Single Source of Truth)**: 彻底推翻了“前端传历史记录 -> 后端解析 -> 前端发 Webhook 落盘”的脆弱链路。现已确立 MySQL 数据库为对话历史的绝对真理源，且内部**仅存储 Vercel AI SDK 原生的 `CoreMessage` 数组**。
 - **写链路 (Zero-Overhead Write)**: 在 `apps/server/src/routes/chat.ts` 中，`streamText` 消费 `CoreMessage[]`，吐出 `CoreMessage[]`。在 `onFinish` 钩子中，一行翻译代码都不写，直接 100% 无损追加落盘。彻底消灭了后端复杂的状态机翻译成本。
 - **读链路视图投影 (View Projection)**: 在 `apps/server/src/routes/projects.ts` 的 `GET /:id` 接口中注入了翻译器（Adapter）。仅在前端需要拉取项目渲染时，后端才动态将底层的 `CoreMessage` 降维并映射为前端 `useChat` 所需的 `UIMessage` (注入唯一 ID，将工具状态缝合至 `parts` 数组)。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (前端越权落盘)**: 绝对禁止由前端在 `onFinish` 阶段调用 API 保存对话。这会导致严重的数据截断（用户中途刷新页面）、幽灵账单以及与后端数据库的状态脑裂。
 - **DON'T DO (Zod 的死亡尖叫 - 强塞 parts)**: Vercel AI SDK 底层的 `convertToModelMessages` 军规极严。前端的 `UIMessage` 会把工具调用放入 `parts`，但后端的 `CoreMessage` 只认识根级别的 `toolInvocations`。**严禁把带有 `type: "tool-invocation"` 的 `parts` 传给底层 SDK**，否则会立刻触发 `ZodError: invalid_union` 导致 Node 进程崩溃白屏。
 - **DON'T DO (手动拼接 UIMessage 文本陷阱)**: **绝对禁止**在后端使用 `{ role: 'user', content: lastUserMsg.content }` 去手动拼接前端传来的消息！在 AI SDK v6 的多模态架构下，前端发来的 `lastUserMsg.content` 极可能是 `undefined`，真实的文本被深埋在 `parts: [{ type: 'text', text: '...' }]` 中。必须且只能使用官方的 `await convertToModelMessages([lastUserMsg])` 充当“净水器”进行安全提取。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **前端哑终端化 (Dumb Terminal)**: 前端 `useChat` 现已被剥夺所有历史状态控制权和落盘权。任何需要与大模型交互的网络请求，后端必须无视前端发来的历史记录，强制从数据库 `projects` 表中提取经过强类型清洗的 `CoreMessage` 上下文。
 
 ## 📝 [阶段更新] 聊天面板双态主题适配与 UI 规范闭环 (Theme Consistency)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - 统一了 `ChatPanel` 中所有消息气泡与头像的视觉规范，全面适配了 Tailwind v4 的 Light/Dark 双态主题。
 - Agent 头像组件从硬编码的灰底圆角统一升级为品牌强关联的紫底方块 (`bg-indigo-600 rounded-lg text-white`)，并精简占位符为 `C`。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (单态黑白陷阱)**: 严禁在气泡容器中使用单纯的 `bg-zinc-900 text-white` 等单态配置，这在 Light 模式下会形成突兀的“黑斑”。必须使用响应式组合（如 `bg-zinc-100 dark:bg-zinc-800`）。
 - **DON'T DO (Prose 幽灵特异性踩坑)**: 在修复主题时，再次印证了 `@tailwindcss/typography` 的霸道特性。对于跟随系统主题动态变色的气泡，必须显式传入 `dark:prose-invert`（严禁在浅色背景下直接用 `prose-invert`），否则内部文字会反转成白色，变成灾难性的“隐形墨水”。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **边界清晰原则**: 所有带背景色的消息气泡或卡片容器，必须显式声明 `border` 及双态边框颜色（如 `border border-zinc-200 dark:border-zinc-700/50`），防止在同色系背景下发生视觉粘连。
 
 ## 📝 [阶段修复] 视图切换器空位留白与状态枚举对齐 (Enum Sync)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - 修复了 `CanvasPanel.tsx` 顶部视图切换器右侧的多余留白问题。
 - 剔除了废弃的 `"split"` 视图模式，使得渲染数组与 `modeLabels` 字典严格对齐（`"outline", "footage", "plan"`）。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (枚举未对齐导致幽灵 UI)**: 严禁在通过 `.map()` 渲染 UI 列表时，使用未在 Label/翻译字典中定义键值的枚举项。这会导致 React 渲染出没有文本内容的“幽灵空按钮”，从而破坏 Flex 布局并在视觉上形成极其隐蔽的多余留白。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **单一真理源对齐**: 当使用强类型（如 `CanvasMode`）驱动 UI 渲染时，实际被用于 `.map()` 的数组必须与提供展示文案的 Record 字典（如 `modeLabels`）保持键值数量的绝对一致。
 
 ## 📝 [阶段更新] 全网热点情报抓取与动态注入 (Bugfix & JSON 嵌套陷阱)
 
 **1. 踩坑与教训 (Lessons Learned & DON'Ts):**
-- **DON'T DO (盲信数据结构与幽灵嵌套)**: 
+
+- **DON'T DO (盲信数据结构与幽灵嵌套)**:
   - **百度 Wise API 陷阱**: 在解析第三方 API 时，严禁仅凭外层字段名进行主观推断。百度热搜的 JSON 数据中，热词列表被包裹在令人匪夷所思的“双层 content”结构中 (`data.cards[0].content[0].content`)。
   - **静默失败防线**: 之前由于少写了一层 `.[0]?.content`，导致取到的全是 `undefined`，并触发了兜底逻辑，使得大模型收到了满屏的“未知热词”。
 
 **2. 新共识与规范 (New Conventions):**
+
 - **隔离测试原则**: 任何涉及外部复杂 JSON 结构解析的逻辑，在写入业务主体前，必须先在独立的 `.js` 脚本中进行 Mock 数据沙盒测试，确保提取路径 100% 精准无误。
 
 ## 📝 [阶段更新] Tauri 生产环境沙盒逃逸与原生极速下载 (Content-Disposition Hack)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **需求闭环**: 实现了基于剪辑方案 (Editing Plan) 切片的精准溯源与单文件极速下载。
 - **后端 JIT 提权 (projects.ts)**: 在下发项目详情时，拦截 `retrievedClips` 数组，通过 `assetId` 关联查询底层 `assets` 表获取真实的 `ossUrl`。随后，利用阿里云 SDK 动态签发一个带有 `response: { 'content-disposition': 'attachment; filename="..."' }` 头的临时 URL，并赋值给 `videoUrl` 吐给前端。
 - **前端极简交互 (EditingPlanCard.tsx)**: 在素材缩略图上挂载透明悬浮按钮，移除所有无效的批量下载逻辑。点击按钮时，动态创建 `<a>` 标签并赋予后端的 `videoUrl` 触发下载。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (前端 Fetch OOM 黑洞)**: 在 Tauri 环境下处理动辄几十上百兆的视频下载，**绝对禁止**前端使用 `fetch -> blob` 的方式强行拉取。这会撑爆 V8 引擎内存，导致沙盒直接 OOM 崩溃。
 - **DON'T DO (Tauri Shell 权限拦截)**: 严禁在 `<a>` 标签上使用 `target="_blank"`。Tauri 会将其视为调用系统浏览器打开外部网页的危险行为，直接因缺少 `shell:allow-open` 权限而拦截 (`shell.open not allowed`)。
 - **DON'T DO (跨域 download 属性失效)**: 严禁试图用前端的 `a.download = "xxx.mp4"` 去重命名跨域 (如 OSS 域名) 的文件。浏览器同源策略会无情忽略该属性，并报 Warning。必须且只能由后端在签发时通过 `Content-Disposition` 响应头来接管文件名。
 - **DON'T DO (变量溯源断层)**: 永远不要试图从大模型生成的数据结构 (如 `clip`) 中直接读取物理资源 URL。大模型只负责生成逻辑意图，真正的物理资源地址必须从后端打通的素材池 (`retrievedClips`) 中进行溯源映射 (`sourceClip`) 获取。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **沙盒逃逸第一准则 (Attachment Hack)**: 在 Tauri/Electron 等桌面端 Webview 架构中，实现文件静默下载的最优、最安全路径是：前端只负责触发一个普通链接，**把“强行下载”的指令全部交给服务端的 `Content-Disposition: attachment` 响应头。** Webview 一旦嗅探到该 Header，会瞬间放弃渲染并移交操作系统的原生下载管理器，彻底绕过一切内存与权限墙。
 
 ## 📝 [阶段修复] Agentic Loop 状态机竞态与 UI 映射穿透防线
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **视图流转权绝对收敛**: 彻底剥夺了前端游离 `useEffect` 的视图切换控制权。在多步工具调用（大纲 -> 检索 -> 方案）场景中，将画布的最终路由判定绝对收敛于 `onFinish` 钩子，并强制提取 `event.messages` 中**最后一个**执行的工具作为真理源，消除并发抢夺。
 - **读链路补齐**: 在后端查询 `editingPlans` 时补齐了 `orderBy(desc(createdAt))`，确保最新状态永远浮现在 UI 顶端。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (useEffect 并发抢夺焦点)**: **绝对禁止**在多个独立的 `useEffect` 中监听同一份流式 `messages` 去触发视图切换。当多个工具在同一次响应中被触发时，会产生严重的**竞态条件 (Race Condition)**，导致正确的目标视图被旧逻辑幽灵覆写。
 - **DON'T DO (.some() 历史穿透陷阱)**: 严禁使用 `array.some()` 遍历整个历史消息来决定当前的状态跳转。这会导致早期触发的工具（如大纲）形成逻辑黑洞，永远拦截后续的高优跳转请求。必须精准提纯**当前流（或最后一个动作）**的意图。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **UI 状态枚举完备性**: 任何在 Server-Side 注册的新工具（如 `generateEditingPlan`），在引入前端 SDK 渲染气泡时，**必须**同步补齐相关的中文状态文案映射。严禁使用不完备的三元运算符（如 `isOutline ? A : B`），必须覆盖所有已知工具分支，防范“文案指代不明”的展示事故。
 
 ## 📝 [阶段演进] 局部增量更新 (PATCH) 与 React Query 水合架构 (Optimistic UI)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **后端增量更新 (Hono PATCH)**: 在 `projects.ts` 路由中引入了 `PATCH /:id` 接口。确立了“只处理传递的增量字段，不强制要求全量覆盖”的 RESTful 最佳实践，为未来的元数据扩展留下了纯净的接口底座。
 - **前端无感编辑 (React Query Invalidation)**: 实现了受控的 `<EditableProjectTitle />` 组件。在 `onBlur` 时触发修改，请求成功后通过 `queryClient.invalidateQueries` 使当前项目的缓存失效。React Query 会在后台自动重新拉取数据并刷新视图，实现了无需手动管理 Redux/Zustand 全局状态的无缝水合更新。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (幽灵 404 与 HMR 假死)**: 在修改后端路由文件（如 `projects.ts`）时，**绝对禁止**产生重复的 `export default`。这种微小的 TypeScript 语法错误不会在终端引发核爆级警告，但会导致热更新 (HMR) 进程假死。前端发起的新路由请求会持续遭遇 404，让人误以为是 CORS 或路由挂载的问题。必须养成修改后观察服务端编译状态的肌肉记忆。
 - **DON'T DO (路由参数转义黑洞)**: 在 Bash 脚本中处理 React Router 动态路由文件（如 `projects.$projectId.tsx`）时，**严禁**直接将包含 `$` 的路径裸写进双引号或直接执行。Bash 会将其解析为环境变量（导致路径变成 `projects..tsx` 而报错找不到文件）。必须使用单引号包裹，或者显式使用 `\$` 转义。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **纯净 PATCH 准则**: 任何后续新增的局部修改接口，必须遵循 PATCH 语义。后端校验逻辑必须具备可选字段容错能力（`if (body.field !== undefined)`），严禁在 PATCH 接口中写死 required 校验。
 
 ## 📝 [阶段跃迁] 素材精挑 (Footage Selection) 状态流转与响应式闭环 (LUI + GUI)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **LUI+GUI 双轨联动**: 正式落地了“精选素材篮子 (selectedBasket)”领域模型。AI 可通过 `manage_footage_basket` 工具在服务端直接操作数据库落盘，用户也可在 GUI 侧边栏实时查看与修改。
 - **水合链路收敛 (Hydration CQRS)**: 彻底铲除了 `ChatPanel.tsx` 中基于 `messages` 历史流“倒序捞针”解析 `clips` 的脆弱逻辑。现在 `retrievedClips` 和 `selectedBasket` 的全量水合严格收敛于 React Router 的路由入口阶段 (`projects.$projectId.tsx`)，从 `GET /api/projects/:id` 接口统一拉取，实现了绝对的单一真理源。
 - **JIT 动态映射 (JIT Mapping)**: `selectedBasket` 仅在 DB 和 Store 中持久化纯净的 `assetId` 等元数据。带有安全时效性的 `videoUrl` / `thumbnailUrl` 签名链接，严格通过前端 UI 组件在渲染时，实时去 `retrievedClips` 池中进行内存关联映射，彻底阻断了 URL 过期导致的 403 黑洞。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (Zustand 响应式黑洞)**: 严禁在 React 组件的渲染主体逻辑中使用 `useCanvasStore.getState()` 去读取需要动态更新的数据！这会彻底绕过 Zustand 的依赖收集与订阅机制，导致底层数据更新后 UI 变成一潭死水（空载白屏）。必须且只能使用 Hook 形式 `useCanvasStore(state => ...)`。
 - **DON'T DO (清理不彻底的幽灵变量)**: 在进行 Store 替换重构（如移除 `useBasketStore`）时，绝对不能只删掉 `import` 和头部解构声明。必须全局搜索相关变量（如 `basketItems`），否则极易在深层嵌套的 UI（如窄屏汉堡菜单的数字角标）中引发 `Can't find variable` 的 V8 致命崩溃。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **高对比度双向 UI 反馈**: 当实现类似“素材入篮”的跨面板联动操作时，源头实体（如左侧检索列表的卡片）必须提供具备高对比度的视觉反馈（如品牌色边框 + “✅ 已精选”绝对定位徽章）。且该反馈必须同时适配 Tailwind v4 的浅色/暗黑双态主题，确保视觉无死角，防范用户重复操作。
 
 ## 📝 [阶段更新] 全局布局对称性与组件双态主题修复 (Symmetric Layout & Theme Consistency)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **对称张力布局**: `CanvasPanel.tsx` 顶部状态栏移除了不对称的弹性盒设定，采用了严格的 `flex-1` 对称张力布局（左侧标题区与右侧操作区均为 `flex-1`，外加特定的对齐方向），成功利用两侧相等的张力将中间的视图切换器挤压至绝对居中。
 - **组件纯粹化**: 彻底移除了“素材篮子”与“汉堡菜单”中零散的硬编码 DOM，全量复用了通用的 `<Button variant="secondary" />` 组件，实现了操作语义与视觉的收敛。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (单边 Flex 导致的居中偏移)**: 严禁在 Flex 容器中，仅让一侧子元素拥有 `flex-1`（或不确定的宽度）而期望中心元素能乖乖呆在正中间。Flex 的力学分配会直接使得所谓的“中心”发生物理偏移。
 - **DON'T DO (基础组件单态污染)**: 严禁在基础 UI 组件（如 `Button.tsx` 的 `secondary` 变体）中硬编码 `bg-zinc-800 text-zinc-100` 等单态深色类名。这会直接破坏应用的双态主题响应，在 Light 模式下产生刺眼的“黑斑”。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **力学对称居中法则**: 在顶部导航栏等需要三段式布局（左中右）且中心要求绝对居中的场景，必须强制两侧占位容器采用同等宽度的 `flex-1`，并辅以 `justify-start` / `justify-end` 将中心区块挤至死角。
 - **强制响应式基类**: 组件变体如果包含背景色，必须强制写全双态映射（如 `bg-zinc-100 dark:bg-zinc-800`），零容忍单态硬编码。
 
 **4. 读链路元数据补齐 (Metadata Hydration)**:
+
 - 在 `GET /api/projects/:id` 的 JIT 签发阶段，必须通过 `assetId` 回表查询并补齐 `filename` 等关键元数据。严禁仅下发加密 URL，否则会导致前端 UI（如素材篮子）无法向用户展示人类可读的原始信息。
 
 **6. GUI 状态修改的乐观落盘原则 (Optimistic Persist)**:
+
 - **DON'T DO (只改瞬态)**: 严禁在修改类似 `selectedBasket` 等核心领域资产时，仅仅调用 `useCanvasStore.getState().set...` 更改前端内存。这必然导致刷新后的水合断层。
 - **乐观闭环规范**: 必须采用 `乐观更新 (瞬间渲染 UI) -> 异步 fetch (PATCH 接口) -> 失败回滚 (try-catch 恢复原 Store)` 的标准三步走架构，既保证了本地的极速响应，又捍卫了端云的一致性。
 - **热更新假死防线**: 在修改后端路由入口时，若遇到符合预期却请求失效的情况，需警惕热更新进程假死，必须结合日志探针强制触发重载。
@@ -873,51 +926,80 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 ## 📝 [阶段修复] macOS Apple Silicon (M系列) 产物损坏警告与 Gatekeeper 防线 (Notarization & Quarantine)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **CI/CD 签名预留**: 在 `.github/workflows/build.yml` 中正式为 macOS 矩阵注入了 Apple 开发者证书相关的环境变量（`APPLE_CERTIFICATE`、`APPLE_TEAM_ID` 等），为后续自动签名与公证 (Notarization) 铺平道路。
 - **降级自救通道**: 在 GitHub Release Body 及 `README.md` 中注入了终端解锁指南，保障在无证书测试期间，内测用户仍可通过原生命令强行绕过拦截。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (物理损坏幻觉)**: 当在 M1~M4 设备上打开 aarch64 产物遇到“App 已损坏，无法打开”警告时，**绝对禁止**立刻怀疑是 Rust 交叉编译工具链或 GitHub Actions 产物发生了物理损坏。这 100% 是由于未经苹果公证的第三方应用，被 macOS Gatekeeper 强行打上了 `com.apple.quarantine` 隔离标签。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **隔离剥离纪律**: 在正式引入企业级 Apple Developer 证书之前，开发团队及内测用户在安装 ClipMind 测试包时，必须养成将 App 拖入应用程序目录后，执行 `sudo xattr -cr /Applications/ClipMind.app` 强行剥离隔离标签的肌肉记忆。
 
 ## 📝 [阶段交接] 热点情报引导与端云初始状态对齐 (Onboarding SSOT)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **单一真理源 (SSOT) 闭环**: 明确了新项目创建时的“初始欢迎语 (Greeting)”由且仅由后端 `apps/server/src/routes/projects.ts` 在初始化数据库记录时决定。
 - **功能透出与 Agent 激活**: 在后端的初始欢迎语中显式注入了“全网热点风向标”的引导文案。这不仅解决了用户的“冷启动”困境，更成功引导用户提问，无缝激活了后台定时抓取任务 (`fetch-hot-topics.ts`) 与 LLM System Prompt 之间的联动。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (存量数据幻觉)**: 严禁在修改了后端数据库的默认插入逻辑（如修改欢迎语）后，面对毫无变化的前端历史页面直接怀疑代码未生效。存量项目读取的是数据库里的历史脏数据，测试生命周期初始化逻辑时，**必须新建项目**。
 - **DON'T DO (前端越权硬编码)**: 严禁在前端 `ChatPanel.tsx` 或类似组件中硬编码默认的初始消息（Fallback Messages）。这会与后端的初始化逻辑产生严重的“双重真理源”脑裂，导致极其隐蔽的 UI 幽灵状态。
 
 **3. 新共识与规范 (New Conventions):**
+
 - **状态流转绝对后置**: 前端对于所有的初始对话状态、欢迎语，必须完全依赖后端的下发（如 `initialMessages`）。前端组件只负责在数据为空时展示 UI 骨架屏或等待状态，绝对禁止擅自填充业务文案。
 
 ## 📝 [阶段更新] 欢迎语全功能链路闭环 (Onboarding Refinement)
 
 **1. 架构与状态流转 (Architecture State):**
+
 - **引导语义终态对齐**: 欢迎语 (`GREETING`) 已定调为包含“灵感发现 -> 生成大纲 -> 素材检索 -> 剪辑方案”的完整 4 步链路。
 - **冷启动与 LUI-GUI 协同**: 既保留了解决用户冷启动的“热点抓取”入口，又用具象化的业务功能名词（代替了抽象的“对话生成”、“看板协作”）解释了左侧对话与右侧看板的物理映射关系。
 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
 - **DON'T DO (丢失冷启动抓手)**: 严禁在优化文案时，为了追求结构精简而删掉“灵感发现/看热点”等破冰引导。这会直接导致无明确意图的用户在空白界面流失。
 
-
 **4. 踩坑与教训：Prose 插件的隐形墨水陷阱 (Typography Trap)**
+
 - **DON'T DO**: 严禁在浅色/白底模式下，对包含 `@tailwindcss/typography` (`prose`) 的深色背景气泡仅使用 `text-white`。`prose` 插件具有极高的特异性（Specificity），它会强行把 `<p>` 标签渲染为深灰色。如果不根据气泡颜色显式切换 `prose-invert`，就会导致深色气泡中出现“隐形墨水”的灾难。
 - **规范**: 恒定深色背景的区块（如用户气泡）必须强制硬编码引入 `prose-invert`，而跟随系统主题的区块则使用 `dark:prose-invert`。
 
 **5. 踩坑与教训：状态幻觉与数据驱动导航 (Data-Driven Navigation)**
+
 - **DON'T DO**: 严禁在多步表单或向导组件（如 Step Pills）中，仅仅依靠当前的“活跃视图 (activeMode)”来反推前置步骤是否完成。这种盲猜逻辑极其脆弱，会产生严重的状态幻觉（例如：一旦用户跳步浏览，状态指示器就会错乱）。
 - **规范**: 必须坚守 SSOT (单一真理源) 原则。向导组件的“完成态 (Done)”必须且只能通过校验底层领域模型实体（如 `currentProject.outlineContent`, `currentProject.editingPlans`）的真实数据是否落盘来决定。
 
 ## 🚨 状态管理铁律：SSOT 与防脑裂防线 (Added during Main Canvas UI Refactor)
+
 - **Server State vs Client State 分离**：绝对禁止将纯服务端获取且不参与高频端侧计算的元数据（如 `projectTitle`）水合到 Zustand Store 中。
 - **React Query 作为读链路唯一真理源**：UI 组件必须直接通过 `useQuery` 订阅服务端元数据。Zustand 仅允许接管高频变动的核心业务资产（如 `retrievedClips`, `editingPlans`）。
 - **缓存击穿闭环**：在执行 `useMutation` 更新数据后，除了失效单个实体 `['project', id]`，必须同时排查并失效列表级缓存 `['projects']`，以防工作台列表页发生状态回退。
 
 ## Architecture Shift: Workflow State Machine & SSOT
+
 - **UI Layout:** Transitioned from horizontal Tabs to a dynamic vertical Accordion layout (`AccordionSection.tsx`). The order of the tasks (Footage vs. Outline) is dynamically derived from `project.workflowMode`.
 - **SSOT Enforcement:** Read-only global state (like `workflowMode`) is now managed entirely by React Query and the DB schema. Zustand is strictly reserved for volatile client-side UI states like `activePanelId`. Avoid `queryClient.invalidateQueries` in child components without a `queryFn`; explicitly use `queryClient.setQueryData` for pessimistic updates.
+
+## 📝 [阶段跃迁] Dual-Track RAG 架构升级与宏观总结注入 (Video-Level Summary)
+
+**1. 架构与状态流转 (Architecture State):**
+
+- **双轨制检索 (Dual-Track RAG)**: 彻底废弃了单层的切片级检索。将架构升级为“宏观（视频级摘要）+ 微观（切片级台词）”的双层漏斗。
+- **写链路 (The Write Path)**: ASR 回调落地后，通过 `asset-processor.ts` 中枢调度大模型，对全量文本进行 50-100 字的高度凝练总结。该总结落盘至 MySQL `assets.summary` 并在 Qdrant 中建立 `clipmind_assets_summary` 独立集合。
+- **读链路预备**: 分离出 `search_assets` (宏观意图匹配) 与 `search_clips` (微观切片精搜) 的底层支持。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+
+- **DON'T DO (单位换算灾难)**: 严禁在未经确认的情况下处理时间戳与时长。MySQL 中的 `duration` 被定义为秒，UI 渲染时强行除以 1000 会导致长视频变成 `0.1s` 的幽灵。必须引入 `MM:SS` 格式化器。
+- **DON'T DO (Flex 拉伸与 Grid 冲突)**: 严禁在 CSS Grid 的 `aspect-video` 容器中混用 `flex flex-col` 而不进行绝对定位约束。这会直接导致不同内容的卡片发生高度挤压与视觉错位。必须使用 `absolute inset-0` 剥离文档流。
+- **DON'T DO (自动 DDL 黑洞)**: 严禁通过业务代码自动创建 Qdrant Collection。所有基础设施（如 `clipmind_assets_summary`）及其 Payload 索引（如 `assetId` Keyword 索引），必须且只能由运维人员在 Qdrant Web UI 中手工执行，防止灾难性的全表扫描。
+
+**3. 新共识与规范 (New Conventions):**
+
+- **UI 纯粹化约束**: 在进行网格（Grid）长宽比普适化设计时，任何悬浮状态（如已精选徽章）、常驻信息（如渐变文件名、时长），必须统一封装在绝对定位（`absolute`）的子图层中，死死锁住父容器的外框骨架。
