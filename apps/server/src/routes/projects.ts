@@ -31,15 +31,10 @@ app.get('/', async (c) => {
 
 app.post('/', async (c) => {
   try {
-    const newId = crypto.randomUUID();
-    const GREETING = "你好！我是 ClipMind。你可以通过以下核心功能快速开启创作：\n\n" +
-      "1️⃣ **灵感发现**：向我提问“今天有什么热点？”，我会为你推荐实时爆款题材。\n\n" +
-      "2️⃣ **生成大纲**：输入你的想法，我会为你策划爆款视频脚本大纲。\n\n" +
-      "3️⃣ **素材检索**：上传视频后，我会根据大纲需求，帮你从长视频中精准检索并提取素材片段。\n\n" +
-      "4️⃣ **生成剪辑方案**：我会基于大纲和精选素材，为你生成详细的剪辑方案，指导后期成片。\n\n" +
-      "💡 **看板联动**：所有生成的成果（大纲/素材/方案）都会实时同步在右侧面板。你可以点击顶部标签，在 **大纲**、**素材篮子** 和 **剪辑计划** 之间切换查看。\n\n";
+          const newId = crypto.randomUUID();
+          const GREETING = "你好！我是 ClipMind，请在右侧选择你的创作起点。";
 
-    // 1. 物理创建项目记录（包含初始 Greeting 消息）
+          // 1. 物理创建项目记录（包含初始 Greeting 消息）
     // [Arch] 读写分离：使用纯净 CoreMessage 结构入库
     await db.insert(projects).values({
       id: newId,
