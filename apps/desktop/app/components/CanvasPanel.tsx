@@ -3,10 +3,12 @@ import { env } from '../env';
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
-import { Menu, ShoppingBasket } from "lucide-react";
+import { Menu, ShoppingBasket, ChevronDown, ChevronRight } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "./Button";
 import { PlanCanvas } from "./canvas/PlanCanvas";
+import { AccordionSection } from "./AccordionSection";
 
 type CanvasMode = "outline" | "footage" | "plan";
 
@@ -30,8 +32,34 @@ const modeLabels: Record<CanvasMode, string> = {
 
 
 export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }: CanvasPanelProps) {
-  const { activeMode, setActiveMode, setOutlineContent } = useCanvasStore();
+  const { activeMode, setActiveMode, setOutlineContent, activePanelId, setActivePanelId } = useCanvasStore();
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
+
+  const queryClient = useQueryClient();
+  const { data: projectData } = useQuery({ queryKey: ['project', projectId] });
+  const workflowMode = projectData?.project?.workflowMode;
+
+  const updateModeMutation = useMutation({
+    mutationFn: async (mode: string) => {
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflowMode: mode })
+      });
+      if (!res.ok) throw new Error('Failed to update mode');
+      return res.json();
+    },
+    onSuccess: (_, variables) => {
+      // [Arch] 悲观更新：网络请求成功后手动写入缓存，避免触发无 queryFn 的 invalidate 崩溃
+      queryClient.setQueryData(['project', projectId], (oldData: any) => {
+        if (!oldData) return oldData;
+        return {
+          ...oldData,
+          project: { ...oldData.project, workflowMode: variables }
+        };
+      });
+    }
+  });
   const retrievedClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
   const selectedBasket = useCanvasStore((s) => s.projects[projectId]?.selectedBasket || []);
 
@@ -127,6 +155,28 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     }
   }, [outline?.contentMd, outlineContent, editor, setOutlineContent, projectId]);
 
+  if (!workflowMode) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-[#F7F6F1] dark:bg-zinc-950 p-8 transition-colors duration-200">
+        <div className="w-full max-w-2xl bg-[#F4F3ED] dark:bg-zinc-900 p-8 rounded-2xl">
+          <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-6">选择起点</h2>
+          <div className="grid grid-cols-2 gap-4">
+            <button onClick={() => updateModeMutation.mutate('material')} disabled={updateModeMutation.isPending} className="cursor-pointer bg-white dark:bg-zinc-800 p-6 rounded-xl border border-zinc-200/60 dark:border-zinc-700 text-left hover:shadow-md hover:border-indigo-500 hover:-translate-y-1 transition-all group flex flex-col h-36 justify-center disabled:opacity-50 disabled:cursor-not-allowed">
+              <div className="w-10 h-10 bg-[#E8F3EE] dark:bg-emerald-900/30 rounded-lg flex items-center justify-center mb-4"><svg className="w-5 h-5 text-[#2B7A61]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg></div>
+              <div className="font-bold text-zinc-900 dark:text-zinc-100 text-[15px] mb-1.5">我有素材</div>
+              <div className="text-xs text-zinc-500 dark:text-zinc-400">上传素材，AI 帮你分析怎么剪</div>
+            </button>
+            <button onClick={() => updateModeMutation.mutate('idea')} disabled={updateModeMutation.isPending} className="cursor-pointer bg-white dark:bg-zinc-800 p-6 rounded-xl border border-zinc-200/60 dark:border-zinc-700 text-left hover:shadow-md hover:border-indigo-500 hover:-translate-y-1 transition-all group flex flex-col h-36 justify-center disabled:opacity-50 disabled:cursor-not-allowed">
+              <div className="w-10 h-10 bg-[#EEF3FB] dark:bg-blue-900/30 rounded-lg flex items-center justify-center mb-4"><svg className="w-5 h-5 text-[#3769B0]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg></div>
+              <div className="font-bold text-zinc-900 dark:text-zinc-100 text-[15px] mb-1.5">我有想法</div>
+              <div className="text-xs text-zinc-500 dark:text-zinc-400">从热点出发，AI 帮你规划怎么拍</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col h-full bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
       {/* 顶部状态栏 */}
@@ -136,28 +186,11 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
         <div className="flex-1 flex items-center min-w-0 pr-4">
         </div>
 
-        {/* 中间：视图控制器 */}
+        {/* 中间：工作流指示器 (取代旧版 Tab，保持布局张力) */}
         <div className="flex items-center gap-3 justify-center">
-          {/* 窄屏态：仅显示当前模式名称 */}
-          <span className="lg:hidden text-sm font-bold text-zinc-900 dark:text-zinc-100">
-            {modeLabels[activeMode]}
-          </span>
-
-          {/* 宽屏态：模式选择器 */}
-          <div className="hidden lg:flex bg-zinc-100 dark:bg-zinc-800/50 p-1 rounded-lg border border-zinc-200 dark:border-zinc-700/30 transition-colors">
-            {(["outline", "footage", "plan"] as CanvasMode[]).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => setActiveMode(mode)}
-                className={`px-3 py-1 rounded-md text-xs transition-all ${activeMode === mode
-                  ? "bg-indigo-600 text-white shadow-lg"
-                  : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
-                  }`}
-              >
-                {modeLabels[mode]}
-              </button>
-            ))}
-          </div>
+           <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 px-3 py-1 rounded-full">
+             {workflowMode === 'material' ? '🎬 素材驱动工作流' : workflowMode === 'idea' ? '💡 想法驱动工作流' : ''}
+           </span>
         </div>
 
         {/* 右侧：操作区 (与左侧 flex-1 对称以保证中部绝对居中) */}
@@ -235,86 +268,95 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
         </div>
       )}
 
-      {/* 主画布区 */}
-      <div className="flex-1 overflow-auto w-full flex justify-center">
-        {activeMode === "outline" ? (
-          (outline || outlineContent) ? (
-            <div className="w-full max-w-4xl p-8 pb-32">
-              <EditorContent editor={editor} />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto text-center px-8 -mt-20">
-              <div className="w-20 h-20 mb-6 rounded-2xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center border border-indigo-200 dark:border-indigo-500/20 shadow-[0_0_40px_rgba(99,102,241,0.15)] transition-colors">
-                <svg className="w-10 h-10 text-indigo-500 dark:text-indigo-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                </svg>
-              </div>
-              <h3 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 mb-2 transition-colors">等待灵感降临...</h3>
-              <p className="text-zinc-500 dark:text-zinc-400 text-sm leading-relaxed transition-colors">
-                在左侧告诉我想做什么，我会为你生成结构化的视频大纲，并自动匹配库内素材。
-              </p>
-            </div>
-          )
-        ) : activeMode === "plan" ? (
-          <PlanCanvas projectId={projectId} />
-        ) : activeMode === "footage" ? (
-          <div className="h-full w-full overflow-y-auto p-8 bg-zinc-50 dark:bg-zinc-950">
-            {retrievedClips.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-400 space-y-4">
-                <div className="text-4xl">🎬</div>
-                <p className="text-sm">暂无检索结果，请在左侧向 ClipMind 描述所需素材</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto pb-20">
-                {retrievedClips.map((clip: any, i: number) => {
-                  const selected = isClipSelected(clip);
-                  return (
-                    <div
-                      key={i}
-                      onClick={() => toggleClipSelection(clip)}
-                      className={`bg-white dark:bg-zinc-900 border cursor-pointer hover:ring-1 hover:ring-indigo-300 dark:hover:ring-indigo-700 ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} rounded-xl overflow-hidden flex flex-col transition-all group relative`}
-                    >
-                      {/* 已精选徽章 */}
-                      {selected && (
-                        <div className="absolute top-2 right-2 z-10 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1">
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                          已精选
-                        </div>
-                      )}
-                      {/* 缩略图区域 */}
-                      <div className={`w-full h-32 relative ${selected ? 'opacity-90' : ''}`}>
-                        {clip.thumbnailUrl ? (
-                          <img src={clip.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover bg-zinc-100 dark:bg-zinc-800" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 text-zinc-400 text-2xl">🎬</div>
-                        )}
-                        <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono shadow-sm">
-                          {(clip.startTime / 1000).toFixed(1)}s - {(clip.endTime / 1000).toFixed(1)}s
-                        </div>
-                      </div>
-                      {/* 文本区域 */}
-                      <div className="p-4 flex flex-col gap-3 flex-1">
-                        <div className="flex justify-between items-center gap-2">
-                          <span className="text-xs font-semibold px-2 py-0.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded shrink-0">
-                            Score: {clip.score?.toFixed(2) || 'N/A'}
-                          </span>
-                          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 truncate" title={clip.filename}>
-                            {clip.filename || '未知素材'}
-                          </span>
-                        </div>
-                        <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-3 leading-relaxed">{clip.text}</p>
-                      </div>
+      {/* 主画布区：手风琴任务流 */}
+      <div className="flex-1 overflow-y-auto w-full p-6 lg:p-10 bg-zinc-50 dark:bg-zinc-950">
+        <div className="max-w-4xl mx-auto flex flex-col">
+          {/* 根据 workflowMode 动态排列节点顺序 */}
+          {(workflowMode === 'idea' ? ['outline', 'footage', 'plan'] : ['footage', 'outline', 'plan']).map((nodeType) => {
+            if (nodeType === 'outline') {
+              return (
+                <AccordionSection key="outline" id="outline" title="📝 策划大纲" activeId={activePanelId} setActiveId={setActivePanelId}>
+                  {(outline || outlineContent) ? (
+                    <div className="w-full pb-10">
+                      <EditorContent editor={editor} />
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="flex items-center justify-center h-full text-zinc-500 italic">
-            {activeMode} 视图开发中...
-          </div>
-        )}
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-16 text-center">
+                      <div className="w-16 h-16 mb-4 rounded-2xl bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center border border-indigo-200 dark:border-indigo-500/20 shadow-sm">
+                        <svg className="w-8 h-8 text-indigo-500 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                        </svg>
+                      </div>
+                      <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待灵感降临...</h3>
+                      <p className="text-zinc-500 dark:text-zinc-400 text-sm">在左侧告诉我想做什么，我会为你生成结构化的视频大纲</p>
+                    </div>
+                  )}
+                </AccordionSection>
+              );
+            }
+            if (nodeType === 'footage') {
+              return (
+                <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
+                  {retrievedClips.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-zinc-500 dark:text-zinc-400 space-y-4">
+                      <div className="text-4xl">🎬</div>
+                      <p className="text-sm">暂无检索结果，请在左侧向 ClipMind 描述所需素材</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pr-2">
+                      {retrievedClips.map((clip: any, i: number) => {
+                        const selected = isClipSelected(clip);
+                        return (
+                          <div
+                            key={i}
+                            onClick={() => toggleClipSelection(clip)}
+                            className={`bg-white dark:bg-zinc-900 border cursor-pointer hover:ring-1 hover:ring-indigo-300 dark:hover:ring-indigo-700 ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} rounded-xl overflow-hidden flex flex-col transition-all group relative`}
+                          >
+                            {selected && (
+                              <div className="absolute top-2 right-2 z-10 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1">
+                                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                已精选
+                              </div>
+                            )}
+                            <div className={`w-full h-28 relative ${selected ? 'opacity-90' : ''}`}>
+                              {clip.thumbnailUrl ? (
+                                <img src={clip.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover bg-zinc-100 dark:bg-zinc-800" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 text-zinc-400 text-2xl">🎬</div>
+                              )}
+                              <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono shadow-sm">
+                                {(clip.startTime / 1000).toFixed(1)}s - {(clip.endTime / 1000).toFixed(1)}s
+                              </div>
+                            </div>
+                            <div className="p-3 flex flex-col gap-2 flex-1">
+                              <div className="flex justify-between items-center gap-2">
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded shrink-0">
+                                  Score: {clip.score?.toFixed(2) || 'N/A'}
+                                </span>
+                                <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 truncate" title={clip.filename}>
+                                  {clip.filename || '未知素材'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-zinc-700 dark:text-zinc-300 line-clamp-2 leading-relaxed">{clip.text}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </AccordionSection>
+              );
+            }
+            if (nodeType === 'plan') {
+              return (
+                <AccordionSection key="plan" id="plan" title="📋 剪辑方案" activeId={activePanelId} setActiveId={setActivePanelId}>
+                  <PlanCanvas projectId={projectId} />
+                </AccordionSection>
+              );
+            }
+            return null;
+          })}
+        </div>
       </div>
     </div>
   );

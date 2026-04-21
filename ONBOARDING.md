@@ -917,3 +917,7 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 - **Server State vs Client State 分离**：绝对禁止将纯服务端获取且不参与高频端侧计算的元数据（如 `projectTitle`）水合到 Zustand Store 中。
 - **React Query 作为读链路唯一真理源**：UI 组件必须直接通过 `useQuery` 订阅服务端元数据。Zustand 仅允许接管高频变动的核心业务资产（如 `retrievedClips`, `editingPlans`）。
 - **缓存击穿闭环**：在执行 `useMutation` 更新数据后，除了失效单个实体 `['project', id]`，必须同时排查并失效列表级缓存 `['projects']`，以防工作台列表页发生状态回退。
+
+## Architecture Shift: Workflow State Machine & SSOT
+- **UI Layout:** Transitioned from horizontal Tabs to a dynamic vertical Accordion layout (`AccordionSection.tsx`). The order of the tasks (Footage vs. Outline) is dynamically derived from `project.workflowMode`.
+- **SSOT Enforcement:** Read-only global state (like `workflowMode`) is now managed entirely by React Query and the DB schema. Zustand is strictly reserved for volatile client-side UI states like `activePanelId`. Avoid `queryClient.invalidateQueries` in child components without a `queryFn`; explicitly use `queryClient.setQueryData` for pessimistic updates.
