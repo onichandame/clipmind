@@ -215,25 +215,56 @@ app.post("/", async (c) => {
           }
         }
       }),
-      searchFootage: tool({
-        description: "根据用户查询的文本意图，在全局视频素材库（Qdrant）中进行向量语义检索，寻找最匹配的视频文本切片。当用户询问具体视频内容或需要补充素材时调用此工具。",
+      search_assets: tool({
+        description: "【宏观检索】基于用户意图，在大盘视频库中进行鸟瞰式检索。返回的是视频素材的全局ID(assetId)和宏观总结(Summary)。当需要寻找特定主题或题材的视频时，必须优先调用此工具以防Token爆炸。",
         inputSchema: z.object({
-          query: z.string().describe('用于执行语义检索的查询关键词'),
-          limit: z.number().min(1).max(20).optional().default(20).describe('期望返回的视频片段最大数量（上限20）')
+          query: z.string().describe('搜索意图，例如：海滩风景、某人发表演讲'),
+          limit: z.number().min(1).max(10).optional().default(5)
         }),
         execute: async ({ query, limit }) => {
           try {
-            console.log(`[RAG] LLM 触发向量检索: query="${query}", limit=${limit}`);
-            const embeddings = await generateEmbeddings([query]);
-            if (!embeddings || embeddings.length === 0) {
-              return { success: false, error: "生成文本向量失败" };
+            console.log(`[RAG-Macro] LLM 请求视频大盘检索: "${query}"`);
+            const [vector] = await generateEmbeddings([query]);
+
+            // 强制路由至 summary collection
+            const { searchVectors, QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
+            const results = await searchVectors(vector, limit, QDRANT_SUMMARY_COLLECTION);
+
+            const assetsFound = results.map((r: any) => ({
+              score: r.score,
+              assetId: r.payload.assetId,
+              summary: r.payload.text
+            }));
+
+            console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产。`);
+            return { success: true, assets: assetsFound };
+          } catch (error: any) {
+            console.error("❌ search_assets 宏观检索失败:", error);
+            return { success: false, error: error.message };
+          }
+        }
+      }),
+
+      search_clips: tool({
+        description: "【微观检索】在指定的视频资产（assetIds）范围内，深入检索符合条件的台词/画面切片。用于支撑剪辑方案(Editing Plan)的精确排期。注意：必须传入 assetIds 数组进行定向狙击。",
+        inputSchema: z.object({
+          query: z.string().describe('具体的台词或微观动作意图'),
+          assetIds: z.array(z.string()).describe('目标视频的 ID 数组 (可从选材篮子或 search_assets 中获取)'),
+          limit: z.number().min(1).max(20).optional().default(10)
+        }),
+        execute: async ({ query, assetIds, limit }) => {
+          try {
+            if (!assetIds || assetIds.length === 0) {
+              return { success: false, error: "必须提供 assetIds 才能进行精搜。请提示用户先挑素材，或先调用 search_assets 圈定范围。" };
             }
 
-            // 全局搜索视频切片
-            const qdrantResults = await searchVectors(embeddings[0], limit);
+            console.log(`[RAG-Micro] LLM 在指定视频中精搜切片: "${query}", assetIds: ${assetIds.length}`);
+            const [vector] = await generateEmbeddings([query]);
 
-            // 过滤提取核心 payload，剥离高维向量数组，降低 LLM Context Token 消耗
-            const baseClips = qdrantResults.map((p: any) => ({
+            const { searchVectorsWithFilter } = await import("../utils/qdrant");
+            const qdrantResults = await searchVectorsWithFilter(vector, assetIds, limit);
+
+            const clips = qdrantResults.map((p: any) => ({
               score: p.score,
               assetId: p.payload?.assetId,
               text: p.payload?.text,
@@ -241,56 +272,14 @@ app.post("/", async (c) => {
               endTime: p.payload?.endTime,
             }));
 
-            // 提取去重的 assetIds 防止 N+1 查询
-            const assetIds = [...new Set(baseClips.map((c: any) => c.assetId).filter(Boolean))];
-            const assetMap: Record<string, { filename: string, thumbnailUrl: string | null, signedThumb?: string | null }> = {};
-
-            if (assetIds.length > 0) {
-              const dbAssets = await db.select({
-                id: assets.id,
-                filename: assets.filename,
-                thumbnailUrl: assets.thumbnailUrl
-              }).from(assets).where(inArray(assets.id, assetIds as string[]));
-
-              for (const a of dbAssets) {
-                let signedThumb = null;
-                if (a.thumbnailUrl) {
-                  // 动态签发 2 小时有效期的 HTTPS 链接
-                  signedThumb = ossClient.signatureUrl(a.thumbnailUrl, { expires: 7200, secure: true });
-                }
-                // [Arch] 拦截点：同时保存用于签发的签名 URL 和用于落盘的纯净 Object Key
-                assetMap[a.id] = { filename: a.filename || '未知素材', thumbnailUrl: a.thumbnailUrl, signedThumb };
-              }
-            }
-
-            // 1. 用于分发给大模型和前端的视图层 Clips (包含临时授信 URL)
-            const viewClips = baseClips.map((c: any) => ({
-              ...c,
-              filename: c.assetId ? (assetMap[c.assetId]?.filename || '未知素材') : '未知素材',
-              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.signedThumb || null) : null
-            }));
-
-            // 2. 用于持久化落盘的物理层 Clips (纯净的 Object Key)
-            const dbClips = baseClips.map((c: any) => ({
-              ...c,
-              filename: c.assetId ? (assetMap[c.assetId]?.filename || '未知素材') : '未知素材',
-              thumbnailUrl: c.assetId ? (assetMap[c.assetId]?.thumbnailUrl || null) : null
-            }));
-
-            console.log(`[RAG] 检索完成，召回 ${viewClips.length} 条相关切片`);
-
-            // [Arch] 读写分离写链路：绝对禁止将 Expires 链接写入数据库，必须存入 dbClips
-            await db.update(projects)
-              .set({ retrievedClips: dbClips, updatedAt: new Date() })
-              .where(eq(projects.id, projectId));
-
-            return { success: true, clips: viewClips, total: viewClips.length };
-          } catch (error) {
-            console.error("❌ RAG 检索失败:", error);
-            return { success: false, error: "向量数据库检索异常" };
+            console.log(`[RAG-Micro] 精搜命中 ${clips.length} 个特定切片。`);
+            return { success: true, clips };
+          } catch (error: any) {
+            console.error("❌ search_clips 微观检索失败:", error);
+            return { success: false, error: error.message };
           }
         }
-      }),
+      })
     },
     onFinish: async ({ response }) => {
       try {
