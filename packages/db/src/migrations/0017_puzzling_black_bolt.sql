@@ -1,0 +1,1 @@
+ALTER TABLE `assets` ADD `checksum` varchar(64);

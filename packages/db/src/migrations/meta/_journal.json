@@ -113,6 +113,20 @@
       "when": 1776758321956,
       "tag": "0015_outgoing_kulan_gath",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1776768629129,
+      "tag": "0016_bitter_doctor_doom",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1776769438938,
+      "tag": "0017_puzzling_black_bolt",
+      "breakpoints": true
     }
   ]
 }
