@@ -37,8 +37,9 @@ export const projects = mysqlTable('projects', {
   id: varchar('id', { length: 36 }).primaryKey(),
   title: varchar('title', { length: 255 }).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().onUpdateNow().notNull(), // 用于 Dashboard 排序
-  uiMessages: json('ui_messages').default([]), // UI 消息历史（简化结构）
+      updatedAt: timestamp('updated_at').defaultNow().onUpdateNow().notNull(), // 用于 Dashboard 排序
+      workflowMode: varchar('workflow_mode', { length: 20 }), // material | idea | null
+      uiMessages: json('ui_messages').default([]), // UI 消息历史（简化结构）
   retrievedClips: json('retrieved_clips').default([]), // [Arch] 独立持久化的素材检索结果，脱离聊天历史
   selectedBasket: json('selected_basket').default([]), // [Arch] 精挑后的素材篮子
   editingPlans: json('editing_plans').default([]), // [Arch] 多套剪辑方案列表与素材映射
