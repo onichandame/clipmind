@@ -912,3 +912,8 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **5. 踩坑与教训：状态幻觉与数据驱动导航 (Data-Driven Navigation)**
 - **DON'T DO**: 严禁在多步表单或向导组件（如 Step Pills）中，仅仅依靠当前的“活跃视图 (activeMode)”来反推前置步骤是否完成。这种盲猜逻辑极其脆弱，会产生严重的状态幻觉（例如：一旦用户跳步浏览，状态指示器就会错乱）。
 - **规范**: 必须坚守 SSOT (单一真理源) 原则。向导组件的“完成态 (Done)”必须且只能通过校验底层领域模型实体（如 `currentProject.outlineContent`, `currentProject.editingPlans`）的真实数据是否落盘来决定。
+
+## 🚨 状态管理铁律：SSOT 与防脑裂防线 (Added during Main Canvas UI Refactor)
+- **Server State vs Client State 分离**：绝对禁止将纯服务端获取且不参与高频端侧计算的元数据（如 `projectTitle`）水合到 Zustand Store 中。
+- **React Query 作为读链路唯一真理源**：UI 组件必须直接通过 `useQuery` 订阅服务端元数据。Zustand 仅允许接管高频变动的核心业务资产（如 `retrievedClips`, `editingPlans`）。
+- **缓存击穿闭环**：在执行 `useMutation` 更新数据后，除了失效单个实体 `['project', id]`，必须同时排查并失效列表级缓存 `['projects']`，以防工作台列表页发生状态回退。

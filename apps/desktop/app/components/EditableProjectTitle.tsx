@@ -34,9 +34,10 @@ export function EditableProjectTitle({ projectId, initialTitle, className = '' }
       if (!res.ok) throw new Error('Failed to update title');
       return res.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
-    }
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+          queryClient.invalidateQueries({ queryKey: ['projects'] });
+        }
   });
 
   const handleBlur = () => {

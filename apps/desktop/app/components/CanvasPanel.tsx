@@ -7,7 +7,6 @@ import { Menu, ShoppingBasket } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
 import { Button } from "./Button";
 import { PlanCanvas } from "./canvas/PlanCanvas";
-import { EditableProjectTitle } from "./EditableProjectTitle";
 
 type CanvasMode = "outline" | "footage" | "plan";
 
@@ -133,9 +132,8 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
       {/* 顶部状态栏 */}
       <div className="h-14 border-b border-zinc-200 dark:border-zinc-800/50 flex items-center justify-between px-6 bg-white/80 dark:bg-zinc-900/20 backdrop-blur-md transition-colors duration-200">
 
-        {/* 左侧：可编辑项目名称 */}
+        {/* 左侧：空占位 (保持 flex-1 对称张力，确保中间组件视图切换器绝对居中) */}
         <div className="flex-1 flex items-center min-w-0 pr-4">
-          <EditableProjectTitle projectId={projectId} initialTitle={projectTitle} className="text-lg truncate" />
         </div>
 
         {/* 中间：视图控制器 */}

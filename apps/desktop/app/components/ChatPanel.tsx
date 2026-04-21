@@ -6,9 +6,10 @@ import { DefaultChatTransport, isToolUIPart } from "ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useCanvasStore } from "../store/useCanvasStore";
 import { EditingPlanCard } from "./EditingPlanCard";
+import { EditableProjectTitle } from "./EditableProjectTitle";
 
 interface ChatPanelProps {
   projectId: string;
@@ -23,7 +24,11 @@ const sanitizeSchema = {
     export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       const setActiveMode = useCanvasStore((s) => s.setActiveMode);
       const activeMode = useCanvasStore((s) => s.activeMode);
-      const projectTitle = useCanvasStore((s) => s.projects[projectId]?.title);
+      
+      // [Arch] SSOT 防线：标题直接依赖 React Query 缓存，彻底抛弃不同步的 Zustand 快照
+      const { data: projectData } = useQuery({ queryKey: ['project', projectId] });
+      const projectTitle = projectData?.project?.title;
+
       const currentProject = useCanvasStore((s) => s.projects[projectId]);
       const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -164,13 +169,12 @@ const sanitizeSchema = {
           <div className="flex flex-col px-5 pt-4 pb-3 border-b border-zinc-200 dark:border-zinc-800/60 backdrop-blur-sm z-10 transition-colors">
             <div className="flex items-center justify-between mb-2">
               <div className="flex flex-col">
-                <a href="/" className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 hover:text-indigo-500 transition-colors font-bold mb-0.5">← 工作台</a>
-                <h1 className="text-[13px] font-bold text-zinc-900 dark:text-zinc-100 transition-colors tracking-tight">
-                  {projectTitle || "未命名项目"}
-                </h1>
+                  <a href="/" className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 hover:text-indigo-500 transition-colors font-bold mb-0.5">← 工作台</a>
+                  <div className="text-[13px] font-bold text-zinc-900 dark:text-zinc-100 transition-colors tracking-tight">
+                    <EditableProjectTitle projectId={projectId} initialTitle={projectTitle || "未命名项目"} />
+                  </div>
+                </div>
               </div>
-              <div className="w-6 h-6 rounded-lg bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold shadow-lg shadow-indigo-500/20">C</div>
-            </div>
             
               {/* Step Pills */}
               <div className="flex gap-1.5 mt-2">
