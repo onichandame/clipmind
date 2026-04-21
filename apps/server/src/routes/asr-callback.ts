@@ -2,37 +2,9 @@ import { Hono } from "hono";
 import { assets, assetChunks } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { generateEmbeddings } from "../utils/embeddings";
-import { upsertVectors } from "../utils/qdrant";
+import { processAssetPostASR } from "../logic/asset-processor";
 
 const app = new Hono();
-
-async function processVectorization(assetId: string, chunks: any[]) {
-  try {
-    console.log(`[PROBE: VECTOR] 🕒 ${new Date().toISOString()} - 资产 ${assetId} 开始向量化...`);
-    const texts = chunks.map(c => c.transcriptText);
-    const vectors = await generateEmbeddings(texts);
-
-    const points = chunks.map((chunk, i) => ({
-      id: chunk.id,
-      vector: vectors[i],
-      payload: {
-        assetId: chunk.assetId,
-        startTime: chunk.startTime,
-        endTime: chunk.endTime,
-        text: chunk.transcriptText
-      }
-    }));
-
-    await upsertVectors(points);
-    console.log(`[PROBE: VECTOR] 🕒 ${new Date().toISOString()} - Qdrant 写入完成，准备更新数据库为 ready...`);
-    await db.update(assets).set({ status: 'ready' }).where(eq(assets.id, assetId));
-    console.log(`✅ [PROBE: VECTOR] 🕒 ${new Date().toISOString()} - 资产 ${assetId} 数据库状态已正式流转为 ready。`);
-  } catch (error) {
-    await db.update(assets).set({ status: 'error' }).where(eq(assets.id, assetId));
-    console.error(`❌ [Vectorization] Task failed for asset ${assetId}:`, error);
-  }
-}
 
 app.post("/", async (c) => {
   try {
@@ -65,20 +37,21 @@ app.post("/", async (c) => {
       await db.update(assets).set({ asrStatus: 'completed' }).where(eq(assets.id, assetId));
 
       // 3. 毫秒级时间轴与切片台词批量落盘
-      if (result && result.Sentences && result.Sentences.length > 0) {
-        const chunksToInsert = result.Sentences.map((sentence: any) => ({
-          id: crypto.randomUUID(),
-          assetId: assetId,
-          startTime: sentence.BeginTime,
-          endTime: sentence.EndTime,
-          transcriptText: sentence.Text
-        }));
+          if (result && result.Sentences && result.Sentences.length > 0) {
+            const chunksToInsert = result.Sentences.map((sentence: any) => ({
+              id: crypto.randomUUID(),
+              assetId: assetId,
+              startTime: sentence.BeginTime,
+              endTime: sentence.EndTime,
+              transcriptText: sentence.Text
+            }));
 
-        await db.insert(assetChunks).values(chunksToInsert);
-        console.log(`✅ ASR 切片落盘成功：资产 ${assetId}，共生成 ${chunksToInsert.length} 条 RAG 索引片段。`);
+            await db.insert(assetChunks).values(chunksToInsert);
+            console.log(`✅ ASR 切片落盘成功：资产 ${assetId}，共生成 ${chunksToInsert.length} 条 RAG 索引片段。`);
 
-        processVectorization(assetId, chunksToInsert).catch(console.error);
-      }
+            // 移交中枢处理管线 (向量化片段 + LLM 总结生成 + 向量化总结 + DB 终态落盘)
+            processAssetPostASR(assetId, chunksToInsert).catch(console.error);
+          }
     } else {
       // 失败状态流转
       await db.update(assets).set({ status: 'error', asrStatus: 'failed' }).where(eq(assets.id, assetId));

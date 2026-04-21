@@ -17,6 +17,8 @@ export const assets = mysqlTable('assets', {
   status: varchar('status', { length: 20 }).default('processing'), // processing | ready | error
   asrTaskId: varchar('asr_task_id', { length: 128 }), // 阿里云 FileTrans 任务 ID
   asrStatus: varchar('asr_status', { length: 20 }).default('pending'), // pending | processing | completed | failed
+  summary: text('summary'), // NEW: AI 总结 (视频级宏观描述)
+  checksum: varchar('checksum', { length: 64 }), // NEW: 素材文件的 Hash 校验值 (预留秒传)
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
