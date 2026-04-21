@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `retrieved_asset_ids` json DEFAULT ('[]');

@@ -230,14 +230,18 @@ app.post("/", async (c) => {
             const { searchVectors, QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
             const results = await searchVectors(vector, limit, QDRANT_SUMMARY_COLLECTION);
 
-            const assetsFound = results.map((r: any) => ({
-              score: r.score,
-              assetId: r.payload.assetId,
-              summary: r.payload.text
-            }));
+                const assetsFound = results.map((r: any) => ({
+                  score: r.score,
+                  assetId: r.payload.assetId,
+                  summary: r.payload.text
+                }));
 
-            console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产。`);
-            return { success: true, assets: assetsFound };
+                // [Arch] 状态持久化：将宏观检索命中的资产ID写入聚合根，驱动前端聚光灯UI
+                const hitAssetIds = assetsFound.map(a => a.assetId);
+                await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(eq(projects.id, projectId));
+
+                console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产并已持久化至 Project。`);
+                return { success: true, assets: assetsFound };
           } catch (error: any) {
             console.error("❌ search_assets 宏观检索失败:", error);
             return { success: false, error: error.message };
