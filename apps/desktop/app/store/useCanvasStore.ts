@@ -23,6 +23,8 @@ const initialProjectState: ProjectState = {
 interface CanvasState {
   activeMode: CanvasMode;
   setActiveMode: (mode: CanvasMode) => void;
+  activePanelId: string | null;
+  setActivePanelId: (id: string | null) => void;
   projects: Record<string, ProjectState>;
 
   // 动作
@@ -35,6 +37,8 @@ interface CanvasState {
 export const useCanvasStore = create<CanvasState>((set) => ({
   activeMode: 'outline',
   setActiveMode: (mode) => set({ activeMode: mode }),
+  activePanelId: null,
+  setActivePanelId: (id) => set({ activePanelId: id }),
   projects: {},
 
   setOutlineContent: (projectId, content, modifiedBy) => set((state) => {
