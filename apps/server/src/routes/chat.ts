@@ -49,7 +49,8 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `   - broll：空镜/转场/无素材片段，assetId 留空\n`;
   dynamicSystemPrompt += `2. description 字段必须具有直接指导价值：写明镜头意图、画面描述、剪辑手法，而不是笼统概述\n`;
   dynamicSystemPrompt += `3. 禁止生成无 assetId 的 footage 类型 clip — 如果找不到对应素材，应标记为 broll\n`;
-  dynamicSystemPrompt += `4. text 字段写该片段的台词/旁白/文案内容\n\n`;
+  dynamicSystemPrompt += `4. text 字段写该片段的台词/旁白/文案内容\n`;
+  dynamicSystemPrompt += `5. 字段名必须严格使用 camelCase：startTime、endTime（不是 starttime 或 endtime）\n\n`;
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -150,14 +151,32 @@ app.post("/", async (c) => {
           title: z.string().describe("剪辑方案的标题"),
           platform: z.string().describe("目标发布平台（如抖音、B站、小红书等）"),
           targetDuration: z.number().describe("目标视频时长（秒）"),
-          clips: z.array(z.object({
-            startTime: z.number().describe("切片起始时间（毫秒）"),
-            endTime: z.number().describe("切片结束时间（毫秒）"),
-            text: z.string().describe("切片台词内容"),
-            description: z.string().describe("编导对该切片的剪辑意图与画面描述"),
-            assetId: z.string().optional().describe("关联的素材 asset ID，来自用户精挑素材或检索结果。footage 类型必填"),
-            clipType: z.enum(['footage', 'broll']).optional().describe("片段类型：footage=有素材片段，broll=空镜/转场/无素材片段")
-          })).describe("选用的视频切片列表")
+          clips: z.preprocess(
+            (val) => {
+              if (!Array.isArray(val)) return val;
+              return val.map((clip: any) => {
+                const normalized = { ...clip };
+                // 容错：LLM 偶尔输出小写 key（如 endtime → endTime）
+                if ('endtime' in normalized && !('endTime' in normalized)) {
+                  normalized.endTime = normalized.endtime;
+                  delete normalized.endtime;
+                }
+                if ('starttime' in normalized && !('startTime' in normalized)) {
+                  normalized.startTime = normalized.starttime;
+                  delete normalized.starttime;
+                }
+                return normalized;
+              });
+            },
+            z.array(z.object({
+              startTime: z.number().describe("切片起始时间（毫秒）"),
+              endTime: z.number().describe("切片结束时间（毫秒）"),
+              text: z.string().describe("切片台词内容"),
+              description: z.string().describe("编导对该切片的剪辑意图与画面描述"),
+              assetId: z.string().optional().describe("关联的素材 asset ID，来自用户精挑素材或检索结果。footage 类型必填"),
+              clipType: z.enum(['footage', 'broll']).optional().describe("片段类型：footage=有素材片段，broll=空镜/转场/无素材片段")
+            }))
+          ).describe("选用的视频切片列表")
         }).strict(),
         execute: async (args) => {
           try {
