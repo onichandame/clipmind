@@ -36,7 +36,7 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
 
   const queryClient = useQueryClient();
-  const { data: projectData } = useQuery({ 
+  const { data: projectData } = useQuery({
     queryKey: ['project', projectId],
     // [Arch] 补齐订阅者 queryFn 以消灭 WebKit 控制台报错
     queryFn: async () => {
@@ -50,14 +50,12 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
 
   // 引入 Zustand 乐观状态，确保在 AI 流式生成期间能够立刻捕获到数据变化 (防变量重名加前缀)
   const optClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
-  const optBasket = useCanvasStore((s) => s.projects[projectId]?.selectedBasket || []);
   const optPlans = useCanvasStore((s) => s.projects[projectId]?.editingPlans || []);
 
   // [Arch] SSOT 瞬态 UI 路由：结合 React Query (Server) 和 Zustand (Client) 进行多维比对
   const prevProjectRef = useRef<any>(null);
   const prevOutlineRef = useRef<string | null>(null);
   const prevClipsLenRef = useRef<number>(optClips.length);
-  const prevBasketLenRef = useRef<number>(optBasket.length);
   const prevPlansLenRef = useRef<number>(optPlans.length);
 
   useEffect(() => {
@@ -68,11 +66,9 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     console.log("【Arch Probe】素材雷达触发", {
       optClipsLen: optClips?.length,
       prevOptClipsLen: prevClipsLenRef.current,
-      optBasketLen: optBasket?.length,
-      prevOptBasketLen: prevBasketLenRef.current,
       serverIdsStr: JSON.stringify(currProject?.retrievedAssetIds),
       prevServerIdsStr: JSON.stringify(prevProject?.retrievedAssetIds),
-      isOptFootageChanged: (optClips?.length !== prevClipsLenRef.current) || (optBasket?.length !== prevBasketLenRef.current)
+      isOptFootageChanged: optClips?.length !== prevClipsLenRef.current
     });
 
     const currentOutlineText = outline?.contentMd || outlineContent || "";
@@ -86,11 +82,10 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     }
 
     // 2. 比对素材 (Footage) - 融合 Zustand 乐观状态与 React Query 缓存
-    const isOptFootageChanged = optClips.length !== prevClipsLenRef.current || optBasket.length !== prevBasketLenRef.current;
+    const isOptFootageChanged = optClips.length !== prevClipsLenRef.current;
     const isServerFootageChanged = currProject && prevProject && (
       JSON.stringify(currProject.retrievedAssetIds) !== JSON.stringify(prevProject.retrievedAssetIds) ||
-      (currProject.retrievedClips?.length || 0) !== (prevProject.retrievedClips?.length || 0) ||
-      JSON.stringify(currProject.selectedBasket) !== JSON.stringify(prevProject.selectedBasket)
+      (currProject.retrievedClips?.length || 0) !== (prevProject.retrievedClips?.length || 0)
     );
 
     if (isOptFootageChanged || isServerFootageChanged) {
@@ -113,15 +108,14 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     // 5. 更新所有历史快照
     prevOutlineRef.current = currentOutlineText;
     prevClipsLenRef.current = optClips.length;
-    prevBasketLenRef.current = optBasket.length;
     prevPlansLenRef.current = optPlans.length;
-    
+
     if (currProject) {
       prevProjectRef.current = JSON.parse(JSON.stringify(currProject));
     }
   }, [
     outline, outlineContent, projectData?.project, setActivePanelId,
-    optClips.length, optBasket.length, optPlans.length
+    optClips.length, optPlans.length
   ]);
 
   const updateModeMutation = useMutation({
@@ -146,24 +140,18 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     }
   });
   const retrievedClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
-  const selectedBasket = useCanvasStore((s) => s.projects[projectId]?.selectedBasket || []);
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-      // 获取全局素材库素材
-      const { data: allAssets = [] } = useQuery({
-        queryKey: ['assets'],
-        queryFn: async () => {
-          const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets`);
-          if (!res.ok) throw new Error('Failed to fetch assets');
-          return res.json();
-        }
-      });
-
-      // 辅助函数：判断某个资产是否已被选入篮子（现在只认视频整体，不限制片段）
-      const isClipSelected = (assetId: string) => {
-        return selectedBasket.some((item: any) => item.assetId === assetId);
-      };
+  // 获取全局素材库素材
+  const { data: allAssets = [] } = useQuery({
+    queryKey: ['assets'],
+    queryFn: async () => {
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets`);
+      if (!res.ok) throw new Error('Failed to fetch assets');
+      return res.json();
+    }
+  });
 
   // 交互函数：局部唤起上传
   const handleSelectFiles = async () => {
@@ -183,43 +171,6 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
         localPath: p,
         serverUrl: env.VITE_API_BASE_URL
       }).catch(console.error);
-    }
-  };
-
-  // 交互函数：手动 Toggle 素材入篮 (乐观更新 + 异步落盘)
-  const toggleClipSelection = async (assetId: string) => {
-        const { setSelectedBasket } = useCanvasStore.getState();
-        const currentBasket = [...selectedBasket];
-        let newBasket;
-
-        if (isClipSelected(assetId)) {
-          newBasket = currentBasket.filter((item: any) => item.assetId !== assetId);
-        } else {
-          newBasket = [...currentBasket, {
-            assetId: assetId,
-            reason: "手动精选全量视频"
-          }];
-        }
-
-    // 1. 乐观更新 (Optimistic UI) 瞬间点亮卡片
-    setSelectedBasket(projectId, newBasket);
-
-    // 2. 异步回写落盘 (Persist to DB)
-    try {
-      const payload = { selectedBasket: newBasket };
-      const response = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const resData = await response.clone().json().catch(() => ({}));
-
-      if (!response.ok) throw new Error('Failed to persist basket');
-    } catch (error) {
-      console.error("Failed to sync basket, rolling back...", error);
-      // 发生网络错误时，静默回滚到修改前的状态，防止状态水合断层
-      setSelectedBasket(projectId, currentBasket);
     }
   };
 
@@ -296,33 +247,18 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
 
         {/* 中间：工作流指示器 (取代旧版 Tab，保持布局张力) */}
         <div className="flex items-center gap-3 justify-center">
-           <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 px-3 py-1 rounded-full">
-             {workflowMode === 'material' ? '🎬 素材驱动工作流' : workflowMode === 'idea' ? '💡 想法驱动工作流' : ''}
-           </span>
+          <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 px-3 py-1 rounded-full">
+            {workflowMode === 'material' ? '🎬 素材驱动工作流' : workflowMode === 'idea' ? '💡 想法驱动工作流' : ''}
+          </span>
         </div>
 
         {/* 右侧：操作区 (与左侧 flex-1 对称以保证中部绝对居中) */}
         <div className="flex-1 flex items-center justify-end gap-2">
-          {/* 宽屏态：素材篮子 (复用 Button 组件) */}
-          <div className="hidden lg:flex">
-            <Button variant="secondary" size="sm" onClick={onToggleBasket} className="gap-2">
-              <ShoppingBasket size={16} />
-              <span>素材篮子</span>
-              {selectedBasket.length > 0 && (
-                <span className="bg-indigo-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-md shadow-inner">
-                  {selectedBasket.length}
-                </span>
-              )}
-            </Button>
-          </div>
 
           {/* 窄屏态：汉堡菜单唤起按钮 */}
           <div className="lg:hidden relative">
             <Button variant="secondary" size="sm" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="px-2">
               <Menu size={18} />
-              {selectedBasket.length > 0 && (
-                <span className="absolute -top-1 -right-1 bg-red-500 w-2.5 h-2.5 rounded-full border border-zinc-100 dark:border-zinc-900" />
-              )}
             </Button>
           </div>
         </div>
@@ -351,28 +287,6 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
             </div>
           </div>
 
-          <div className="h-px w-full bg-zinc-200 dark:bg-zinc-800/50" />
-
-          <Button
-            variant="secondary"
-            size="md"
-            fullWidth
-            onClick={() => {
-              onToggleBasket();
-              setIsMobileMenuOpen(false);
-            }}
-            className="justify-between"
-          >
-            <div className="flex items-center gap-2">
-              <ShoppingBasket size={18} />
-              <span>打开素材篮子</span>
-            </div>
-            {selectedBasket.length > 0 && (
-              <span className="bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-md shadow-inner">
-                {selectedBasket.length} 项
-              </span>
-            )}
-          </Button>
         </div>
       )}
 
@@ -402,90 +316,45 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
                 </AccordionSection>
               );
             }
-                if (nodeType === 'footage') {
-                  return (
-                    <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[60vh] overflow-y-auto pr-2 pb-4 pt-2">
-                        {/* 上传入口卡片 */}
-                        <div
-                          onClick={handleSelectFiles}
-                          className="relative aspect-video rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-900/50 border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all group"
-                        >
-                          <div className="absolute inset-0 flex flex-col items-center justify-center">
-                            <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
-                              <svg className="w-5 h-5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                            </div>
-                            <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400">上传新素材</span>
-                          </div>
+            if (nodeType === 'footage') {
+              return (
+                <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[60vh] overflow-y-auto pr-2 pb-4 pt-2">
+                    {/* 上传入口卡片 */}
+                    <div
+                      onClick={handleSelectFiles}
+                      className="relative aspect-video rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-900/50 border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all group"
+                    >
+                      <div className="absolute inset-0 flex flex-col items-center justify-center">
+                        <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                          <svg className="w-5 h-5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                         </div>
-
-                        {/* 聚光灯模式提示 & 清除按钮 */}
-                        {projectData?.project?.retrievedAssetIds && projectData.project.retrievedAssetIds.length > 0 && (
-                          <div className="col-span-full flex items-center justify-between bg-indigo-50/80 dark:bg-indigo-500/10 px-4 py-2.5 rounded-xl border border-indigo-100 dark:border-indigo-500/20 mb-2">
-                            <span className="text-xs text-indigo-700 dark:text-indigo-300 font-medium flex items-center gap-2">
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                              AI 已为您聚焦 {projectData.project.retrievedAssetIds.length} 个相关素材
-                            </span>
-                            <button
-                              onClick={() => {
-                                // [Arch] 乐观清除 UI 状态，恢复全景视野
-                                queryClient.setQueryData(['project', projectId], (old: any) => old ? { ...old, project: { ...old.project, retrievedAssetIds: [] } } : old);
-                              }}
-                              className="text-[10px] px-2.5 py-1.5 bg-white dark:bg-zinc-800 border border-indigo-200 dark:border-indigo-500/30 rounded shadow-sm hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-indigo-600 dark:text-indigo-300"
-                            >
-                              清除聚焦
-                            </button>
-                          </div>
-                        )}
-
-                        {/* 全局素材库 */}
-                        {allAssets.map((asset: any) => {
-                          const selected = isClipSelected(asset.id);
-                          // 聚光灯核心逻辑：如果有搜索结果，且当前资产不在结果中，且未被精选，则半透明退居幕后
-                          const retrievedIds = projectData?.project?.retrievedAssetIds || [];
-                          const isDimmed = retrievedIds.length > 0 && !retrievedIds.includes(asset.id) && !selected;
-                          
-                          const formatTime = (secs: number) => {
-                            if (!secs) return 'N/A';
-                            const m = Math.floor(secs / 60);
-                            const s = Math.floor(secs % 60);
-                            return `${m}:${s.toString().padStart(2, '0')}`;
-                          };
-                          return (
-                            <div
-                              key={asset.id}
-                              onClick={() => toggleClipSelection(asset.id)}
-                              className={`relative aspect-video rounded-xl overflow-hidden bg-white dark:bg-zinc-900 border cursor-pointer hover:ring-1 hover:ring-indigo-300 dark:hover:ring-indigo-700 ${selected ? 'border-indigo-500 ring-1 ring-indigo-500 shadow-md' : 'border-zinc-200 dark:border-zinc-800 shadow-sm'} ${isDimmed ? 'opacity-30 grayscale-[50%] scale-[0.98]' : 'opacity-100 scale-100'} transition-all duration-500 group`}
-                            >
-                              <div className="absolute inset-0">
-                                {selected && (
-                                  <div className="absolute top-2 right-2 z-20 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-md flex items-center gap-1">
-                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                    已精选
-                                  </div>
-                                )}
-                                {asset.thumbnailUrl ? (
-                                  <img src={asset.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover bg-zinc-100 dark:bg-zinc-800" />
-                                ) : (
-                                  <div className="w-full h-full flex items-center justify-center bg-zinc-100 dark:bg-zinc-800 text-zinc-400 text-2xl">🎬</div>
-                                )}
-                                {/* 底部黑色渐变展示文件名 (常驻) */}
-                                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-2 pt-8 flex items-end justify-between gap-2 z-10">
-                                  <div className="text-[10px] font-medium text-zinc-100 truncate flex-1" title={asset.filename}>
-                                    {asset.filename || '未知素材'}
-                                  </div>
-                                  <div className="bg-black/60 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono shadow-sm shrink-0">
-                                    {formatTime(asset.duration)}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
+                        <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400">上传新素材</span>
                       </div>
-                    </AccordionSection>
-                  );
-                }
+                    </div>
+
+                    {/* 聚光灯模式提示 & 清除按钮 */}
+                    {projectData?.project?.retrievedAssetIds && projectData.project.retrievedAssetIds.length > 0 && (
+                      <div className="col-span-full flex items-center justify-between bg-indigo-50/80 dark:bg-indigo-500/10 px-4 py-2.5 rounded-xl border border-indigo-100 dark:border-indigo-500/20 mb-2">
+                        <span className="text-xs text-indigo-700 dark:text-indigo-300 font-medium flex items-center gap-2">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                          AI 已为您聚焦 {projectData.project.retrievedAssetIds.length} 个相关素材
+                        </span>
+                        <button
+                          onClick={() => {
+                            // [Arch] 乐观清除 UI 状态，恢复全景视野
+                            queryClient.setQueryData(['project', projectId], (old: any) => old ? { ...old, project: { ...old.project, retrievedAssetIds: [] } } : old);
+                          }}
+                          className="text-[10px] px-2.5 py-1.5 bg-white dark:bg-zinc-800 border border-indigo-200 dark:border-indigo-500/30 rounded shadow-sm hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-indigo-600 dark:text-indigo-300"
+                        >
+                          清除聚焦
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </AccordionSection>
+              );
+            }
             if (nodeType === 'plan') {
               return (
                 <AccordionSection key="plan" id="plan" title="📋 剪辑方案" activeId={activePanelId} setActiveId={setActivePanelId}>

@@ -10,18 +10,17 @@ export default function ProjectWorkspace() {
   const { projectId } = useParams();
   const setRetrievedClips = useCanvasStore((s) => s.setRetrievedClips);
   const setEditingPlans = useCanvasStore((s) => s.setEditingPlans);
-  const setSelectedBasket = useCanvasStore((s) => (s as any).setSelectedBasket);
 
-          const { data, isLoading, error } = useQuery({
-            queryKey: ['project', projectId],
-            queryFn: async () => {
-              const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
-              if (!res.ok) throw new Error('Failed to load project details');
-              return res.json();
-            },
-            staleTime: 1000 * 60,
-            enabled: !!projectId,
-          });
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: async () => {
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
+      if (!res.ok) throw new Error('Failed to load project details');
+      return res.json();
+    },
+    staleTime: 1000 * 60,
+    enabled: !!projectId,
+  });
 
   // [Arch] 军规防线：Hook 必须位于任何 conditional return (如 isLoading 拦截) 之前！
   // 读链路水合：直接从项目实体中提取独立的业务资产，彻底抛弃脆弱的历史消息回溯
@@ -29,9 +28,8 @@ export default function ProjectWorkspace() {
     if (projectId && data?.project) {
       setRetrievedClips(projectId, (data.project as any).retrievedClips || []);
       setEditingPlans(projectId, (data.project as any).editingPlans || []);
-      setSelectedBasket(projectId, (data.project as any).selectedBasket || []);
     }
-  }, [projectId, data?.project, setRetrievedClips, setEditingPlans, setSelectedBasket]);
+  }, [projectId, data?.project, setRetrievedClips, setEditingPlans]);
 
   if (isLoading) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 transition-colors"><Loader2 className="w-8 h-8 animate-spin" /></div>;
   if (error || !data?.project) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-red-500 font-bold transition-colors">项目不存在</div>;

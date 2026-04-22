@@ -1014,3 +1014,17 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
 - **DON'T DO (乐观更新时间差陷阱)**: 严禁在设计自动流转 UI 时只盯着 Server State。流式响应期间，后端数据尚未落盘（Server State 是一潭死水），必须将 Zustand 里的 Optimistic State 纳入 `useEffect` 依赖数组，否则监听雷达在 AI 打字期间会变成瞎子。
 - **DON'T DO (裸奔的 useQuery)**: 在 React Query v5 架构下，即便路由层 Loader 已经预取了数据，局部组件内也绝对禁止“无脑白嫖” `queryKey`。必须显式声明兜底 `queryFn` 并配置 `staleTime`，否则一旦遇到意外的缓存重刷，应用将直接白屏。
+
+## 📝 [阶段跃迁] 素材篮子全链路废弃与导航胶囊状态机重构 (Feature Deprecation & UI State Machine)
+
+**1. 架构与状态流转 (Architecture State):**
+- **素材篮子 (Selected Basket) 废弃**: 彻底从系统中移除了“素材篮子”功能。从底层数据库 Schema (`selectedBasket` 字段移除)、后端 AI 工具 (`manage_footage_basket` 移除)、System Prompt、前端状态管理 (`useCanvasStore`) 到 UI 组件 (`BasketSidebar` 物理删除) 进行了全链路的清理。工作流进一步极简收敛。
+- **导航胶囊 (Pills) 状态机**: 左侧边栏 `ChatPanel` 的阶段指示器抛弃了依赖 `workflowMode` 数组顺序的脆弱写法。现已引入严格的数据验证状态机：`dynamicActiveId` 会自动按链路（大纲 -> 素材 -> 剪辑）寻找第一个未完成的节点并将其设为 Active，若全部完成则全息熄灭。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (幽灵字段污染)**: 严禁在删除某项业务功能时，仅仅在 UI 层面将其隐藏。必须像本次手术一样，一路追查到 Drizzle Schema 并将废弃字段连根拔起。同时要注意使用 `grep` 排查并清理所有的残留 `GET`/`PATCH` 路由读写逻辑，否则会引发严重的运行时报错。
+
+### 🚨 状态管理铁律：Zustand 选择器与无限重渲染陷阱 (Infinite Loop Prevention)
+- **案发现场**: 废弃 `selectedBasket` 字段后，前端残留了 `const optBasket = useCanvasStore(s => s.projects[id]?.selectedBasket || [])`，并被挂载到了 `useEffect` 的依赖项中。
+- **致命机制 (引用漂移)**: 当读取不到状态时，`|| []` 会在组件的**每一次 Render 阶段**在内存中创建一个**全新的空数组引用**。`useEffect` 察觉到依赖项内存地址变化，于是不断触发后续的状态流转（`setActivePanelId`），导致组件陷入“渲染 -> 依赖变化 -> Effect 执行 -> 触发渲染”的核爆级死循环，瞬间撑爆 React 调用栈。
+- **规范防线**: **绝对禁止**在具有对象/数组返回值的 Selector 中直接使用内联的 `|| []` 或 `|| {}` 并将其作为 Effect 依赖。必须在 Store 内部（如 `initialProjectState`）保证初始数据的绝对完整性，从根源切断引用漂移。

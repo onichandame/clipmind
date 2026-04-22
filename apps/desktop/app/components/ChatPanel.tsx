@@ -146,45 +146,54 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   const isLoading = status === "streaming" || status === "submitted";
 
-  return (
-    <div className="flex flex-col h-full bg-transparent">
-      {/* Header */}
-      <div className="flex flex-col px-5 pt-4 pb-3 border-b border-zinc-200 dark:border-zinc-800/60 backdrop-blur-sm z-10 transition-colors">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex flex-col">
-            <a href="/" className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 hover:text-indigo-500 transition-colors font-bold mb-0.5">← 工作台</a>
-            <div className="text-[13px] font-bold text-zinc-900 dark:text-zinc-100 transition-colors tracking-tight">
-              <EditableProjectTitle projectId={projectId} initialTitle={projectTitle || "未命名项目"} />
-            </div>
-          </div>
-        </div>
+          // --- Pills 状态机 (SSOT) ---
+          const hasOutline = !!outlineContent;
+          const hasFootage = (currentProject?.retrievedClips?.length || 0) > 0;
+          const hasPlan = (currentProject?.editingPlans?.length || 0) > 0;
 
-            {/* Step Pills */}
-            <div className="flex gap-1.5 mt-2">
-              {(projectData?.project?.workflowMode === 'idea' ? [
-                { id: 'outline', num: '①', text: '热点', isActive: activeMode === 'outline', isDone: !!currentProject?.outlineContent },
-                { id: 'footage', num: '②', text: '素材', isActive: activeMode === 'footage', isDone: ((currentProject?.retrievedClips?.length || 0) > 0) || ((currentProject?.selectedBasket?.length || 0) > 0) },
-                { id: 'plan', num: '③', text: '剪辑', isActive: activeMode === 'plan', isDone: (currentProject?.editingPlans?.length || 0) > 0 }
-              ] : [
-                { id: 'footage', num: '①', text: '素材', isActive: activeMode === 'footage', isDone: ((currentProject?.retrievedClips?.length || 0) > 0) || ((currentProject?.selectedBasket?.length || 0) > 0) },
-                { id: 'outline', num: '②', text: '热点', isActive: activeMode === 'outline', isDone: !!currentProject?.outlineContent },
-                { id: 'plan', num: '③', text: '剪辑', isActive: activeMode === 'plan', isDone: (currentProject?.editingPlans?.length || 0) > 0 }
-              ]).map(step => (
-                <div
-                  key={step.id}
-                  className={`px-2.5 py-1 flex items-center gap-1 rounded-full text-[10px] font-bold transition-all ${step.isActive
-                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20"
-                    : step.isDone
-                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-                      : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-transparent"
-                  }`}
-                >
-                  <span>{step.isDone && !step.isActive ? '✓' : step.num}</span>
-                  <span>{step.text}</span>
+          // 按依赖链判断活动项：全部未完成1 active，完成1就2 active... 依次类推
+          let dynamicActiveId: string | null = null;
+          if (!hasOutline) dynamicActiveId = 'outline';
+          else if (!hasFootage) dynamicActiveId = 'footage';
+          else if (!hasPlan) dynamicActiveId = 'plan';
+
+          const pillsData = [
+            { id: 'outline', num: '①', text: '热点', isActive: dynamicActiveId === 'outline', isDone: hasOutline },
+            { id: 'footage', num: '②', text: '素材', isActive: dynamicActiveId === 'footage', isDone: hasFootage },
+            { id: 'plan',    num: '③', text: '剪辑', isActive: dynamicActiveId === 'plan',    isDone: hasPlan }
+          ];
+
+          return (
+            <div className="flex flex-col h-full bg-transparent">
+              {/* Header (已隐藏左侧分割线) */}
+              <div className="flex flex-col px-5 pt-4 pb-3 backdrop-blur-sm z-10 transition-colors">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex flex-col">
+                <a href="/" className="text-[10px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500 hover:text-indigo-500 transition-colors font-bold mb-0.5">← 工作台</a>
+                <div className="text-[13px] font-bold text-zinc-900 dark:text-zinc-100 transition-colors tracking-tight">
+                  <EditableProjectTitle projectId={projectId} initialTitle={projectTitle || "未命名项目"} />
                 </div>
-              ))}
+              </div>
             </div>
-      </div>
+
+              {/* Step Pills */}
+              <div className="flex gap-1.5 mt-2">
+                {pillsData.map(step => (
+                  <div
+                    key={step.id}
+                    className={`px-2.5 py-1 flex items-center gap-1 rounded-full text-[10px] font-bold transition-all ${step.isActive
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-500/20"
+                      : step.isDone
+                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                        : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-transparent"
+                    }`}
+                  >
+                    <span>{step.isDone && !step.isActive ? '✓' : step.num}</span>
+                    <span>{step.text}</span>
+                  </div>
+                ))}
+              </div>
+          </div>
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
