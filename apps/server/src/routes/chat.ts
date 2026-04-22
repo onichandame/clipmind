@@ -43,13 +43,29 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话或大纲策划阶段滥用此工具。\n\n`;
   dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
 
-  // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
-  if ((currProject.retrievedAssetIds as string[])?.length > 0) {
-    dynamicSystemPrompt += `\n- **Retrieved Assets (Spotlight)**: AI has focused on these assets: [${(currProject.retrievedAssetIds as string[]).join(', ')}].\n`;
-  }
-  if ((currProject.selectedAssetIds as string[])?.length > 0) {
-    dynamicSystemPrompt += `\n- **Selected Assets (User's Pick)**: The user has hand-picked these assets for the final edit: [${(currProject.selectedAssetIds as string[]).join(', ')}]. You MUST prioritize these when generating editing plans.\n`;
-  }
+                // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
+                const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
+                const selectedIds = (currProject.selectedAssetIds as string[]) || [];
+                const allInvolvedIds = Array.from(new Set([...retrievedIds, ...selectedIds]));
+
+                if (allInvolvedIds.length > 0) {
+                  // [Arch] 解决大模型“语义盲区”：拿 UUID 去 assets 表换取真实的文件名
+                  const involvedAssets = await db.select({
+                    id: assets.id,
+                    filename: assets.filename
+                  }).from(assets).where(inArray(assets.id, allInvolvedIds));
+
+                  if (retrievedIds.length > 0) {
+                    const retrievedNames = involvedAssets.filter(a => retrievedIds.includes(a.id)).map(a => `【${a.filename}】`);
+                    dynamicSystemPrompt += `\n- **Retrieved Assets (Spotlight)**: AI has focused on these assets: ${retrievedNames.join(', ')}.\n`;
+                  }
+
+                  if (selectedIds.length > 0) {
+                    const selectedNames = involvedAssets.filter(a => selectedIds.includes(a.id)).map(a => `【${a.filename}】(ID: ${a.id})`);
+                    dynamicSystemPrompt += `\n- **Selected Assets (User's Pick)**: The user has hand-picked these assets for the final edit: ${selectedNames.join(', ')}.\n`;
+                    dynamicSystemPrompt += `> [系统强烈提示]：你必须明确知道用户已经选好了上述具体文件。如果用户问“我选了什么”或“你看到了吗”，你必须像人类助理一样准确报出这些【文件名】！\n`;
+                  }
+                }
 
   if (currentOutline) {
     dynamicSystemPrompt += `\n\n## Current Project State\n\n`;
