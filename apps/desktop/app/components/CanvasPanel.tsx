@@ -118,6 +118,30 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     optClips.length, optPlans.length
   ]);
 
+  // [Arch] 初始化：根据 workflowMode 和步骤完成状态，自动展开第一个未完成步骤的 panel
+  useEffect(() => {
+    if (!workflowMode || activePanelId !== null) return;
+
+    // 双源检测步骤完成状态（React Query 为主，Zustand 为备，防止异步同步延迟导致误判）
+    const hasOutline = !!(outline?.contentMd || outlineContent);
+    const hasFootage = (projectData?.project?.selectedAssetIds?.length || 0) > 0;
+    const hasPlan = (projectData?.project?.editingPlans?.length || 0) > 0 || optPlans.length > 0;
+
+    const stepOrder = workflowMode === 'material'
+      ? ['footage', 'outline', 'plan']   // 素材驱动：素材→热点→剪辑
+      : ['outline', 'footage', 'plan'];  // 热点驱动：热点→素材→剪辑
+
+    // 按依赖链找到第一个未完成步骤；全部完成则默认展开最后一步（剪辑方案）
+    const activeStep = stepOrder.find(step => {
+      if (step === 'outline') return !hasOutline;
+      if (step === 'footage') return !hasFootage;
+      if (step === 'plan') return !hasPlan;
+      return false;
+    }) || stepOrder[stepOrder.length - 1];
+
+    setActivePanelId(activeStep);
+  }, [workflowMode, activePanelId, outline?.contentMd, outlineContent, projectData?.project?.selectedAssetIds, projectData?.project?.editingPlans, optPlans.length, setActivePanelId]);
+
   const updateModeMutation = useMutation({
     mutationFn: async (mode: string) => {
       const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
