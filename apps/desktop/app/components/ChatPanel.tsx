@@ -146,22 +146,24 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   const isLoading = status === "streaming" || status === "submitted";
 
-          // --- Pills 状态机 (SSOT) ---
-          const hasOutline = !!outlineContent;
-          const hasFootage = (currentProject?.retrievedClips?.length || 0) > 0;
-          const hasPlan = (currentProject?.editingPlans?.length || 0) > 0;
+              // --- Pills 状态机 (SSOT) ---
+              const hasOutline = !!outlineContent;
+              // [Arch] 废弃脆弱的 Zustand 快照，强制使用 React Query 缓存作为读链路真理源
+              // [Arch] 素材阶段完成的绝对真理：用户或 AI 是否已执行了"精挑" (selectedAssetIds)
+              const hasFootage = (projectData?.project?.selectedAssetIds?.length || 0) > 0;
+              const hasPlan = (projectData?.project?.editingPlans?.length || 0) > 0;
 
-          // 按依赖链判断活动项：全部未完成1 active，完成1就2 active... 依次类推
-          let dynamicActiveId: string | null = null;
-          if (!hasOutline) dynamicActiveId = 'outline';
-          else if (!hasFootage) dynamicActiveId = 'footage';
-          else if (!hasPlan) dynamicActiveId = 'plan';
+              // 按依赖链判断活动项：全部未完成1 active，完成1就2 active... 依次类推
+              let dynamicActiveId: string | null = null;
+              if (!hasOutline) dynamicActiveId = 'outline';
+              else if (!hasFootage) dynamicActiveId = 'footage';
+              else if (!hasPlan) dynamicActiveId = 'plan';
 
-          const pillsData = [
-            { id: 'outline', num: '①', text: '热点', isActive: dynamicActiveId === 'outline', isDone: hasOutline },
-            { id: 'footage', num: '②', text: '素材', isActive: dynamicActiveId === 'footage', isDone: hasFootage },
-            { id: 'plan',    num: '③', text: '剪辑', isActive: dynamicActiveId === 'plan',    isDone: hasPlan }
-          ];
+              const pillsData = [
+                { id: 'outline', num: '①', text: '热点', isActive: dynamicActiveId === 'outline', isDone: hasOutline },
+                { id: 'footage', num: '②', text: '素材', isActive: dynamicActiveId === 'footage', isDone: hasFootage },
+                { id: 'plan',    num: '③', text: '剪辑', isActive: dynamicActiveId === 'plan',    isDone: hasPlan }
+              ];
 
           return (
             <div className="flex flex-col h-full bg-transparent">

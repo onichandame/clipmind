@@ -3,7 +3,7 @@ import { env } from '../env';
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
-import { Menu, ShoppingBasket, ChevronDown, ChevronRight } from "lucide-react";
+import { Menu, ShoppingBasket, ChevronDown, ChevronRight, Film, CheckCircle2, AlertCircle, Activity, Clock } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "./Button";
@@ -316,45 +316,144 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
                 </AccordionSection>
               );
             }
-            if (nodeType === 'footage') {
-              return (
-                <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[60vh] overflow-y-auto pr-2 pb-4 pt-2">
-                    {/* 上传入口卡片 */}
-                    <div
-                      onClick={handleSelectFiles}
-                      className="relative aspect-video rounded-xl overflow-hidden bg-zinc-50 dark:bg-zinc-900/50 border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all group"
-                    >
-                      <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <div className="w-10 h-10 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
-                          <svg className="w-5 h-5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                        </div>
-                        <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400">上传新素材</span>
-                      </div>
-                    </div>
+                if (nodeType === 'footage') {
+                  const focusedIds = projectData?.project?.retrievedAssetIds || [];
+                  const selectedIds = projectData?.project?.selectedAssetIds || [];
+                  const isFocusing = focusedIds.length > 0;
 
-                    {/* 聚光灯模式提示 & 清除按钮 */}
-                    {projectData?.project?.retrievedAssetIds && projectData.project.retrievedAssetIds.length > 0 && (
-                      <div className="col-span-full flex items-center justify-between bg-indigo-50/80 dark:bg-indigo-500/10 px-4 py-2.5 rounded-xl border border-indigo-100 dark:border-indigo-500/20 mb-2">
-                        <span className="text-xs text-indigo-700 dark:text-indigo-300 font-medium flex items-center gap-2">
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                          AI 已为您聚焦 {projectData.project.retrievedAssetIds.length} 个相关素材
-                        </span>
-                        <button
-                          onClick={() => {
-                            // [Arch] 乐观清除 UI 状态，恢复全景视野
-                            queryClient.setQueryData(['project', projectId], (old: any) => old ? { ...old, project: { ...old.project, retrievedAssetIds: [] } } : old);
-                          }}
-                          className="text-[10px] px-2.5 py-1.5 bg-white dark:bg-zinc-800 border border-indigo-200 dark:border-indigo-500/30 rounded shadow-sm hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-indigo-600 dark:text-indigo-300"
-                        >
-                          清除聚焦
-                        </button>
+                  // [Arch] 精挑素材 Toggle 逻辑 (乐观更新)
+                  const handleToggleSelection = async (assetId: string) => {
+                    const currentSelected = projectData?.project?.selectedAssetIds || [];
+                    const isSelected = currentSelected.includes(assetId);
+                    const nextSelected = isSelected 
+                      ? currentSelected.filter((id: string) => id !== assetId)
+                      : [...currentSelected, assetId];
+
+                    // 乐观更新缓存
+                    queryClient.setQueryData(['project', projectId], (old: any) => 
+                      old ? { ...old, project: { ...old.project, selectedAssetIds: nextSelected } } : old
+                    );
+
+                    try {
+                      await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ selectedAssetIds: nextSelected })
+                      });
+                    } catch (e) {
+                      console.error("同步精挑状态失败:", e);
+                    }
+                  };
+
+                  return (
+                    <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
+                      <div className="flex flex-col gap-4 max-h-[65vh] overflow-y-auto pr-2 pb-4 pt-1">
+                        
+                        {/* 1. 聚光灯模式提示条 (彻底提炼出网格，置于顶部) */}
+                        {isFocusing && (
+                          <div className="flex items-center justify-between bg-indigo-50/80 dark:bg-indigo-500/10 px-4 py-2.5 rounded-xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm transition-all duration-300">
+                            <span className="text-xs text-indigo-700 dark:text-indigo-300 font-medium flex items-center gap-2">
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                              AI 已为您聚焦 {focusedIds.length} 个相关素材
+                            </span>
+                            <button
+                              onClick={() => queryClient.setQueryData(['project', projectId], (old: any) => old ? { ...old, project: { ...old.project, retrievedAssetIds: [] } } : old)}
+                              className="text-[10px] px-2.5 py-1.5 bg-white dark:bg-zinc-800 border border-indigo-200 dark:border-indigo-500/30 rounded shadow-sm hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-indigo-600 dark:text-indigo-300"
+                            >
+                              显示全量
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                          
+                          {/* 2. 上传入口卡片 (高度对齐策略：设置外层与普通卡片等高的边框包裹结构，内层绝对定位居中) */}
+                          <div
+                            onClick={handleSelectFiles}
+                            className="group relative rounded-xl border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all bg-zinc-50 dark:bg-zinc-900/50 order-first overflow-hidden"
+                          >
+                            {/* 强行撑开与普通卡片相同的高度 (aspect-video + 底部p-3文本区高度约36px) */}
+                            <div className="aspect-video w-full" />
+                            <div className="h-[36px] w-full border-t border-transparent" />
+                            
+                            <div className="absolute inset-0 flex flex-col items-center justify-center">
+                              <div className="w-9 h-9 rounded-full bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+                                <svg className="w-4 h-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                              </div>
+                              <span className="text-[10px] font-medium text-zinc-600 dark:text-zinc-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400">上传素材</span>
+                            </div>
+                          </div>
+
+                          {/* 3. 资产卡片渲染列表 (全量展示 + 逻辑置灰 + 精挑交互) */}
+                          {allAssets.map((asset: any) => {
+                            const isFocused = !isFocusing || focusedIds.includes(asset.id);
+                            const isSelected = selectedIds.includes(asset.id);
+
+                            return (
+                              <div 
+                                key={asset.id}
+                                onClick={() => handleToggleSelection(asset.id)}
+                                className={`group cursor-pointer bg-white dark:bg-zinc-900 border rounded-xl overflow-hidden transition-all duration-300 shadow-sm dark:shadow-none relative
+                                  ${isSelected ? 'border-indigo-500 ring-2 ring-indigo-500/20 z-10' : isFocused ? 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700' : 'border-zinc-100 dark:border-zinc-800/50 grayscale opacity-40 hover:opacity-100 hover:grayscale-0'}
+                                `}
+                              >
+                                <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden transition-colors">
+                                  {asset.thumbnailUrl ? (
+                                    <img 
+                                      src={asset.thumbnailUrl} 
+                                      alt={asset.filename} 
+                                      className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                                      onError={(e) => {
+                                        e.currentTarget.style.display = 'none';
+                                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                                      }}
+                                    />
+                                  ) : (
+                                    <Film className="w-7 h-7 text-zinc-400 dark:text-zinc-600" />
+                                  )}
+                                  
+
+                                  <div className="absolute top-2 right-2 shadow-sm drop-shadow-md z-10">
+                                    {asset.status === 'ready' ? (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-emerald-600/95 backdrop-blur-sm text-white border-0 shadow-md">
+                                        <CheckCircle2 className="w-2.5 h-2.5" /> 已就绪
+                                      </span>
+                                    ) : asset.status === 'error' ? (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-red-600/95 backdrop-blur-sm text-white border-0 shadow-md">
+                                        <AlertCircle className="w-2.5 h-2.5" /> 失败
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-indigo-600/95 backdrop-blur-sm text-white border-0 shadow-md">
+                                        <Activity className="w-2.5 h-2.5 animate-pulse" /> 处理中
+                                      </span>
+                                    )}
+                                  </div>
+                                  
+                                  <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-md text-white text-[9px] font-medium flex items-center gap-1 z-10">
+                                    <Clock className="w-2.5 h-2.5" />
+                                    {asset.duration ? `${Math.floor(asset.duration / 60).toString().padStart(2, '0')}:${Math.floor(asset.duration % 60).toString().padStart(2, '0')}` : '00:00'}
+                                  </div>
+
+                                  {isSelected && (
+                                    <div className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded-md bg-indigo-500 text-white text-[9px] font-bold flex items-center gap-1 z-20 shadow-lg border border-indigo-400/50 animate-in zoom-in-50">
+                                      <CheckCircle2 className="w-2.5 h-2.5" /> 已精选
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                <div className="p-2.5 bg-white dark:bg-zinc-900 border-t border-zinc-100 dark:border-zinc-800/50">
+                                  <div className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate" title={asset.filename}>
+                                    {asset.filename}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                </AccordionSection>
-              );
-            }
+                    </AccordionSection>
+                  );
+                }
             if (nodeType === 'plan') {
               return (
                 <AccordionSection key="plan" id="plan" title="📋 剪辑方案" activeId={activePanelId} setActiveId={setActivePanelId}>
