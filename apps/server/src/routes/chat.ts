@@ -29,8 +29,16 @@ app.post("/", async (c) => {
 
   dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
 
-  if (currentOutline) {
-    dynamicSystemPrompt += `\n\n## Current Project State\n\n`;
+      // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
+      dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
+      dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
+      dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`generate_outline\`, \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
+      dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`, \`search_clips\`, \`manage_footage_basket\`。若涉及素材检索，禁止同时修改大纲。\n`;
+      dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n\n`;
+      dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
+
+      if (currentOutline) {
+        dynamicSystemPrompt += `\n\n## Current Project State\n\n`;
     dynamicSystemPrompt += `The user has an existing outline on the canvas. `;
     if (isDirty) {
       dynamicSystemPrompt += `**CRITICAL: The user has manually edited this outline since you last saw it.** You MUST base any future modifications on this exact current content, not your previous memory of it.\n\n`;
