@@ -29,12 +29,12 @@ app.post("/", async (c) => {
 
   dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
 
-      // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
-      dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
-      dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
-      dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`generate_outline\`, \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
-      dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`, \`search_clips\`, \`manage_footage_basket\`。若涉及素材检索，禁止同时修改大纲。\n`;
-      dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n\n`;
+          // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
+          dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
+          dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
+          dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`generate_outline\`, \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
+          dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`, \`search_clips\`。若涉及素材检索，禁止同时修改大纲。\n`;
+          dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n\n`;
       dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
 
       if (currentOutline) {
@@ -52,20 +52,10 @@ app.post("/", async (c) => {
   const model = createAIModel();
 
   // [Arch] 读写分离重构 (写链路)：抛弃前端传入的伪造历史，以数据库中的 CoreMessage 为单一真理源
-  const existingProject = await db.select({
-    uiMessages: projects.uiMessages,
-    selectedBasket: projects.selectedBasket
-  }).from(projects).where(eq(projects.id, projectId)).limit(1);
-  const rawHistory: any[] = (existingProject[0]?.uiMessages as any[]) || [];
-  const currentBasket: any[] = (existingProject[0]?.selectedBasket as any[]) || [];
-
-  if (currentBasket.length > 0) {
-    dynamicSystemPrompt += `\n\n你是 ClipMind (CM)。当前项目的【精选素材篮子】包含以下确切片段：\n`;
-    currentBasket.forEach(clip => {
-      dynamicSystemPrompt += `- [ID: ${clip.assetId}] ${clip.startTime}-${clip.endTime}ms: ${clip.reason || '用户精选'}\n`;
-    });
-    dynamicSystemPrompt += `【约束】：仅基于上述篮子内的素材进行策划。若需新素材，请提示用户先执行“检索”或“加入篮子”。\n\n`;
-  }
+      const existingProject = await db.select({
+        uiMessages: projects.uiMessages
+      }).from(projects).where(eq(projects.id, projectId)).limit(1);
+      const rawHistory: any[] = (existingProject[0]?.uiMessages as any[]) || [];
 
   // 清洗防线：确保从数据库读出的历史记录严格符合 CoreMessage，防止被早期脏数据污染
   const coreHistory = rawHistory.map((msg: any) => {
@@ -117,42 +107,8 @@ app.post("/", async (c) => {
       return {};
     },
 
-    tools: {
-      manage_footage_basket: tool({
-        description: '筛选、保留、剔除或替换候选素材至篮子。当用户要求挑选素材或管理篮子时调用。',
-        inputSchema: z.object({
-          action: z.enum(['add', 'remove', 'replace', 'clear']),
-          targetClips: z.array(z.object({
-            assetId: z.string(),
-            startTime: z.number(),
-            endTime: z.number(),
-            reason: z.string()
-          })).optional(),
-        }),
-        execute: async ({ action, targetClips }) => {
-          const project = await db.select({ selectedBasket: projects.selectedBasket }).from(projects).where(eq(projects.id, projectId)).limit(1);
-          let currentBasket = (project[0]?.selectedBasket as any[]) || [];
-
-          if (action === 'clear') {
-            currentBasket = [];
-          } else if (action === 'replace' && targetClips) {
-            currentBasket = targetClips;
-          } else if (action === 'add' && targetClips) {
-            currentBasket = [...currentBasket, ...targetClips];
-          } else if (action === 'remove' && targetClips) {
-            currentBasket = currentBasket.filter(c =>
-              !targetClips.some(tc => tc.assetId === c.assetId && tc.startTime === c.startTime && tc.endTime === c.endTime)
-            );
-          }
-
-          await db.update(projects)
-            .set({ selectedBasket: currentBasket, updatedAt: new Date() })
-            .where(eq(projects.id, projectId));
-
-          return { success: true, action, count: currentBasket.length };
-        }
-      }),
-      generateEditingPlan: tool({
+        tools: {
+          generateEditingPlan: tool({
         description: "基于素材检索结果，生成结构化的剪辑方案（Editing Plan）并持久化到数据库。禁止在对话中输出大段方案，必须调用此工具。",
         inputSchema: z.object({
           title: z.string().describe("剪辑方案的标题"),

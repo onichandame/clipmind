@@ -44,7 +44,6 @@ export const projects = mysqlTable('projects', {
   uiMessages: json('ui_messages').default([]), // UI 消息历史（简化结构）
   retrievedClips: json('retrieved_clips').default([]), // [Arch] 独立持久化的素材检索结果，脱离聊天历史
   retrievedAssetIds: json('retrieved_asset_ids').default([]), // [Arch] 宏观检索聚光灯结果
-  selectedBasket: json('selected_basket').default([]), // [Arch] 精挑后的素材篮子
   editingPlans: json('editing_plans').default([]), // [Arch] 多套剪辑方案列表与素材映射
 });
 

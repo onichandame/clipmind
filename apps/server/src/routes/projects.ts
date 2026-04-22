@@ -248,12 +248,6 @@ app.patch('/:id', async (c) => {
     updatePayload.title = body.title.trim();
   }
 
-      if (body.selectedBasket !== undefined) {
-        if (!Array.isArray(body.selectedBasket)) {
-          return c.json({ error: 'selectedBasket must be an array' }, 400);
-        }
-        updatePayload.selectedBasket = body.selectedBasket;
-      }
 
       // [Arch] 允许更新工作流模式起点
       if (body.workflowMode !== undefined) {

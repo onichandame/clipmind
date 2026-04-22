@@ -134,6 +134,13 @@
       "when": 1776772480571,
       "tag": "0018_lucky_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "5",
+      "when": 1776828583667,
+      "tag": "0019_closed_vance_astro",
+      "breakpoints": true
     }
   ]
 }
