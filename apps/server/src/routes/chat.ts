@@ -42,6 +42,14 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 【频道 B: 素材 (增补)】: 包含 \`manage_footage_basket\`，用于将素材移入或移出精选篮子。当你发现用户对某个素材表示满意时，应主动将其加入篮子。\n`;
   dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话或大纲策划阶段滥用此工具。\n\n`;
   dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
+  // 【剪辑方案格式要求】注入
+  dynamicSystemPrompt += `\n\n**【剪辑方案格式要求】**\n`;
+  dynamicSystemPrompt += `1. 每个 clip 必须指定 clipType：\n`;
+  dynamicSystemPrompt += `   - footage：有对应素材的片段，必须填写 assetId（从精挑素材或 search_clips 结果中获取）\n`;
+  dynamicSystemPrompt += `   - broll：空镜/转场/无素材片段，assetId 留空\n`;
+  dynamicSystemPrompt += `2. description 字段必须具有直接指导价值：写明镜头意图、画面描述、剪辑手法，而不是笼统概述\n`;
+  dynamicSystemPrompt += `3. 禁止生成无 assetId 的 footage 类型 clip — 如果找不到对应素材，应标记为 broll\n`;
+  dynamicSystemPrompt += `4. text 字段写该片段的台词/旁白/文案内容\n\n`;
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -146,7 +154,9 @@ app.post("/", async (c) => {
             startTime: z.number().describe("切片起始时间（毫秒）"),
             endTime: z.number().describe("切片结束时间（毫秒）"),
             text: z.string().describe("切片台词内容"),
-            description: z.string().describe("编导对该切片的剪辑意图与画面描述")
+            description: z.string().describe("编导对该切片的剪辑意图与画面描述"),
+            assetId: z.string().optional().describe("关联的素材 asset ID，来自用户精挑素材或检索结果。footage 类型必填"),
+            clipType: z.enum(['footage', 'broll']).optional().describe("片段类型：footage=有素材片段，broll=空镜/转场/无素材片段")
           })).describe("选用的视频切片列表")
         }).strict(),
         execute: async (args) => {
