@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { projectOutlines, editingPlans, assets, projects } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
-import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage } from "ai";
+import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage, hasToolCall } from "ai";
 import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
 import { db } from "../db";
@@ -104,7 +104,7 @@ app.post("/", async (c) => {
 
   const safeMessages = [...coreHistory, ...userCoreMessages];
 
-  const MAX_STEPS = 10;
+  const MAX_STEPS = 20;
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
   const finalSystemPrompt = dynamicSystemPrompt + `\n\n【系统高优先级指令】：在执行完任何工具（Tool）后，你绝对不能静默结束对话。你必须在收到工具结果后，追加一段面向用户的自然语言（Text）说明，告知用户工具的执行结果或下一步建议！`;
@@ -116,13 +116,13 @@ app.post("/", async (c) => {
   const result = streamText({
     model, system: finalSystemPrompt, messages: safeMessages,
     maxRetries: 3,
-    stopWhen: stepCountIs(MAX_STEPS),
+    stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')],
 
     // 硬约束：利用 prepareStep 在执行流中动态拦截，防止 Agent 哑火
     prepareStep: async ({ stepNumber, messages }) => {
       // 场景判定：如果已经到了最后一步的边缘（stepNumber 从 0 开始计算）
       if (stepNumber === MAX_STEPS - 1) {
-        const systemMsg = messages.find(msg => msg.role = `system`) as SystemModelMessage
+        const systemMsg = messages.find(msg => msg.role === `system`) as SystemModelMessage
         systemMsg.content +=
           '\r\n【系统高优先级警告】：这是你本次响应的最后一步。当前所有工具已被禁用。你必须立刻根据上文的所有对话历史和已获取的工具结果，输出一段面向用户的最终纯文本总结。严禁直接终止对话。'
         return {
