@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../db';
-import { projects, basketItems, projectOutlines, editingPlans, assets } from '@clipmind/db/schema';
+import { projects, projectOutlines, editingPlans, assets } from '@clipmind/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
 import { ossClient } from '../utils/oss';
 
@@ -15,11 +15,8 @@ app.get('/', async (c) => {
         title: projects.title,
         createdAt: projects.createdAt,
         updatedAt: projects.updatedAt,
-        basketCount: sql<number>`count(${basketItems.id})`.mapWith(Number),
       })
       .from(projects)
-      .leftJoin(basketItems, eq(projects.id, basketItems.projectId))
-      .groupBy(projects.id)
       .orderBy(desc(projects.updatedAt));
 
     return c.json({ projects: data });
