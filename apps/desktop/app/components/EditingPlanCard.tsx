@@ -7,6 +7,8 @@ export interface EditingClip {
   endTime: string;
   text: string;
   description: string;
+  assetId?: string;
+  clipType?: 'footage' | 'broll';
   thumbnailUrl?: string;
   videoUrl?: string;
   fileName?: string;
@@ -21,7 +23,6 @@ export interface EditingPlan {
 
 export interface EditingPlanCardProps {
   plan: EditingPlan;
-  retrievedClips?: any[]; // [Arch] 引入关联的素材池用于溯源映射
   onPushToEditor?: () => void;
 }
 
@@ -34,7 +35,7 @@ const formatMs = (ms: number | string) => {
   return `${m}:${s}`;
 };
 
-export function EditingPlanCard({ plan, retrievedClips = [], onPushToEditor }: EditingPlanCardProps) {
+export function EditingPlanCard({ plan, onPushToEditor }: EditingPlanCardProps) {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   return (
@@ -59,47 +60,37 @@ export function EditingPlanCard({ plan, retrievedClips = [], onPushToEditor }: E
       {/* 时间轴列表 (Timeline / Clips) */}
       <div className="p-4 flex flex-col gap-4 max-h-[400px] overflow-y-auto">
         {plan.clips.map((clip, index) => {
-          // [Arch] 溯源映射：尝试从检索到的素材池中找到匹配的源片段（容错：大模型输出的内容可能是子集或变体）
-          const sourceClip = retrievedClips.find(rc =>
-            (rc.text && clip.text && rc.text.includes(clip.text)) ||
-            (rc.startTime <= Number(clip.startTime) && rc.endTime >= Number(clip.endTime))
-          ) || clip; // 回退使用原始 clip 数据
+          // Determine clip type: explicit broll, footage (has assetId), or legacy
+          const isBroll = clip.clipType === 'broll';
+          const isFootage = clip.clipType === 'footage' || (!clip.clipType && !!clip.assetId);
+          const isLegacy = !isBroll && !isFootage;
 
-          const thumbUrl = sourceClip.thumbnailUrl || clip.thumbnailUrl;
-
-          // [Arch] 修复驼峰陷阱：兼容数据库中的全小写 filename
-          const rawName = sourceClip.filename || sourceClip.fileName || clip.filename || clip.fileName;
-          // 兜底：如果完全没有名字但有图，说明匹配到了，给个默认名
-          const fName = rawName ? String(rawName).split('/').pop() : (thumbUrl ? '未命名素材.mp4' : null);
-
-          // 检查原片时间是否存在
-          const hasSourceTime = sourceClip.startTime !== undefined && sourceClip.endTime !== undefined;
+          const thumbUrl = clip.thumbnailUrl;
+          const fName = clip.fileName ? String(clip.fileName).split('/').pop() : null;
+          const hasSourceTime = clip.startTime !== undefined && clip.endTime !== undefined;
 
           return (
             <div key={index} className="flex gap-4 group">
-              {/* 左侧：缩略图 & 素材溯源 */}
-              <div className="flex-shrink-0 w-28 pt-1 flex flex-col gap-2">
-                {thumbUrl && (
-                  <div className="w-full aspect-video rounded bg-zinc-100 dark:bg-zinc-800 overflow-hidden relative group/thumb border border-zinc-200 dark:border-zinc-700/50 shadow-sm">
+              {/* 左侧：缩略图 / 空镜徽章 */}
+              <div className="flex-shrink-0 w-20 pt-1 flex flex-col gap-2">
+                {/* Footage: thumbnail */}
+                {isFootage && thumbUrl && (
+                  <div className="w-20 h-[45px] rounded bg-zinc-100 dark:bg-zinc-800 overflow-hidden relative group/thumb border border-zinc-200 dark:border-zinc-700/50 shadow-sm">
                     <img src={thumbUrl} alt="thumbnail" className="w-full h-full object-cover" />
                     {/* 透明悬浮下载按钮 */}
-                    {(sourceClip.videoUrl || clip.videoUrl) && (
+                    {clip.videoUrl && (
                       <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
                         <button
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             const a = document.createElement('a');
-                            // [Arch] 强制命中后端 JIT 签发的带 attachment 响应头的安全链接
-                            a.href = sourceClip.videoUrl || clip.videoUrl || '';
-                            // a.download 属性已彻底剥离，防 Warning
-                            // 移除 target="_blank"，彻底避开 Tauri Shell 插件的权限拦截区！
-                            // 依靠后端注入的 Content-Disposition 响应头，Webview 会原生、静默地接管下载
+                            a.href = clip.videoUrl || '';
                             document.body.appendChild(a);
                             a.click();
                             document.body.removeChild(a);
-                                    setToastMsg(`开始下载：${fName || '视频素材'}\n请前往系统「下载」目录查看`);
-                                    setTimeout(() => setToastMsg(null), 4000);
+                            setToastMsg(`开始下载：${fName || '视频素材'}\n请前往系统「下载」目录查看`);
+                            setTimeout(() => setToastMsg(null), 4000);
                           }}
                           className="p-2 rounded-full bg-white/20 hover:bg-white/40 text-white transition-colors"
                           title="下载该素材原片"
@@ -111,8 +102,15 @@ export function EditingPlanCard({ plan, retrievedClips = [], onPushToEditor }: E
                   </div>
                 )}
 
-                {/* 显式展示素材来源文件名与原片时间区域 */}
-                {fName && (
+                {/* B-roll: 空镜 badge */}
+                {isBroll && (
+                  <div className="w-20 h-[45px] rounded bg-slate-200 dark:bg-slate-800 flex items-center justify-center border border-slate-300 dark:border-slate-700/50 shadow-sm">
+                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 select-none">空镜</span>
+                  </div>
+                )}
+
+                {/* Footage: filename + source time */}
+                {isFootage && fName && (
                   <div className="flex flex-col gap-1 w-full mt-0.5">
                     <div
                       className="w-full truncate text-[10px] font-medium text-zinc-600 dark:text-zinc-300 bg-zinc-200/60 dark:bg-zinc-800 px-1.5 py-1 rounded border border-zinc-300/50 dark:border-zinc-700/80"
@@ -125,9 +123,19 @@ export function EditingPlanCard({ plan, retrievedClips = [], onPushToEditor }: E
                         className="w-full text-center text-[9px] font-mono text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-900/50 px-1 py-0.5 rounded border border-zinc-200 dark:border-zinc-800"
                         title="对应原素材视频中的时间切片"
                       >
-                        原片 {formatMs(sourceClip.startTime)}-{formatMs(sourceClip.endTime)}
+                        {formatMs(clip.startTime)}-{formatMs(clip.endTime)}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* B-roll: time range only */}
+                {isBroll && hasSourceTime && (
+                  <div
+                    className="w-full text-center text-[9px] font-mono text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-900/50 px-1 py-0.5 rounded border border-zinc-200 dark:border-zinc-800"
+                    title="空镜时间范围"
+                  >
+                    {formatMs(clip.startTime)}-{formatMs(clip.endTime)}
                   </div>
                 )}
               </div>
@@ -135,12 +143,45 @@ export function EditingPlanCard({ plan, retrievedClips = [], onPushToEditor }: E
               {/* 右侧：文本与动作描述 */}
               <div className="flex-1 flex flex-col gap-1.5 pb-4 border-l-2 border-zinc-100 dark:border-zinc-800 pl-4 relative">
                 <div className="absolute w-2.5 h-2.5 rounded-full bg-zinc-200 dark:bg-zinc-700 -left-[6px] top-1.5 group-hover:bg-indigo-500 transition-colors" />
-                <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 break-words mt-1">
-                  {clip.text}
-                </p>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 break-words leading-relaxed mt-1">
-                  {clip.description}
-                </p>
+                {/* Legacy: show text + description (original behavior) */}
+                {isLegacy && (
+                  <>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 break-words mt-1">
+                      {clip.text}
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 break-words leading-relaxed mt-1">
+                      {clip.description}
+                    </p>
+                  </>
+                )}
+                {/* Footage: time range + filename + text + description */}
+                {isFootage && (
+                  <>
+                    <div className="flex items-center gap-2 text-xs font-mono text-zinc-400 dark:text-zinc-500 mt-1">
+                      <Clock className="w-3 h-3" />
+                      <span>{formatMs(clip.startTime)} - {formatMs(clip.endTime)}</span>
+                      {fName && <span className="text-zinc-500 dark:text-zinc-400 truncate">· {fName}</span>}
+                    </div>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 break-words">
+                      {clip.text}
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 break-words leading-relaxed">
+                      {clip.description}
+                    </p>
+                  </>
+                )}
+                {/* B-roll: time range + description */}
+                {isBroll && (
+                  <>
+                    <div className="flex items-center gap-2 text-xs font-mono text-zinc-400 dark:text-zinc-500 mt-1">
+                      <Clock className="w-3 h-3" />
+                      <span>{formatMs(clip.startTime)} - {formatMs(clip.endTime)}</span>
+                    </div>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 break-words leading-relaxed">
+                      {clip.description}
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           )
