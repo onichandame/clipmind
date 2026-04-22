@@ -1028,3 +1028,12 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 - **案发现场**: 废弃 `selectedBasket` 字段后，前端残留了 `const optBasket = useCanvasStore(s => s.projects[id]?.selectedBasket || [])`，并被挂载到了 `useEffect` 的依赖项中。
 - **致命机制 (引用漂移)**: 当读取不到状态时，`|| []` 会在组件的**每一次 Render 阶段**在内存中创建一个**全新的空数组引用**。`useEffect` 察觉到依赖项内存地址变化，于是不断触发后续的状态流转（`setActivePanelId`），导致组件陷入“渲染 -> 依赖变化 -> Effect 执行 -> 触发渲染”的核爆级死循环，瞬间撑爆 React 调用栈。
 - **规范防线**: **绝对禁止**在具有对象/数组返回值的 Selector 中直接使用内联的 `|| []` 或 `|| {}` 并将其作为 Effect 依赖。必须在 Store 内部（如 `initialProjectState`）保证初始数据的绝对完整性，从根源切断引用漂移。
+
+## 📝 [阶段修复] 数据库 Schema 废弃与关联查询幽灵依赖 (Drizzle ORM Undefined Trap)
+
+**1. 架构与状态流转 (Architecture State):**
+- 彻底清理了 `projects.ts` 路由中残留的对 `basketItems` 的聚合查询，切断了废弃数据模型的幽灵依赖。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (Schema 删除不彻底)**: 严禁在删除数据库表（如 `basketItems`）时只修改 Schema 和前端代码。如果在列表接口的 `LEFT JOIN` 或聚合查询中遗漏了该实体，Drizzle ORM 会在运行时尝试读取 `undefined.id`，导致整个列表接口直接抛出 500 (`TypeError: Cannot read properties of undefined`)。
+- **防线铁律**: 移除任何数据表前，必须进行全局 `grep`，确保所有连表查询 (`leftJoin`, `innerJoin`) 和 SQL 聚合函数 (`sql<number>count(...)`) 中对其的引用已被连根拔起。
