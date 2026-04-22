@@ -44,6 +44,7 @@ export const projects = mysqlTable('projects', {
   uiMessages: json('ui_messages').default([]), // UI 消息历史（简化结构）
   retrievedClips: json('retrieved_clips').default([]), // [Arch] 独立持久化的素材检索结果，脱离聊天历史
   retrievedAssetIds: json('retrieved_asset_ids').default([]), // [Arch] 宏观检索聚光灯结果
+  selectedAssetIds: json('selected_asset_ids').default([]), // [Arch] 精挑素材（Asset 级）
   editingPlans: json('editing_plans').default([]), // [Arch] 多套剪辑方案列表与素材映射
 });
 
@@ -57,17 +58,7 @@ export const projectOutlines = mysqlTable('project_outlines', {
   version: int('version').notNull().default(1),
 });
 
-export const basketItems = mysqlTable('basket_items', {
-  id: varchar('id', { length: 36 }).primaryKey(),
-  projectId: varchar('project_id', { length: 36 })
-    .notNull()
-    .references(() => projects.id, { onDelete: 'cascade' }), // 级联删除
-  assetChunkId: varchar('asset_chunk_id', { length: 36 })
-    .notNull()
-    .references(() => assetChunks.id, { onDelete: 'cascade' }), // 素材删了，篮子也清
-  sortRank: varchar('sort_rank', { length: 255 }).notNull(),
-  addedAt: timestamp('added_at').defaultNow().notNull(),
-});
+// [Arch] basketItems 表已被全链路废弃，精挑数据收敛于 projects.selectedAssetIds
 
 export const editingPlans = mysqlTable('editing_plans', {
   id: varchar('id', { length: 36 }).primaryKey(),

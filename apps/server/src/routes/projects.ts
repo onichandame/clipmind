@@ -257,6 +257,14 @@ app.patch('/:id', async (c) => {
         updatePayload.workflowMode = body.workflowMode;
       }
 
+      // [Arch] 允许更新精挑素材篮子 (Asset 级别)
+      if (body.selectedAssetIds !== undefined) {
+        if (!Array.isArray(body.selectedAssetIds)) {
+          return c.json({ error: 'selectedAssetIds must be an array' }, 400);
+        }
+        updatePayload.selectedAssetIds = body.selectedAssetIds;
+      }
+
       if (Object.keys(updatePayload).length === 1) {
     return c.json({ success: true, message: 'No fields to update' });
   }

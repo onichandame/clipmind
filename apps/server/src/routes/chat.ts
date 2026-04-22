@@ -16,6 +16,10 @@ app.post("/", async (c) => {
   const body = await c.req.json();
   const { messages, projectId, currentOutline, isDirty } = body as { messages: UIMessage[]; projectId: string; currentOutline?: string; isDirty?: boolean; };
 
+  // [Arch] SSOT: 在请求起点先行获取项目实体，作为后续 Prompt 注入与写链路的单一真理源
+  const [currProject] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (!currProject) return c.json({ error: "Project not found" }, 404);
+
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
   let dynamicSystemPrompt = SYSTEM_PROMPT;
 
@@ -29,16 +33,26 @@ app.post("/", async (c) => {
 
   dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
 
-          // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
-          dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
-          dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
-          dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`generate_outline\`, \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
-          dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`, \`search_clips\`。若涉及素材检索，禁止同时修改大纲。\n`;
-          dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n\n`;
-      dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
+  // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
+  dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
+  dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
+  dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`generate_outline\`, \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
+  dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`。若涉及素材检索，禁止同时修改大纲。\n`;
+  dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n`;
+  dynamicSystemPrompt += `- 【频道 B: 素材 (增补)】: 包含 \`manage_footage_basket\`，用于将素材移入或移出精选篮子。当你发现用户对某个素材表示满意时，应主动将其加入篮子。\n`;
+  dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话或大纲策划阶段滥用此工具。\n\n`;
+  dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
 
-      if (currentOutline) {
-        dynamicSystemPrompt += `\n\n## Current Project State\n\n`;
+  // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
+  if ((currProject.retrievedAssetIds as string[])?.length > 0) {
+    dynamicSystemPrompt += `\n- **Retrieved Assets (Spotlight)**: AI has focused on these assets: [${(currProject.retrievedAssetIds as string[]).join(', ')}].\n`;
+  }
+  if ((currProject.selectedAssetIds as string[])?.length > 0) {
+    dynamicSystemPrompt += `\n- **Selected Assets (User's Pick)**: The user has hand-picked these assets for the final edit: [${(currProject.selectedAssetIds as string[]).join(', ')}]. You MUST prioritize these when generating editing plans.\n`;
+  }
+
+  if (currentOutline) {
+    dynamicSystemPrompt += `\n\n## Current Project State\n\n`;
     dynamicSystemPrompt += `The user has an existing outline on the canvas. `;
     if (isDirty) {
       dynamicSystemPrompt += `**CRITICAL: The user has manually edited this outline since you last saw it.** You MUST base any future modifications on this exact current content, not your previous memory of it.\n\n`;
@@ -52,10 +66,7 @@ app.post("/", async (c) => {
   const model = createAIModel();
 
   // [Arch] 读写分离重构 (写链路)：抛弃前端传入的伪造历史，以数据库中的 CoreMessage 为单一真理源
-      const existingProject = await db.select({
-        uiMessages: projects.uiMessages
-      }).from(projects).where(eq(projects.id, projectId)).limit(1);
-      const rawHistory: any[] = (existingProject[0]?.uiMessages as any[]) || [];
+  const rawHistory: any[] = (currProject.uiMessages as any[]) || [];
 
   // 清洗防线：确保从数据库读出的历史记录严格符合 CoreMessage，防止被早期脏数据污染
   const coreHistory = rawHistory.map((msg: any) => {
@@ -107,8 +118,8 @@ app.post("/", async (c) => {
       return {};
     },
 
-        tools: {
-          generateEditingPlan: tool({
+    tools: {
+      generateEditingPlan: tool({
         description: "基于素材检索结果，生成结构化的剪辑方案（Editing Plan）并持久化到数据库。禁止在对话中输出大段方案，必须调用此工具。",
         inputSchema: z.object({
           title: z.string().describe("剪辑方案的标题"),
@@ -194,20 +205,82 @@ app.post("/", async (c) => {
             const { searchVectors, QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
             const results = await searchVectors(vector, limit, QDRANT_SUMMARY_COLLECTION);
 
-                const assetsFound = results.map((r: any) => ({
-                  score: r.score,
-                  assetId: r.payload.assetId,
-                  summary: r.payload.text
-                }));
+            const assetsFound = results.map((r: any) => ({
+              score: r.score,
+              assetId: r.payload.assetId,
+              summary: r.payload.text
+            }));
 
-                // [Arch] 状态持久化：将宏观检索命中的资产ID写入聚合根，驱动前端聚光灯UI
-                const hitAssetIds = assetsFound.map(a => a.assetId);
-                await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(eq(projects.id, projectId));
+            // [Arch] 状态持久化：将宏观检索命中的资产ID写入聚合根，驱动前端聚光灯UI
+            const hitAssetIds = assetsFound.map(a => a.assetId);
+            await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(eq(projects.id, projectId));
 
-                console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产并已持久化至 Project。`);
-                return { success: true, assets: assetsFound };
+            console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产并已持久化至 Project。`);
+            return { success: true, assets: assetsFound };
           } catch (error: any) {
             console.error("❌ search_assets 宏观检索失败:", error);
+            return { success: false, error: error.message };
+          }
+        }
+      }),
+
+      manage_footage_basket: tool({
+        description: "【精挑素材】将指定的视频素材(assetIds)加入或移出精选篮子。精选篮子里的素材是后续生成剪辑方案的唯一合法来源。",
+        inputSchema: z.object({
+          action: z.enum(['add', 'remove']).describe('操作类型：add(加入篮子), remove(移出篮子)'),
+          assetIds: z.array(z.string()).describe('素材 ID 数组')
+        }),
+        execute: async ({ action, assetIds }) => {
+          try {
+            const currentSelected = (currProject.selectedAssetIds as string[]) || [];
+            let nextSelected = [...currentSelected];
+
+            if (action === 'add') {
+              nextSelected = Array.from(new Set([...nextSelected, ...assetIds]));
+            } else {
+              nextSelected = nextSelected.filter(id => !assetIds.includes(id));
+            }
+
+            await db.update(projects)
+              .set({ selectedAssetIds: nextSelected, updatedAt: new Date() })
+              .where(eq(projects.id, projectId));
+
+            return { success: true, action, count: assetIds.length, totalInBasket: nextSelected.length };
+          } catch (error: any) {
+            console.error("❌ manage_footage_basket 失败:", error);
+            return { success: false, error: error.message };
+          }
+        }
+      }),
+
+      search_clips: tool({
+        description: "【微观检索】在指定的视频资产（assetIds）范围内，深入检索符合条件的台词/画面切片。用于支撑剪辑方案(Editing Plan)的精确排期。注意：必须传入 assetIds 数组进行定向狙击。",
+        inputSchema: z.object({
+          action: z.enum(['add', 'remove']).describe('操作类型：add(加入篮子), remove(移出篮子)'),
+          assetIds: z.array(z.string()).describe('素材 ID 数组')
+        }),
+        execute: async ({ action, assetIds }) => {
+          try {
+            // 读取当前项目状态
+            const existingProject = await db.select({ selectedAssetIds: projects.selectedAssetIds })
+              .from(projects).where(eq(projects.id, projectId)).limit(1);
+            const currentSelected = existingProject[0]?.selectedAssetIds as string[] || [];
+
+            let nextSelected = [...currentSelected];
+            if (action === 'add') {
+              nextSelected = Array.from(new Set([...nextSelected, ...assetIds]));
+            } else {
+              nextSelected = nextSelected.filter(id => !assetIds.includes(id));
+            }
+
+            // 落盘
+            await db.update(projects)
+              .set({ selectedAssetIds: nextSelected })
+              .where(eq(projects.id, projectId));
+
+            return { success: true, action, count: assetIds.length, totalInBasket: nextSelected.length };
+          } catch (error: any) {
+            console.error("❌ manage_footage_basket 失败:", error);
             return { success: false, error: error.message };
           }
         }
