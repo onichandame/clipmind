@@ -35,19 +35,16 @@ export async function clientLoader() {
   return res.json() as Promise<Asset[]>;
 }
 
-type JobStatus = 'queued' | 'compressing' | 'uploading' | 'ready' | 'error';
-interface UploadJob { id: string; filename: string; sourcePath: string; status: JobStatus; progress: number; }
+import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanvasStore';
 
 export default function AssetsLibrary() {
   // 核心变更：从 Loader 中实时获取数据库数据
   const assets = useLoaderData<typeof clientLoader>();
   const revalidator = useRevalidator();
 
-  const [jobs, setJobs] = useState<UploadJob[]>([]);
-
-  const updateJob = (id: string, updates: Partial<UploadJob>) => {
-    setJobs(prev => prev.map(j => j.id === id ? { ...j, ...updates } : j));
-  };
+  const jobs = useCanvasStore(s => s.uploadJobs);
+  const setJobs = useCanvasStore(s => s.setUploadJobs);
+  const updateJob = useCanvasStore(s => s.updateUploadJob);
 
   const handleSelectFiles = async () => {
     // 兼容大写后缀名 (如相机直接导出的 .MOV / .MP4)

@@ -1037,3 +1037,15 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **2. 踩坑与教训 (Lessons Learned & DON'Ts):**
 - **DON'T DO (Schema 删除不彻底)**: 严禁在删除数据库表（如 `basketItems`）时只修改 Schema 和前端代码。如果在列表接口的 `LEFT JOIN` 或聚合查询中遗漏了该实体，Drizzle ORM 会在运行时尝试读取 `undefined.id`，导致整个列表接口直接抛出 500 (`TypeError: Cannot read properties of undefined`)。
 - **防线铁律**: 移除任何数据表前，必须进行全局 `grep`，确保所有连表查询 (`leftJoin`, `innerJoin`) 和 SQL 聚合函数 (`sql<number>count(...)`) 中对其的引用已被连根拔起。
+
+## 📝 [阶段跃迁] Zustand 全局状态提升与 Vite HMR 内存陷阱 (Global State & HMR Trap)
+
+**1. 架构与状态流转 (Architecture State):**
+- **状态机提升 (SSOT)**: 彻底废弃了 `assets.tsx` 和 `CanvasPanel.tsx` 中零散的、局部的上传队列状态。将 `UploadJob` 接口与 `uploadJobs` 队列全量注入全局单例 `useCanvasStore`，实现了路由切换下极速上传进度的无缝共享与防抖。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (HMR 内存残留黑洞)**: 严禁在修改了 Zustand Store 的初始状态结构（如新增 `uploadJobs: []`）后，仅依赖 Vite 的热更新 (HMR) 去预览页面。
+- **致命机制**: Vite 的 HMR 会在组件重载时，**强制保留 Zustand 已经在浏览器内存中实例化的旧状态树**。此时局部组件通过 Selector 提取新字段会直接得到 `undefined`，进而引发类似 `undefined is not an object (evaluating 'jobs.length')` 的白屏核爆。
+- **规范防线**:
+  1. **防御性编程**: 在组件消费 Store 数组时，必须养成加上防空兜底的肌肉记忆（如 `const jobs = useCanvasStore(s => s.uploadJobs || [])`）。
+  2. **强制重置**: 任何涉及修改 Store 结构层级的操作，完成后必须手动刷新浏览器 (Cmd/Ctrl + R) 彻底摧毁并重建旧的内存快照。
