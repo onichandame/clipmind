@@ -49,21 +49,22 @@ app.post("/", async (c) => {
                 const allInvolvedIds = Array.from(new Set([...retrievedIds, ...selectedIds]));
 
                 if (allInvolvedIds.length > 0) {
-                  // [Arch] 解决大模型“语义盲区”：拿 UUID 去 assets 表换取真实的文件名
+                  // [Arch] 解决大模型“内容盲区”：拿 UUID 去 assets 表换取真实的文件名与内容摘要(summary)
                   const involvedAssets = await db.select({
                     id: assets.id,
-                    filename: assets.filename
+                    filename: assets.filename,
+                    summary: assets.summary
                   }).from(assets).where(inArray(assets.id, allInvolvedIds));
 
                   if (retrievedIds.length > 0) {
-                    const retrievedNames = involvedAssets.filter(a => retrievedIds.includes(a.id)).map(a => `【${a.filename}】`);
-                    dynamicSystemPrompt += `\n- **Retrieved Assets (Spotlight)**: AI has focused on these assets: ${retrievedNames.join(', ')}.\n`;
+                    const retrievedNames = involvedAssets.filter(a => retrievedIds.includes(a.id)).map(a => `【${a.filename}】(内容: ${a.summary || '暂无摘要'})`);
+                    dynamicSystemPrompt += `\n- **Retrieved Assets (Spotlight)**: AI has focused on these assets: ${retrievedNames.join('; ')}.\n`;
                   }
 
                   if (selectedIds.length > 0) {
-                    const selectedNames = involvedAssets.filter(a => selectedIds.includes(a.id)).map(a => `【${a.filename}】(ID: ${a.id})`);
-                    dynamicSystemPrompt += `\n- **Selected Assets (User's Pick)**: The user has hand-picked these assets for the final edit: ${selectedNames.join(', ')}.\n`;
-                    dynamicSystemPrompt += `> [系统强烈提示]：你必须明确知道用户已经选好了上述具体文件。如果用户问“我选了什么”或“你看到了吗”，你必须像人类助理一样准确报出这些【文件名】！\n`;
+                    const selectedNames = involvedAssets.filter(a => selectedIds.includes(a.id)).map(a => `- 【${a.filename}】(ID: ${a.id}) | 内容摘要: ${a.summary || '暂无摘要'}`);
+                    dynamicSystemPrompt += `\n- **Selected Assets (User's Pick)**: The user has hand-picked these assets for the final edit:\n${selectedNames.join('\n')}\n`;
+                    dynamicSystemPrompt += `> [系统强烈提示]：你必须明确知道用户已经选好了上述具体文件，并深度理解其【内容摘要】。当用户要求构思剧情、修改大纲或生成剪辑方案时，你必须基于这些摘要进行推理！\n`;
                   }
                 }
 
