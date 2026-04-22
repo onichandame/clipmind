@@ -153,17 +153,29 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
               const hasFootage = (projectData?.project?.selectedAssetIds?.length || 0) > 0;
               const hasPlan = (projectData?.project?.editingPlans?.length || 0) > 0;
 
-              // 按依赖链判断活动项：全部未完成1 active，完成1就2 active... 依次类推
-              let dynamicActiveId: string | null = null;
-              if (!hasOutline) dynamicActiveId = 'outline';
-              else if (!hasFootage) dynamicActiveId = 'footage';
-              else if (!hasPlan) dynamicActiveId = 'plan';
+              // [Arch] 根据 workflowMode 动态排列步骤顺序，与 CanvasPanel.tsx 保持一致
+              const workflowMode = projectData?.project?.workflowMode;
+              const stepOrder = workflowMode === 'material'
+                ? ['footage', 'outline', 'plan']   // 素材驱动：素材→热点→剪辑
+                : ['outline', 'footage', 'plan'];  // 热点驱动：热点→素材→剪辑
 
-              const pillsData = [
-                { id: 'outline', num: '①', text: '热点', isActive: dynamicActiveId === 'outline', isDone: hasOutline },
-                { id: 'footage', num: '②', text: '素材', isActive: dynamicActiveId === 'footage', isDone: hasFootage },
-                { id: 'plan',    num: '③', text: '剪辑', isActive: dynamicActiveId === 'plan',    isDone: hasPlan }
-              ];
+              // 按依赖链判断活动项：按 stepOrder 顺序，第一个未完成的步骤为 active
+              let dynamicActiveId: string | null = null;
+              for (const step of stepOrder) {
+                if (step === 'outline' && !hasOutline) { dynamicActiveId = 'outline'; break; }
+                if (step === 'footage' && !hasFootage) { dynamicActiveId = 'footage'; break; }
+                if (step === 'plan'    && !hasPlan)    { dynamicActiveId = 'plan';    break; }
+              }
+
+              const pillsData = stepOrder.map((id) => {
+                const labels: Record<string, { num: string; text: string }> = {
+                  outline: { num: '①', text: '热点' },
+                  footage: { num: '②', text: '素材' },
+                  plan:    { num: '③', text: '剪辑' },
+                };
+                const label = labels[id];
+                return { id, num: label.num, text: label.text, isActive: dynamicActiveId === id, isDone: id === 'outline' ? hasOutline : id === 'footage' ? hasFootage : hasPlan };
+              });
 
           return (
             <div className="flex flex-col h-full bg-transparent">
