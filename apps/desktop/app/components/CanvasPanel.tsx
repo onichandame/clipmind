@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { env } from '../env';
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -36,8 +36,93 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
 
   const queryClient = useQueryClient();
-  const { data: projectData } = useQuery({ queryKey: ['project', projectId] });
+  const { data: projectData } = useQuery({ 
+    queryKey: ['project', projectId],
+    // [Arch] 补齐订阅者 queryFn 以消灭 WebKit 控制台报错
+    queryFn: async () => {
+      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 1000 * 60 // 缓存一分钟，避免高频重刷
+  });
   const workflowMode = projectData?.project?.workflowMode;
+
+  // 引入 Zustand 乐观状态，确保在 AI 流式生成期间能够立刻捕获到数据变化 (防变量重名加前缀)
+  const optClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
+  const optBasket = useCanvasStore((s) => s.projects[projectId]?.selectedBasket || []);
+  const optPlans = useCanvasStore((s) => s.projects[projectId]?.editingPlans || []);
+
+  // [Arch] SSOT 瞬态 UI 路由：结合 React Query (Server) 和 Zustand (Client) 进行多维比对
+  const prevProjectRef = useRef<any>(null);
+  const prevOutlineRef = useRef<string | null>(null);
+  const prevClipsLenRef = useRef<number>(optClips.length);
+  const prevBasketLenRef = useRef<number>(optBasket.length);
+  const prevPlansLenRef = useRef<number>(optPlans.length);
+
+  useEffect(() => {
+    const currProject = projectData?.project;
+    const prevProject = prevProjectRef.current;
+
+    // 【Arch Probe】素材雷达深度探针
+    console.log("【Arch Probe】素材雷达触发", {
+      optClipsLen: optClips?.length,
+      prevOptClipsLen: prevClipsLenRef.current,
+      optBasketLen: optBasket?.length,
+      prevOptBasketLen: prevBasketLenRef.current,
+      serverIdsStr: JSON.stringify(currProject?.retrievedAssetIds),
+      prevServerIdsStr: JSON.stringify(prevProject?.retrievedAssetIds),
+      isOptFootageChanged: (optClips?.length !== prevClipsLenRef.current) || (optBasket?.length !== prevBasketLenRef.current)
+    });
+
+    const currentOutlineText = outline?.contentMd || outlineContent || "";
+    const prevOutlineText = prevOutlineRef.current;
+
+    let nextPanel = null;
+
+    // 1. 优先比对大纲 (独立字段与来源)
+    if (prevOutlineText !== null && currentOutlineText !== prevOutlineText) {
+      nextPanel = 'outline';
+    }
+
+    // 2. 比对素材 (Footage) - 融合 Zustand 乐观状态与 React Query 缓存
+    const isOptFootageChanged = optClips.length !== prevClipsLenRef.current || optBasket.length !== prevBasketLenRef.current;
+    const isServerFootageChanged = currProject && prevProject && (
+      JSON.stringify(currProject.retrievedAssetIds) !== JSON.stringify(prevProject.retrievedAssetIds) ||
+      (currProject.retrievedClips?.length || 0) !== (prevProject.retrievedClips?.length || 0) ||
+      JSON.stringify(currProject.selectedBasket) !== JSON.stringify(prevProject.selectedBasket)
+    );
+
+    if (isOptFootageChanged || isServerFootageChanged) {
+      nextPanel = 'footage';
+    }
+
+    // 3. 比对剪辑方案 (Plan) - 融合双端状态
+    const isOptPlanChanged = optPlans.length !== prevPlansLenRef.current;
+    const isServerPlanChanged = currProject && prevProject && JSON.stringify(currProject.editingPlans) !== JSON.stringify(prevProject.editingPlans);
+
+    if (isOptPlanChanged || isServerPlanChanged) {
+      nextPanel = 'plan';
+    }
+
+    // 4. 执行焦点偏移
+    if (nextPanel) {
+      setActivePanelId(nextPanel);
+    }
+
+    // 5. 更新所有历史快照
+    prevOutlineRef.current = currentOutlineText;
+    prevClipsLenRef.current = optClips.length;
+    prevBasketLenRef.current = optBasket.length;
+    prevPlansLenRef.current = optPlans.length;
+    
+    if (currProject) {
+      prevProjectRef.current = JSON.parse(JSON.stringify(currProject));
+    }
+  }, [
+    outline, outlineContent, projectData?.project, setActivePanelId,
+    optClips.length, optBasket.length, optPlans.length
+  ]);
 
   const updateModeMutation = useMutation({
     mutationFn: async (mode: string) => {

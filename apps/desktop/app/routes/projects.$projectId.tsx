@@ -12,15 +12,16 @@ export default function ProjectWorkspace() {
   const setEditingPlans = useCanvasStore((s) => s.setEditingPlans);
   const setSelectedBasket = useCanvasStore((s) => (s as any).setSelectedBasket);
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['project', projectId],
-    queryFn: async () => {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
-      if (!res.ok) throw new Error('Failed to load project details');
-      return res.json();
-    },
-    enabled: !!projectId,
-  });
+          const { data, isLoading, error } = useQuery({
+            queryKey: ['project', projectId],
+            queryFn: async () => {
+              const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
+              if (!res.ok) throw new Error('Failed to load project details');
+              return res.json();
+            },
+            staleTime: 1000 * 60,
+            enabled: !!projectId,
+          });
 
   // [Arch] 军规防线：Hook 必须位于任何 conditional return (如 isLoading 拦截) 之前！
   // 读链路水合：直接从项目实体中提取独立的业务资产，彻底抛弃脆弱的历史消息回溯

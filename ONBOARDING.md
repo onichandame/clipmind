@@ -1003,3 +1003,14 @@ SELECT start_time, end_time, transcript_text FROM asset_chunks WHERE asset_id = 
 **3. 新共识与规范 (New Conventions):**
 
 - **UI 纯粹化约束**: 在进行网格（Grid）长宽比普适化设计时，任何悬浮状态（如已精选徽章）、常驻信息（如渐变文件名、时长），必须统一封装在绝对定位（`absolute`）的子图层中，死死锁住父容器的外框骨架。
+
+## 📝 [阶段跃迁] 瞬态 UI 状态机融合与频道隔离 (Optimistic Hydration & Intent Convergence)
+
+**1. 架构与状态流转 (Architecture State):**
+- **双轨状态雷达**: 修复了 AI 流式生成期间 UI 焦点丢失的问题。将 `CanvasPanel` 的焦点流转监听器从单一的 React Query 缓存订阅，升级为 "Zustand 乐观状态 (Opt) + React Query 服务端状态 (Server)" 的双轨联合判定。
+- **意图收敛 (频道隔离)**: 在 `chat.ts` 的 System Prompt 中确立了严格的工具调用防线，按“策划、素材、剪辑”切分业务频道。强制大模型单次交互只能聚焦单一频道，彻底终结了前端面板焦点的“并发争夺”。
+- **严格订阅模式防线**: 为所有仅做状态订阅的 `useQuery` 补齐了兜底的 `queryFn`，彻底清除了 React Query v5 带来的 `No queryFn was passed` WebKit 致命异常。
+
+**2. 踩坑与教训 (Lessons Learned & DON'Ts):**
+- **DON'T DO (乐观更新时间差陷阱)**: 严禁在设计自动流转 UI 时只盯着 Server State。流式响应期间，后端数据尚未落盘（Server State 是一潭死水），必须将 Zustand 里的 Optimistic State 纳入 `useEffect` 依赖数组，否则监听雷达在 AI 打字期间会变成瞎子。
+- **DON'T DO (裸奔的 useQuery)**: 在 React Query v5 架构下，即便路由层 Loader 已经预取了数据，局部组件内也绝对禁止“无脑白嫖” `queryKey`。必须显式声明兜底 `queryFn` 并配置 `staleTime`，否则一旦遇到意外的缓存重刷，应用将直接白屏。
