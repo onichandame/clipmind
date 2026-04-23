@@ -53,12 +53,13 @@ app.post("/", async (c) => {
   // 【剪辑方案格式要求】注入
   dynamicSystemPrompt += `\n\n**【剪辑方案格式要求】**\n`;
   dynamicSystemPrompt += `1. 每个 clip 必须指定 clipType：\n`;
-  dynamicSystemPrompt += `   - footage：有对应素材的片段，必须填写 assetId（从精挑素材或 search_clips 结果中获取）\n`;
+  dynamicSystemPrompt += `   - footage：有对应素材的片段，assetId 必填且必须直接从 search_clips 返回结果的 clips[i].assetId 字段原样复制，禁止省略或自造\n`;
   dynamicSystemPrompt += `   - broll：空镜/转场/无素材片段，assetId 留空\n`;
-  dynamicSystemPrompt += `2. description 字段必须具有直接指导价值：写明镜头意图、画面描述、剪辑手法，而不是笼统概述\n`;
-  dynamicSystemPrompt += `3. 禁止生成无 assetId 的 footage 类型 clip — 如果找不到对应素材，应标记为 broll\n`;
-  dynamicSystemPrompt += `4. text 字段写该片段的台词/旁白/文案内容\n`;
-  dynamicSystemPrompt += `5. 字段名必须严格使用 camelCase：startTime、endTime（不是 starttime 或 endtime）\n\n`;
+  dynamicSystemPrompt += `2. **assetId 传递规则（关键）**：当你调用 search_clips 后，返回的每个切片对象都带有 assetId 字段。在随后调用 generateEditingPlan 时，你选用哪个切片，就必须把那个切片的 assetId 原样写入对应 clip 的 assetId 字段。这是硬约束，违反会导致工具调用失败。\n`;
+  dynamicSystemPrompt += `3. description 字段必须具有直接指导价值：写明镜头意图、画面描述、剪辑手法，而不是笼统概述\n`;
+  dynamicSystemPrompt += `4. 禁止生成无 assetId 的 footage 类型 clip — 如果找不到对应素材，应标记为 broll\n`;
+  dynamicSystemPrompt += `5. text 字段写该片段的台词/旁白/文案内容\n`;
+  dynamicSystemPrompt += `6. 字段名必须严格使用 camelCase：startTime、endTime（不是 starttime 或 endtime）\n\n`;
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -170,9 +171,12 @@ app.post("/", async (c) => {
               endTime: z.number().describe("切片结束时间（毫秒）"),
               text: z.string().describe("切片台词内容"),
               description: z.string().describe("编导对该切片的剪辑意图与画面描述"),
-              assetId: z.string().optional().describe("关联的素材 asset ID，来自用户精挑素材或检索结果。footage 类型必填"),
+              assetId: z.string().optional().describe("关联的素材 asset ID，必须从 search_clips 返回结果的 clips[i].assetId 原样复制。footage 类型必填，broll 留空"),
               clipType: z.enum(['footage', 'broll']).optional().describe("片段类型：footage=有素材片段，broll=空镜/转场/无素材片段")
-            }))
+            })).refine(
+              (clips) => clips.every(c => c.clipType !== 'footage' || (typeof c.assetId === 'string' && c.assetId.length > 0)),
+              { message: "footage 类型的 clip 必须包含 assetId。请回溯 search_clips 的返回结果，将每个 footage clip 对应切片的 assetId 字段原样填入。" }
+            )
           ).describe("选用的视频切片列表")
         }).strict(),
         execute: async (args) => {
