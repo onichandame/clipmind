@@ -58,7 +58,7 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`generate_outline\`, \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
   dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`。若涉及素材检索，禁止同时修改大纲。\n`;
   dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n`;
-  dynamicSystemPrompt += `- 【频道 B: 素材 (增补)】: 包含 \`manage_footage_basket\`，用于将素材移入或移出精选篮子。当你发现用户对某个素材表示满意时，应主动将其加入篮子。\n`;
+  dynamicSystemPrompt += `- 【精挑（人工操作）】: 精挑是纯人工操作，**AI 不得替用户执行精挑**。当用户对某个素材满意、或询问如何精挑时，你应明确告知：请在右侧素材面板中点击素材上的"精挑"按钮进行手动精挑。你的职责是推荐与描述，最终的精挑决策权归用户。\n`;
   dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话或大纲策划阶段滥用此工具。\n\n`;
   dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
   // 【剪辑方案格式要求】注入
@@ -303,35 +303,6 @@ app.post("/", async (c) => {
         }
       }),
 
-      manage_footage_basket: tool({
-        description: "【精挑素材】将指定的视频素材(assetIds)加入或移出精选篮子。精选篮子里的素材是后续生成剪辑方案的唯一合法来源。",
-        inputSchema: z.object({
-          action: z.enum(['add', 'remove']).describe('操作类型：add(加入篮子), remove(移出篮子)'),
-          assetIds: z.array(z.string()).describe('素材 ID 数组')
-        }),
-        execute: async ({ action, assetIds }) => {
-          try {
-            const currentSelected = (currProject.selectedAssetIds as string[]) || [];
-            let nextSelected = [...currentSelected];
-
-            if (action === 'add') {
-              nextSelected = Array.from(new Set([...nextSelected, ...assetIds]));
-            } else {
-              nextSelected = nextSelected.filter(id => !assetIds.includes(id));
-            }
-
-            await db.update(projects)
-              .set({ selectedAssetIds: nextSelected, updatedAt: new Date() })
-              .where(eq(projects.id, projectId));
-
-            return { success: true, action, count: assetIds.length, totalInBasket: nextSelected.length };
-          } catch (error: any) {
-            console.error("❌ manage_footage_basket 失败:", error);
-            return { success: false, error: error.message };
-          }
-        }
-      }),
-
       ...(serverConfig.SEARCHAPI_KEY ? {
         search_web: tool({
           description: "Search the web for up-to-date information on any topic. Use when the user asks about current events, trends, facts, or anything that requires real-world knowledge beyond your training data.",
@@ -377,7 +348,7 @@ app.post("/", async (c) => {
         description: "【微观检索】在指定的视频资产（assetIds）范围内，深入检索符合条件的台词/画面切片。用于支撑剪辑方案(Editing Plan)的精确排期。注意：必须传入 assetIds 数组进行定向狙击。",
         inputSchema: z.object({
           query: z.string().describe('具体的台词或微观动作意图'),
-          assetIds: z.array(z.string()).describe('目标视频的 ID 数组 (可从选材篮子或 search_assets 中获取)'),
+          assetIds: z.array(z.string()).describe('目标视频的 ID 数组 (可从用户已精挑的素材或 search_assets 返回的结果中获取)'),
           limit: z.number().min(1).max(20).optional().default(10)
         }),
         execute: async ({ query, assetIds, limit }) => {
