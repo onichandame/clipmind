@@ -310,7 +310,7 @@ struct ReportPayload {
     filename: String,
     duration: i32,
     oss_url: String,
-    audio_oss_url: String,
+    audio_oss_url: Option<String>,
     thumbnail_url: String,
     file_size: u64,
 }
@@ -342,18 +342,14 @@ async fn process_video_asset(
         local_path_clone
     );
 
-    // 核心架构回归：使用 Tauri 官方 Shell 插件异步执行 Sidecar
-    let sidecar_command = app_ffmpeg
+    // --- Pass 1: 音频抽取（含时长探测和音频流探测）---
+    let (mut rx_audio, _child_audio) = app_ffmpeg
         .shell()
         .sidecar("ffmpeg")
-        .map_err(|e| format!("无法初始化 FFmpeg Sidecar: {}", e))?;
-
-    // 同步截取音频和首帧缩略图
-    let (mut rx, _child) = sidecar_command
+        .map_err(|e| format!("无法初始化 FFmpeg Sidecar (audio): {}", e))?
         .args([
             "-i",
             &local_path_clone,
-            // 音频抽取配置：严格降维至 16kHz/单声道 以迎合阿里云 ASR 模型
             "-vn",
             "-c:a",
             "aac",
@@ -362,9 +358,80 @@ async fn process_video_asset(
             "-ar",
             "16000",
             "-b:a",
-            "32k", // 16kHz 单声道 32k 码率足矣，极限压缩上传体积
+            "32k",
             &temp_audio,
-            // 截帧配置 (0.5秒处截1帧)
+            "-y",
+        ])
+        .spawn()
+        .map_err(|e| format!("FFmpeg audio spawn failed: {}", e))?;
+
+    let mut last_emit = Instant::now();
+    let mut extracted_duration = 0.0;
+    let mut audio_exit_code: Option<i32> = None;
+    // "Stream #X:Y: Audio:" 出现说明源文件有音频轨；用来区分"无音频"和"真错误"
+    let mut source_has_audio_stream = false;
+
+    while let Some(event) = rx_audio.recv().await {
+        match event {
+            CommandEvent::Stderr(line_bytes) => {
+                let line = String::from_utf8_lossy(&line_bytes);
+
+                if line.contains("Duration: ") {
+                    if let Some(d_str) = line
+                        .split("Duration: ")
+                        .nth(1)
+                        .and_then(|s| s.split(',').next())
+                    {
+                        let parts: Vec<&str> = d_str.trim().split(':').collect();
+                        if parts.len() == 3 {
+                            let h: f64 = parts[0].parse().unwrap_or(0.0);
+                            let m: f64 = parts[1].parse().unwrap_or(0.0);
+                            let s: f64 = parts[2].parse().unwrap_or(0.0);
+                            extracted_duration = h * 3600.0 + m * 60.0 + s;
+                        }
+                    }
+                }
+
+                if line.contains("Stream") && line.contains("Audio:") {
+                    source_has_audio_stream = true;
+                }
+
+                if last_emit.elapsed() > Duration::from_millis(500) {
+                    let _ = app_ffmpeg.emit(
+                        "ffmpeg-progress",
+                        serde_json::json!({ "log": line.to_string() }),
+                    );
+                    last_emit = Instant::now();
+                }
+            }
+            CommandEvent::Terminated(payload) => {
+                audio_exit_code = payload.code;
+                println!("[Probe-FFmpeg] Audio exit code: {:?}", audio_exit_code);
+            }
+            _ => {}
+        }
+    }
+
+    if audio_exit_code != Some(0) {
+        if source_has_audio_stream {
+            return Err(format!(
+                "FFmpeg 音频抽取退出码非0: {:?}，音视频分离失败",
+                audio_exit_code
+            ));
+        }
+        // 无音频流（如飞书快速录屏）——"Output file #0 does not contain any stream"属预期行为
+        println!(
+            "[Probe-FFmpeg] 源文件无音频流，退出码 {:?} 为预期行为，跳过音频抽取",
+            audio_exit_code
+        );
+    }
+
+    // --- Pass 2: 缩略图截帧（独立运行，不受音频结果影响）---
+    let (mut rx_thumb, _child_thumb) = app_ffmpeg
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("无法初始化 FFmpeg Sidecar (thumb): {}", e))?
+        .args([
             "-ss",
             "00:00:00.500",
             "-i",
@@ -377,45 +444,24 @@ async fn process_video_asset(
             "-y",
         ])
         .spawn()
-        .map_err(|e| format!("FFmpeg Sidecar spawn failed: {}", e))?;
+        .map_err(|e| format!("FFmpeg thumb spawn failed: {}", e))?;
 
-    let mut last_emit = Instant::now();
-    let mut extracted_duration = 0.0;
-    // 原生 async 循环，天生防假死，不再需要 spawn_blocking 丑陋的包裹
-    while let Some(event) = rx.recv().await {
-        if let CommandEvent::Stderr(line_bytes) = event {
-            let line = String::from_utf8_lossy(&line_bytes);
-
-            // 实时提取视频时长
-            if line.contains("Duration: ") {
-                if let Some(d_str) = line
-                    .split("Duration: ")
-                    .nth(1)
-                    .and_then(|s| s.split(',').next())
-                {
-                    let parts: Vec<&str> = d_str.trim().split(':').collect();
-                    if parts.len() == 3 {
-                        let h: f64 = parts[0].parse().unwrap_or(0.0);
-                        let m: f64 = parts[1].parse().unwrap_or(0.0);
-                        let s: f64 = parts[2].parse().unwrap_or(0.0);
-                        extracted_duration = h * 3600.0 + m * 60.0 + s;
-                    }
-                }
-            }
-
-            if last_emit.elapsed() > Duration::from_millis(500) {
-                // 修复：对齐前端期望的 { log: string } 结构
-                let _ = app_ffmpeg.emit(
-                    "ffmpeg-progress",
-                    serde_json::json!({ "log": line.to_string() }),
-                );
-                last_emit = Instant::now();
-            }
+    let mut thumb_exit_code: Option<i32> = None;
+    while let Some(event) = rx_thumb.recv().await {
+        if let CommandEvent::Terminated(payload) = event {
+            thumb_exit_code = payload.code;
+            println!("[Probe-FFmpeg] Thumb exit code: {:?}", thumb_exit_code);
         }
+    }
+    if thumb_exit_code != Some(0) {
+        println!(
+            "[Probe-FFmpeg] ⚠️ 缩略图截帧失败（退出码 {:?}），继续上传流程",
+            thumb_exit_code
+        );
     }
 
     println!(
-        "[Job {}] FFmpeg 极速双轨分离完毕，准备进入直传队列...",
+        "[Job {}] FFmpeg 双轨分离完毕，准备进入直传队列...",
         job_id
     );
 
@@ -536,17 +582,37 @@ async fn process_video_asset(
             }
 
             // 轨道 2: 音频轨道直传 (用于后端 ASR)
-            if let Ok(audio_file) = tokio::fs::File::open(&temp_audio).await {
-                if let Ok(meta) = audio_file.metadata().await {
-                    let audio_stream = FramedRead::new(audio_file, BytesCodec::new());
-                    let _ = client
-                        .put(&token_res.audio_upload_url)
-                        .header(CONTENT_LENGTH, meta.len())
-                        .header(CONTENT_TYPE, "audio/aac")
-                        .body(reqwest::Body::wrap_stream(audio_stream))
-                        .send()
-                        .await;
+            // -map 0:a? 保证了无音频流时 FFmpeg 正常退出但不生成文件——以文件大小判断有无音频
+            let has_audio = match tokio::fs::metadata(&temp_audio).await {
+                Ok(m) if m.len() > 0 => true,
+                _ => false,
+            };
+
+            if has_audio {
+                let audio_file = tokio::fs::File::open(&temp_audio)
+                    .await
+                    .map_err(|e| format!("无法打开音频文件: {}", e))?;
+                let audio_size = audio_file.metadata().await.map_err(|e| e.to_string())?.len();
+                let audio_stream = FramedRead::new(audio_file, BytesCodec::new());
+                let audio_res = client
+                    .put(&token_res.audio_upload_url)
+                    .header(CONTENT_LENGTH, audio_size)
+                    .header(CONTENT_TYPE, "audio/aac")
+                    .body(reqwest::Body::wrap_stream(audio_stream))
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !audio_res.status().is_success() {
+                    let status = audio_res.status();
+                    let err_text = audio_res.text().await.unwrap_or_default();
+                    return Err(format!(
+                        "音频上传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
+                        status, err_text
+                    ));
                 }
+                println!("[Probe-Upload] 音频轨道上传成功");
+            } else {
+                println!("[Probe-Upload] 源文件无音频流，跳过音频上传，将通知 server 设 asrStatus=skipped");
             }
 
             let report_payload = ReportPayload {
@@ -554,7 +620,7 @@ async fn process_video_asset(
                 filename,
                 duration: extracted_duration as i32,
                 oss_url: token_res.video_object_key,
-                audio_oss_url: token_res.audio_object_key,
+                audio_oss_url: if has_audio { Some(token_res.audio_object_key) } else { None },
                 thumbnail_url: token_res.thumb_object_key,
                 file_size,
             };
