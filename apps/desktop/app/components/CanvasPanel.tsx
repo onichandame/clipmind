@@ -57,19 +57,26 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
   const prevOutlineRef = useRef<string | null>(null);
   const prevClipsLenRef = useRef<number>(optClips.length);
   const prevPlansLenRef = useRef<number>(optPlans.length);
+  // 初始化是否已完成的标志：动态 effect 在初始化前只更新基线，不触发面板切换
+  const hasInitializedRef = useRef(false);
+  // 记录上次初始化时的 workflowMode，防止 workflowMode 不变时重复初始化
+  const prevWorkflowModeRef = useRef<string | null>(null);
 
   useEffect(() => {
     const currProject = projectData?.project;
-    const prevProject = prevProjectRef.current;
 
-    // 【Arch Probe】素材雷达深度探针
-    console.log("【Arch Probe】素材雷达触发", {
-      optClipsLen: optClips?.length,
-      prevOptClipsLen: prevClipsLenRef.current,
-      serverIdsStr: JSON.stringify(currProject?.retrievedAssetIds),
-      prevServerIdsStr: JSON.stringify(prevProject?.retrievedAssetIds),
-      isOptFootageChanged: optClips?.length !== prevClipsLenRef.current
-    });
+    // [Arch] 初始化完成之前：只同步基线快照，不执行面板切换
+    // 原因：route 组件的 useEffect 会在挂载后调用 setEditingPlans/setRetrievedClips（store 水合），
+    // 导致 optPlans/optClips 长度从 0→N，若此时执行变更检测会误判为"AI 新产出内容"。
+    if (!hasInitializedRef.current) {
+      prevOutlineRef.current = outline?.contentMd || outlineContent || "";
+      prevClipsLenRef.current = optClips.length;
+      prevPlansLenRef.current = optPlans.length;
+      if (currProject) prevProjectRef.current = JSON.parse(JSON.stringify(currProject));
+      return;
+    }
+
+    const prevProject = prevProjectRef.current;
 
     const currentOutlineText = outline?.contentMd || outlineContent || "";
     const prevOutlineText = prevOutlineRef.current;
@@ -92,9 +99,10 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
       nextPanel = 'footage';
     }
 
-    // 3. 比对剪辑方案 (Plan) - 融合双端状态
+    // 3. 比对剪辑方案 (Plan) - 用长度比对：JIT URL 重签不改变方案数量，防止 refetch 误触
     const isOptPlanChanged = optPlans.length !== prevPlansLenRef.current;
-    const isServerPlanChanged = currProject && prevProject && JSON.stringify(currProject.editingPlans) !== JSON.stringify(prevProject.editingPlans);
+    const isServerPlanChanged = currProject && prevProject &&
+      (currProject.editingPlans?.length || 0) !== (prevProject.editingPlans?.length || 0);
 
     if (isOptPlanChanged || isServerPlanChanged) {
       nextPanel = 'plan';
@@ -118,11 +126,14 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     optClips.length, optPlans.length
   ]);
 
-  // [Arch] 初始化：根据 workflowMode 和步骤完成状态，自动展开第一个未完成步骤的 panel
+  // [Arch] 初始化：workflowMode 首次确定时，根据步骤完成状态打开正确的 panel
   useEffect(() => {
-    if (!workflowMode || activePanelId !== null) return;
+    if (!workflowMode) return;
+    // 同一 workflowMode 只初始化一次，防止后续 dep 变化时重复覆盖用户手动选择
+    if (prevWorkflowModeRef.current === workflowMode) return;
+    prevWorkflowModeRef.current = workflowMode;
 
-    // 双源检测步骤完成状态（React Query 为主，Zustand 为备，防止异步同步延迟导致误判）
+    // 双源检测步骤完成状态（React Query 为主，Zustand 为备）
     const hasOutline = !!(outline?.contentMd || outlineContent);
     const hasFootage = (projectData?.project?.selectedAssetIds?.length || 0) > 0;
     const hasPlan = (projectData?.project?.editingPlans?.length || 0) > 0 || optPlans.length > 0;
@@ -140,7 +151,19 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     }) || stepOrder[stepOrder.length - 1];
 
     setActivePanelId(activeStep);
-  }, [workflowMode, activePanelId, outline?.contentMd, outlineContent, projectData?.project?.selectedAssetIds, projectData?.project?.editingPlans, optPlans.length, setActivePanelId]);
+
+    // 初始化完成后，将动态 effect 的基线同步到服务端真实值，
+    // 避免 store 水合（setEditingPlans/setRetrievedClips）触发误判
+    const serverClipCount = (projectData?.project as any)?.retrievedClips?.length || 0;
+    const serverPlanCount = projectData?.project?.editingPlans?.length || 0;
+    prevOutlineRef.current = outline?.contentMd || outlineContent || "";
+    prevClipsLenRef.current = serverClipCount;
+    prevPlansLenRef.current = serverPlanCount;
+    if (projectData?.project) {
+      prevProjectRef.current = JSON.parse(JSON.stringify(projectData.project));
+    }
+    hasInitializedRef.current = true;
+  }, [workflowMode, outline?.contentMd, outlineContent, projectData?.project?.selectedAssetIds, projectData?.project?.editingPlans, optPlans.length, setActivePanelId]);
 
   const updateModeMutation = useMutation({
     mutationFn: async (mode: string) => {
