@@ -150,14 +150,15 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   const lastMessage = messages[messages.length - 1];
   const lastIsUser = lastMessage?.role === "user";
-  const lastAssistantHasContent =
-    lastMessage?.role === "assistant" &&
-    !!lastMessage.parts?.some(
-      (p: any) =>
-        (p.type === "text" && p.text?.length > 0) || isToolUIPart(p)
-    );
-  const showThinking =
-    isLoading && (lastIsUser || (lastMessage?.role === "assistant" && !lastAssistantHasContent));
+  const lastAssistantParts = (lastMessage?.role === "assistant" ? lastMessage.parts ?? [] : []) as any[];
+  // An active tool call (still receiving input) shows its own spinner — no extra bubble needed.
+  const hasActiveToolCall = lastAssistantParts.some(
+    (p: any) => isToolUIPart(p) && (p.state === 'input-streaming' || p.state === 'input-available')
+  );
+  // Streaming text is self-evidencing — no extra bubble needed.
+  const hasAssistantText = lastAssistantParts.some((p: any) => p.type === 'text' && p.text?.length > 0);
+  // Standalone "thinking" bubble — only when there is no assistant message yet in the current turn.
+  const showThinking = isLoading && lastIsUser;
 
               // --- Pills 状态机 (SSOT) ---
               const hasOutline = !!outlineContent;
@@ -234,6 +235,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
         {messages.filter(Boolean).map((message) => {
           const isUser = message?.role === "user";
+          const msgText = !isUser ? (message?.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || '') : '';
+          const hasCleanText = !!msgText && !msgText.includes('{"toolCalls":') && !msgText.includes('"toolCallId":');
+          const hasVisibleTools = !isUser && isLoading && message === lastMessage && !!message?.parts?.some((p: any) => isToolUIPart(p));
+          // Inline spinner: loading, inside the last assistant bubble, no active tool spinner, no streaming text.
+          const showInlineThinking = !isUser && isLoading && message === lastMessage && !hasActiveToolCall && !hasAssistantText;
+          if (!isUser && !hasCleanText && !hasVisibleTools && !showInlineThinking) return null;
           return (
             <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
               {!isUser && (
@@ -259,8 +266,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                   );
                 })()}
 
-                {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) */}
-                {message?.parts?.filter((p: any) => isToolUIPart(p)).map((toolPart: any, index: number) => {
+                {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) — 仅在当前轮流式期间可见 */}
+                {isLoading && message === lastMessage && message?.parts?.filter((p: any) => isToolUIPart(p)).map((toolPart: any, index: number) => {
                   const state = toolPart.state;
                   const toolName = toolPart.toolName || toolPart.type;
 
@@ -324,6 +331,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                     </div>
                   );
                 })}
+                {showInlineThinking && (
+                  <div className="flex items-center gap-2 text-indigo-500 dark:text-indigo-400 mt-2">
+                    <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                    <span className="text-sm font-medium">智能体思考中…</span>
+                  </div>
+                )}
               </div>
               {isUser && (
                 <div className="w-7 h-7 mt-1 rounded-full bg-zinc-800 dark:bg-zinc-200 flex items-center justify-center ml-3 flex-shrink-0 shadow-sm transition-colors">
