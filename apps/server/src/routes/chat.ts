@@ -210,15 +210,7 @@ app.post("/", async (c) => {
               targetDuration: args.targetDuration,
               clips: fixedClips
             };
-            console.log(`\n======================================`);
-            console.log(`📍 [PROBE 1 - WRITE] 准备落盘 EditingPlan! clips: ${fixedClips.length}`);
-            fixedClips.forEach((clip: any, i: number) => {
-              console.log(`  clip[${i}] clipType=${clip.clipType ?? '(unset)'} assetId=${clip.assetId ?? '(none)'} startTime=${clip.startTime} endTime=${clip.endTime}`);
-            });
-
             await db.insert(editingPlans).values(insertPayload);
-            console.log(`📍 [PROBE 1.5 - WRITE SUCCESS] 数据库写入无报错！`);
-            console.log(`======================================\n`);
 
             return { success: true, message: '剪辑方案已成功生成并保存至数据库' };
           } catch (dbError) {
@@ -346,9 +338,6 @@ app.post("/", async (c) => {
             }));
 
             console.log(`[RAG-Micro] 精搜命中 ${clips.length} 个特定切片。`);
-            clips.forEach((c: any, i: number) => {
-              console.log(`  [RAG-Micro] clip[${i}] assetId=${c.assetId ?? '(none)'} startTime=${c.startTime} endTime=${c.endTime}`);
-            });
             return {
               success: true,
               clips,
