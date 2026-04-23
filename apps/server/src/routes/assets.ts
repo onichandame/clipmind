@@ -60,8 +60,10 @@ app.delete("/:id", async (c) => {
     const id = c.req.param("id");
     await db.delete(assets).where(eq(assets.id, id));
 
-    // 触发 Qdrant 幽灵向量清理 (Fire-and-forget 防阻塞)
-    deleteVectorsByAssetId(id).catch(e => console.error(`❌ [Qdrant] 清理资产 ${id} 的向量失败:`, e));
+    // 触发 Qdrant 幽灵向量清理 (Fire-and-forget 防阻塞)，同时清理 chunks 和 summary 两个 collection
+    const { QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
+    deleteVectorsByAssetId(id).catch(e => console.error(`❌ [Qdrant] 清理资产 ${id} 的 chunks 向量失败:`, e));
+    deleteVectorsByAssetId(id, QDRANT_SUMMARY_COLLECTION).catch(e => console.error(`❌ [Qdrant] 清理资产 ${id} 的 summary 向量失败:`, e));
 
     return c.json({ success: true });
   } catch (error) {

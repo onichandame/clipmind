@@ -262,17 +262,25 @@ app.post("/", async (c) => {
             const { searchVectors, QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
             const results = await searchVectors(vector, limit, QDRANT_SUMMARY_COLLECTION);
 
-            const assetsFound = results.map((r: any) => ({
+            const rawAssets = results.map((r: any) => ({
               score: r.score,
               assetId: r.payload.assetId,
               summary: r.payload.text
             }));
 
+            // 过滤已删除素材：Qdrant 向量可能滞后于 DB 删除操作
+            const rawAssetIds = rawAssets.map(a => a.assetId);
+            const existingAssets = rawAssetIds.length > 0
+              ? await db.select({ id: assets.id }).from(assets).where(inArray(assets.id, rawAssetIds))
+              : [];
+            const existingIdSet = new Set(existingAssets.map(a => a.id));
+            const assetsFound = rawAssets.filter(a => existingIdSet.has(a.assetId));
+
             // [Arch] 状态持久化：将宏观检索命中的资产ID写入聚合根，驱动前端聚光灯UI
             const hitAssetIds = assetsFound.map(a => a.assetId);
             await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(eq(projects.id, projectId));
 
-            console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产并已持久化至 Project。`);
+            console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产（已过滤 ${rawAssets.length - assetsFound.length} 个幽灵向量）并已持久化至 Project。`);
             return { success: true, assets: assetsFound };
           } catch (error: any) {
             console.error("❌ search_assets 宏观检索失败:", error);
