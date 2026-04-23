@@ -122,7 +122,14 @@ app.post("/", async (c) => {
   // 必须调用官方 convertToModelMessages 将其安全提取提纯为 CoreMessage。
   const userCoreMessages = await convertToModelMessages([lastUserMsg]);
 
-  const safeMessages = [...coreHistory, ...userCoreMessages];
+  // [Arch] 防重复: 热点播种场景下，coreHistory 末尾已是 user 消息（DB 已存该种子）。
+  // regenerate() 会把同一条 user 消息再次发给后端，若直接追加会造成 [seed, seed] 重复。
+  // 当 coreHistory 末尾已是 user 消息时，前端只是触发 AI 回复而非新增消息，跳过追加。
+  const lastHistoryMsg = coreHistory[coreHistory.length - 1];
+  const isUserAlreadyLast = lastHistoryMsg?.role === 'user';
+  const safeMessages = isUserAlreadyLast
+    ? [...coreHistory]
+    : [...coreHistory, ...userCoreMessages];
 
   const MAX_STEPS = 20;
 
@@ -390,7 +397,9 @@ app.post("/", async (c) => {
     },
     onFinish: async ({ response }) => {
       try {
-        const updatedMessages = [...coreHistory, ...userCoreMessages, ...response.messages];
+        const updatedMessages = isUserAlreadyLast
+          ? [...coreHistory, ...response.messages]
+          : [...coreHistory, ...userCoreMessages, ...response.messages];
         await db.update(projects)
           .set({ uiMessages: updatedMessages })
           .where(eq(projects.id, projectId));
