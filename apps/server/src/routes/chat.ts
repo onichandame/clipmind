@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { projectOutlines, editingPlans, assets, projects } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
-import { streamText, tool, convertToModelMessages, UIMessage, isStepCount, hasToolCall } from "ai";
+import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
 import { db } from "../db";
@@ -128,7 +128,7 @@ app.post("/", async (c) => {
   const result = streamText({
     model, system: finalSystemPrompt, messages: safeMessages,
     maxRetries: 3,
-    stopWhen: [isStepCount(MAX_STEPS), hasToolCall('generateEditingPlan')],
+    stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')],
 
     // 硬约束：利用 prepareStep 在执行流中动态拦截，防止 Agent 哑火
     prepareStep: async ({ stepNumber }) => {

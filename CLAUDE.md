@@ -66,8 +66,8 @@ MySQL + Qdrant (vector search)
 ### Vercel AI SDK / ReAct loop
 
 - `MAX_STEPS` is 20; the tool chain (`search_assets → search_clips → manage_footage_basket → updateOutline → generateEditingPlan`) easily exceeds 10 steps with retries
-- Always pair `stopWhen: [isStepCount(MAX_STEPS), hasToolCall('generateEditingPlan')]` — `stopWhen` is OR logic
-- `hasToolCall` is imported from `'ai'`, same package as `isStepCount`
+- Always pair `stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')]` — `stopWhen` is OR logic
+- `hasToolCall` is imported from `'ai'`, same package as `stepCountIs`
 - `prepareStep` references the `MAX_STEPS` constant; do not hardcode step numbers
 - LLMs output unpredictable key casing (`endtime` vs `endTime`); always use `z.preprocess` to normalize before Zod validation
 
