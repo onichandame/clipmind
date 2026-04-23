@@ -76,8 +76,12 @@ export async function upsertVectors(points: { id: string, vector: number[], payl
 }
 
 // Minimum cosine similarity to be considered a meaningful match (text-embedding-3-small, [0,1])
-const ASSET_SCORE_THRESHOLD = 0.5;  // macro asset search: moderate precision
-const CLIP_SCORE_THRESHOLD = 0.4;   // micro clip search: higher recall within pre-filtered assets
+// Asset search uses a low threshold (0.3) because short keyword queries have asymmetrically
+// lower cosine similarity against long summary texts; false negatives are worse than false
+// positives here since the LLM can discard irrelevant results.
+const ASSET_SCORE_THRESHOLD = 0.3;
+// Clip search is already filtered to pre-selected assets, so a stricter threshold is safe.
+const CLIP_SCORE_THRESHOLD = 0.4;
 
 export async function searchVectors(queryVector: number[], topK: number = 20, collectionName: string = QDRANT_CHUNKS_COLLECTION) {
   const config = getQdrantConfig();
