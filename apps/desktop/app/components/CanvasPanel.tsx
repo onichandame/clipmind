@@ -128,8 +128,8 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     const hasPlan = (projectData?.project?.editingPlans?.length || 0) > 0 || optPlans.length > 0;
 
     const stepOrder = workflowMode === 'material'
-      ? ['footage', 'outline', 'plan']   // 素材驱动：素材→热点→剪辑
-      : ['outline', 'footage', 'plan'];  // 热点驱动：热点→素材→剪辑
+      ? ['footage', 'outline', 'plan']   // 素材驱动：素材→策划→剪辑
+      : ['outline', 'footage', 'plan'];  // 策划驱动：策划→素材→剪辑
 
     // 按依赖链找到第一个未完成步骤；全部完成则默认展开最后一步（剪辑方案）
     const activeStep = stepOrder.find(step => {
@@ -275,7 +275,7 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
     editorProps: {
       attributes: {
         // FIX: 移除强绑定的 prose-invert，改为 dark:prose-invert 让 @tailwindcss/typography 支持双态
-        class: "prose prose-zinc dark:prose-invert max-w-none focus:outline-none transition-colors duration-200",
+        class: "prose prose-sm prose-zinc dark:prose-invert max-w-none focus:outline-none transition-colors duration-200",
       },
     },
     onUpdate: ({ editor }) => {
@@ -399,12 +399,12 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
                       </div>
                       {workflowMode === 'material' ? (
                         <>
-                          <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待素材就绪…</h3>
+                          <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待素材就绪…</h3>
                           <p className="text-zinc-500 dark:text-zinc-400 text-sm">先在上方选好素材，再在左侧告诉我视频目标，大纲会自动生成</p>
                         </>
                       ) : (
                         <>
-                          <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待灵感降临…</h3>
+                          <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待灵感降临…</h3>
                           <p className="text-zinc-500 dark:text-zinc-400 text-sm">在左侧告诉我想做什么，我会结合今日热点为你生成拍摄大纲</p>
                         </>
                       )}

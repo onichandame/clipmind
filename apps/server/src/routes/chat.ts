@@ -217,7 +217,7 @@ app.post("/", async (c) => {
         }
       }),
       updateOutline: tool({
-        description: "生成、覆盖或修改当前的视频 Markdown 大纲。注意：你必须提供 contentMd 参数。",
+        description: "生成、覆盖或修改当前的视频 Markdown 大纲。注意：你必须提供 contentMd 参数。大纲格式规范：使用 `##` 作为主章节、`###` 作为子章节，禁止使用 `#`（项目标题已在 UI 层单独展示）。",
         inputSchema: z.object({ contentMd: z.string().describe('最新版本的完整 Markdown 内容') }).strict(),
         execute: async (args) => {
           try {

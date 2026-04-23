@@ -156,8 +156,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
               // [Arch] 根据 workflowMode 动态排列步骤顺序，与 CanvasPanel.tsx 保持一致
               const workflowMode = projectData?.project?.workflowMode;
               const stepOrder = workflowMode === 'material'
-                ? ['footage', 'outline', 'plan']   // 素材驱动：素材→热点→剪辑
-                : ['outline', 'footage', 'plan'];  // 热点驱动：热点→素材→剪辑
+                ? ['footage', 'outline', 'plan']   // 素材驱动：素材→策划→剪辑
+                : ['outline', 'footage', 'plan'];  // 策划驱动：策划→素材→剪辑
 
               // 按依赖链判断活动项：按 stepOrder 顺序，第一个未完成的步骤为 active
               let dynamicActiveId: string | null = null;
@@ -169,8 +169,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
               const STEP_NUMS = ['①', '②', '③'];
               const stepTextLabels: Record<string, Record<string, string>> = {
-                material: { outline: '策划大纲', footage: '上传素材', plan: '剪辑方案' },
-                idea:     { outline: '策划热点', footage: '匹配素材', plan: '剪辑方案' },
+                material: { outline: '策划大纲', footage: '挑选素材', plan: '剪辑方案' },
+                idea:     { outline: '策划大纲', footage: '挑选素材', plan: '剪辑方案' },
               };
               const modeKey = workflowMode === 'material' ? 'material' : 'idea';
               const pillsData = stepOrder.map((id, index) => ({
