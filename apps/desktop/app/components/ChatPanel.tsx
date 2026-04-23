@@ -45,7 +45,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const revalidator = useRevalidator();
   const autoTriggeredRef = useRef<Record<string, boolean>>({});
 
-  const { messages, setMessages, sendMessage, regenerate, status, } = useChat({
+  const { messages, sendMessage, regenerate, status, } = useChat({
     id: projectId,
 
 
@@ -111,16 +111,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   // 当前架构已将持久化收敛至后端，前端仅需等待重新拉取即可。
   // (旧版拦截 ToolCall 处理 RAG 数据的反模式代码已彻底移除)
 
-  // 3. 状态强制同步 (SPA 刚需)
-  // Vercel AI SDK 会在内存中按 id 缓存对话。在路由切换或热更新中，
-  // initialMessages 会被旧的空缓存覆盖。
-  // 因此，使用 setMessages 强制同步外部服务端状态，是正确的同步模式。
+  // 切项目时由 WorkspaceLayout 的 key={project.id} 触发重挂载，useChat 会以新 startingMessages 重置。
+  // 此处只负责挂载初始化：清空该项目残留的 canvas 状态。
   useEffect(() => {
-    setMessages(startingMessages);
-    // 架构师干预：斩草除根。切换项目时强行清空该项目大纲内存，防止幽灵状态。
     useCanvasStore.getState().setOutlineContent(projectId, "", "system");
     useCanvasStore.getState().clearDirtyState(projectId);
-  }, [projectId, initialMessages.length]);
+  }, [projectId]);
 
   // 热点创作自动触发：仅当会话恰好只有一条 user 消息时（热点播种场景），
   // 立即触发 AI 回复，无需用户手动发送。

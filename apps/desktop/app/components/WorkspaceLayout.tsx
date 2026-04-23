@@ -26,7 +26,7 @@ interface WorkspaceLayoutProps {
     <div className="flex h-full w-full overflow-hidden transition-colors duration-200">
       {/* FIX: ChatPanel 容器调整为 30%，添加最小和最大宽度保护 */}
       <div className="w-[30%] min-w-[320px] max-w-[420px] h-full flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800/60 bg-zinc-50 dark:bg-zinc-900/20 transition-colors duration-200">
-        <ChatPanel projectId={project.id} initialMessages={initialMessages} />
+        <ChatPanel key={project.id} projectId={project.id} initialMessages={initialMessages} />
       </div>
 
       {/* FIX: 彻底移除原有的 w-px bg-gray-300 丑陋分割线 */}
