@@ -35,6 +35,8 @@ app.post("/", async (c) => {
     const assetId = id || crypto.randomUUID();
 
     // 将资产信息及多轨流媒体链接全量落盘到 MySQL
+    const initialAsrStatus = audioOssUrl ? 'pending' : 'skipped';
+
     await db.insert(assets).values({
       id: assetId,
       filename: filename,
@@ -44,23 +46,25 @@ app.post("/", async (c) => {
       fileSize: fileSize || 0,
       duration: duration || 0,
       status: 'ready',
-      asrStatus: 'pending'
+      asrStatus: initialAsrStatus
     });
 
     console.log(`✅ Webhook 触发成功：已将 ${filename} 写入数据库！`);
 
     // 💡 异步触发 ASR 任务 (不阻塞 Webhook 响应)
-    console.log(`[DEBUG: OSS-Callback] 4. 准备动态导入 aliyun-asr 模块...`);
-    import('../utils/aliyun-asr').then(({ submitAliyunAsrTask }) => {
-      console.log(`[DEBUG: OSS-Callback] 5. 模块导入成功，正在调用 submitAliyunAsrTask`);
-      // 架构师纠偏：必须传给阿里云降维后的音频轨道 audioOssUrl，而不是视频主轨
-      const targetAudioUrl = audioOssUrl || ossUrl;
-      submitAliyunAsrTask(assetId, targetAudioUrl).catch(err => {
-        console.error("[DEBUG: OSS-Callback] ❌ submitAliyunAsrTask 内部抛出异常:", err);
+    if (!audioOssUrl) {
+      console.log(`[OSS-Callback] 5.5 audioOssUrl 为空（无音频轨），跳过 ASR，asrStatus=skipped`);
+    } else {
+      console.log(`[DEBUG: OSS-Callback] 4. 准备动态导入 aliyun-asr 模块...`);
+      import('../utils/aliyun-asr').then(({ submitAliyunAsrTask }) => {
+        console.log(`[DEBUG: OSS-Callback] 5. 模块导入成功，正在调用 submitAliyunAsrTask`);
+        submitAliyunAsrTask(assetId, audioOssUrl).catch(err => {
+          console.error("[DEBUG: OSS-Callback] ❌ submitAliyunAsrTask 内部抛出异常:", err);
+        });
+      }).catch(err => {
+        console.error("[DEBUG: OSS-Callback] ❌ 动态导入 aliyun-asr 失败:", err);
       });
-    }).catch(err => {
-      console.error("[DEBUG: OSS-Callback] ❌ 动态导入 aliyun-asr 失败:", err);
-    });
+    }
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,

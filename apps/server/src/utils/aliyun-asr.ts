@@ -28,12 +28,12 @@ export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) 
     const client = new Core({
       accessKeyId: serverConfig.ALIYUN_ACCESS_KEY_ID,
       accessKeySecret: serverConfig.ALIYUN_ACCESS_KEY_SECRET,
-      endpoint: 'https://filetrans.cn-shanghai.aliyuncs.com',
+      endpoint: 'https://filetrans.cn-shenzhen.aliyuncs.com',
       apiVersion: '2018-08-17'
     });
 
     // 核心修复：自动签发具有时效性的公网可达 URL (7200秒/2小时有效)
-    const signedAudioUrl = ossClient.signatureUrl(audioOssUrl, { expires: 7200 });
+    const signedAudioUrl = ossClient.signatureUrl(audioOssUrl, { expires: 7200, secure: true });
     console.log(`[DEBUG: Aliyun-ASR] 1.5. 成功签发 OSS 临时访问链接: ${signedAudioUrl.split('?')[0]}?Expires=...`);
 
     const task = {
