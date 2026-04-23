@@ -9,6 +9,7 @@ import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
 import { ossClient } from "../utils/oss";
 import { globalHotTopicsCache } from "../utils/hot-topics";
+import { MATERIAL_MODE_PROMPT_CONTEXT, IDEA_MODE_PROMPT_CONTEXT } from "../utils/workflow-copy";
 
 const app = new Hono();
 
@@ -22,6 +23,13 @@ app.post("/", async (c) => {
 
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
   let dynamicSystemPrompt = SYSTEM_PROMPT;
+
+  // 注入工作流模式上下文，引导 AI 针对当前创作模式给出合适的响应
+  if (currProject.workflowMode === 'material') {
+    dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${MATERIAL_MODE_PROMPT_CONTEXT}\n\n`;
+  } else if (currProject.workflowMode === 'idea') {
+    dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${IDEA_MODE_PROMPT_CONTEXT}\n\n`;
+  }
 
   // 动态注入每日全网热点情报作为 RAG 上下文雏形
   dynamicSystemPrompt += `\n\n${globalHotTopicsCache}\n\n`;

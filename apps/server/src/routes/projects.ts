@@ -3,6 +3,7 @@ import { db } from '../db';
 import { projects, projectOutlines, editingPlans, assets } from '@clipmind/db/schema';
 import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { ossClient } from '../utils/oss';
+import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
 
 const app = new Hono();
 
@@ -29,7 +30,7 @@ app.get('/', async (c) => {
 app.post('/', async (c) => {
   try {
           const newId = crypto.randomUUID();
-          const GREETING = "你好！我是 ClipMind，请在右侧选择你的创作起点。";
+          const GREETING = INITIAL_GREETING;
 
           // 1. 物理创建项目记录（包含初始 Greeting 消息）
     // [Arch] 读写分离：使用纯净 CoreMessage 结构入库
@@ -285,6 +286,32 @@ app.patch('/:id', async (c) => {
           return c.json({ error: 'Invalid workflowMode' }, 400);
         }
         updatePayload.workflowMode = body.workflowMode;
+
+        // Append a mode-specific follow-up assistant message on first mode selection.
+        // Dedup guard: only appends if the identical message is not already present.
+        if (body.workflowMode === 'material' || body.workflowMode === 'idea') {
+          const [current] = await db
+            .select({ uiMessages: projects.uiMessages })
+            .from(projects)
+            .where(eq(projects.id, id))
+            .limit(1);
+
+          if (current) {
+            const existingMessages = (current.uiMessages as any[]) || [];
+            const followupContent = body.workflowMode === 'material'
+              ? MATERIAL_MODE_FOLLOWUP
+              : IDEA_MODE_FOLLOWUP;
+            const alreadyPresent = existingMessages.some(
+              (m: any) => m.role === 'assistant' && m.content === followupContent
+            );
+            if (!alreadyPresent) {
+              updatePayload.uiMessages = [
+                ...existingMessages,
+                { role: 'assistant', content: followupContent },
+              ];
+            }
+          }
+        }
       }
 
       // [Arch] 允许更新精挑素材篮子 (Asset 级别)
