@@ -183,10 +183,15 @@ app.get('/:id', async (c) => {
     if (projectData.editingPlans && Array.isArray(projectData.editingPlans)) {
       for (const plan of projectData.editingPlans) {
         if (!plan.clips || !Array.isArray(plan.clips)) continue;
+        console.log(`\n[PROBE-ENRICH] plan "${plan.title}" clips: ${plan.clips.length}`);
+        plan.clips.forEach((clip: any, i: number) => {
+          console.log(`  clip[${i}] clipType=${clip.clipType ?? '(unset)'} assetId=${clip.assetId ?? '(none)'}`);
+        });
         const assetIds = plan.clips
           .map((clip: any) => clip.assetId)
           .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
-        if (assetIds.length === 0) continue;
+        console.log(`[PROBE-ENRICH] assetIds to lookup: [${assetIds.join(', ')}]`);
+        if (assetIds.length === 0) { console.log(`[PROBE-ENRICH] ⚠️ no assetIds → enrichment skipped`); continue; }
 
         const assetRows = await db.select({
           id: assets.id,
@@ -196,12 +201,14 @@ app.get('/:id', async (c) => {
         }).from(assets).where(inArray(assets.id, assetIds));
 
         const assetMap = new Map(assetRows.map((a: any) => [a.id, a]));
+        console.log(`[PROBE-ENRICH] DB returned ${assetRows.length}/${assetIds.length} assets`);
 
         for (const clip of plan.clips) {
           if (!clip.assetId) continue;
           const asset = assetMap.get(clip.assetId);
-          if (!asset) continue; // graceful degradation for dangling assetId
+          if (!asset) { console.log(`[PROBE-ENRICH] ❌ assetId=${clip.assetId} not found in DB`); continue; }
           clip.fileName = asset.filename;
+          console.log(`[PROBE-ENRICH] ✅ enriched clip assetId=${clip.assetId} → fileName=${asset.filename} thumbnailUrl=${asset.thumbnailUrl ? 'set' : 'null'} ossUrl=${asset.ossUrl ? 'set' : 'null'}`);
           if (asset.thumbnailUrl) {
             clip.thumbnailUrl = ossClient.signatureUrl(asset.thumbnailUrl, { expires: 7200 });
           }

@@ -63,6 +63,9 @@ export function EditingPlanCard({ plan, onPushToEditor }: EditingPlanCardProps) 
           // Determine clip type: explicit broll, footage (has assetId), or legacy
           const isBroll = clip.clipType === 'broll';
           const isFootage = clip.clipType === 'footage' || (!clip.clipType && !!clip.assetId);
+
+          // Skip broll clips with no matched asset
+          if (isBroll && !clip.assetId) return null;
           const isLegacy = !isBroll && !isFootage;
 
           const thumbUrl = clip.thumbnailUrl;

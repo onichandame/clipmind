@@ -191,8 +191,10 @@ app.post("/", async (c) => {
               clips: args.clips
             };
             console.log(`\n======================================`);
-            console.log(`📍 [PROBE 1 - WRITE] 准备落盘 EditingPlan!`);
-            console.log(`[Payload 预览]:`, JSON.stringify(insertPayload).slice(0, 150) + "...");
+            console.log(`📍 [PROBE 1 - WRITE] 准备落盘 EditingPlan! clips: ${args.clips.length}`);
+            args.clips.forEach((clip: any, i: number) => {
+              console.log(`  clip[${i}] clipType=${clip.clipType ?? '(unset)'} assetId=${clip.assetId ?? '(none)'} startTime=${clip.startTime} endTime=${clip.endTime}`);
+            });
 
             await db.insert(editingPlans).values(insertPayload);
             console.log(`📍 [PROBE 1.5 - WRITE SUCCESS] 数据库写入无报错！`);
@@ -324,6 +326,9 @@ app.post("/", async (c) => {
             }));
 
             console.log(`[RAG-Micro] 精搜命中 ${clips.length} 个特定切片。`);
+            clips.forEach((c: any, i: number) => {
+              console.log(`  [RAG-Micro] clip[${i}] assetId=${c.assetId ?? '(none)'} startTime=${c.startTime} endTime=${c.endTime}`);
+            });
             return { success: true, clips };
           } catch (error: any) {
             console.error("❌ search_clips 微观检索失败:", error);
