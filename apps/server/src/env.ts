@@ -21,7 +21,6 @@ const serverEnvSchema = z.object({
   FIRECRAWL_API_KEY: z.string().optional(),
   HOTSPOTS_CRON_SCHEDULE: z.string().default('0 5 * * *'),
   HOTSPOTS_MIN_CORPUS: z.coerce.number().int().min(1).default(5),
-  HOTSPOTS_LLM_MODEL: z.string().default('gpt-4.1'),
   HOTSPOTS_MAX_ITEMS: z.coerce.number().int().min(1).default(20),
 });
 

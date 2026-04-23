@@ -6,7 +6,7 @@ import { db } from '../db';
 import { hotspots } from '@clipmind/db/schema';
 import { googleSearch } from '../utils/searchapi';
 import { scrapeWebpage } from '../utils/firecrawl';
-import { getAIProvider } from '../utils/ai';
+import { createAIModel } from '../utils/ai';
 import { buildHotspotsPrompt } from '../utils/hotspots-prompt';
 import { serverConfig } from '../env';
 
@@ -181,8 +181,7 @@ export async function runHotspotsPipeline(): Promise<{ inserted: number; batchId
     const prompt = buildHotspotsPrompt(corpusMarkdown, existingCategories);
 
     console.log('[Hotspots] 调用大模型结构化理解...');
-    const provider = getAIProvider();
-    const model = provider.chat(serverConfig.HOTSPOTS_LLM_MODEL);
+    const model = createAIModel();
 
     const { object } = await generateObject({
       model,
