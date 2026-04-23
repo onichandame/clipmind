@@ -148,6 +148,17 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   const isLoading = status === "streaming" || status === "submitted";
 
+  const lastMessage = messages[messages.length - 1];
+  const lastIsUser = lastMessage?.role === "user";
+  const lastAssistantHasContent =
+    lastMessage?.role === "assistant" &&
+    !!lastMessage.parts?.some(
+      (p: any) =>
+        (p.type === "text" && p.text?.length > 0) || isToolUIPart(p)
+    );
+  const showThinking =
+    isLoading && (lastIsUser || (lastMessage?.role === "assistant" && !lastAssistantHasContent));
+
               // --- Pills 状态机 (SSOT) ---
               const hasOutline = !!outlineContent;
               // [Arch] 废弃脆弱的 Zustand 快照，强制使用 React Query 缓存作为读链路真理源
@@ -306,6 +317,19 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
             </div>
           );
         })}
+        {showThinking && (
+          <div className="flex justify-start">
+            <div className="w-7 h-7 mt-1 rounded-lg bg-indigo-600 flex items-center justify-center mr-3 flex-shrink-0 shadow-sm transition-colors">
+              <span className="text-[12px] text-white font-semibold transition-colors">C</span>
+            </div>
+            <div className="max-w-[85%] px-4 py-2.5 text-[13px] leading-relaxed bg-zinc-100/50 dark:bg-zinc-800/40 text-zinc-800 dark:text-zinc-200 rounded-2xl rounded-tl-sm border border-zinc-200/60 dark:border-zinc-700/40 shadow-sm">
+              <div className="flex items-center gap-2 text-indigo-500 dark:text-indigo-400">
+                <div className="animate-spin h-4 w-4 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                <span className="text-sm font-medium">智能体思考中…</span>
+              </div>
+            </div>
+          </div>
+        )}
         <div ref={messagesEndRef} />
       </div>
 
