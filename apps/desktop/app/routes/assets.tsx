@@ -1,6 +1,7 @@
 import { env } from '../env';
 import { Button } from "../components/Button";
 import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
+import { AssetDetailModal } from "../components/AssetDetailModal";
 import { useState, useEffect } from "react";
 import { useRevalidator, useLoaderData } from "react-router";
 import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud, Trash2 } from "lucide-react";
@@ -9,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 // 资产数据的 TypeScript 定义，需与后端 Drizzle Schema 对应
-interface Asset {
+export interface Asset {
   id: string;
   filename: string;
   objectKey: string;
@@ -18,6 +19,7 @@ interface Asset {
   duration: number;
   status: 'ready' | 'processing' | 'error';
   createdAt: string;
+  summary?: string | null;
 }
 
 // 辅助函数：格式化时长 (秒 -> MM:SS)
@@ -100,6 +102,7 @@ export default function AssetsLibrary() {
   }, []);
 
   const [deletingAsset, setDeletingAsset] = useState<{ id: string, filename: string } | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
 
   const handleDeleteClick = (e: React.MouseEvent, id: string, filename: string) => {
     e.stopPropagation();
@@ -210,6 +213,9 @@ export default function AssetsLibrary() {
             ))}
           </div>
         )}
+        {selectedAsset && (
+          <AssetDetailModal asset={selectedAsset} onClose={() => setSelectedAsset(null)} />
+        )}
         {deletingAsset && (
           <DeleteConfirmModal
             title="确认删除素材？"
@@ -226,7 +232,7 @@ export default function AssetsLibrary() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {assets.map((asset) => (
-              <div key={asset.id} className="group bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 shadow-sm dark:shadow-none">
+              <div key={asset.id} onClick={() => setSelectedAsset(asset)} className="group cursor-pointer bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 shadow-sm dark:shadow-none">
                 <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden transition-colors">
                   {asset.thumbnailUrl ? (
                     <>
