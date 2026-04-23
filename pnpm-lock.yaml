@@ -151,7 +151,7 @@ importers:
         specifier: ^1.11.0
         version: 1.19.13(hono@4.12.12)
       ai:
-        specifier: latest
+        specifier: ^6.0.154
         version: 6.0.158(zod@3.25.76)
       ali-oss:
         specifier: ^6.23.0
