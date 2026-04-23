@@ -75,6 +75,10 @@ export async function upsertVectors(points: { id: string, vector: number[], payl
   if (!res.ok) throw new Error(`Qdrant Upsert failed: ${await res.text()}`);
 }
 
+// Minimum cosine similarity to be considered a meaningful match (text-embedding-3-small, [0,1])
+const ASSET_SCORE_THRESHOLD = 0.5;  // macro asset search: moderate precision
+const CLIP_SCORE_THRESHOLD = 0.4;   // micro clip search: higher recall within pre-filtered assets
+
 export async function searchVectors(queryVector: number[], topK: number = 20, collectionName: string = QDRANT_CHUNKS_COLLECTION) {
   const config = getQdrantConfig();
   // 防御性编程：强制限制最大召回量，防止撑爆大模型 Context
@@ -86,6 +90,7 @@ export async function searchVectors(queryVector: number[], topK: number = 20, co
     body: JSON.stringify({
       vector: queryVector,
       limit: limit,
+      score_threshold: ASSET_SCORE_THRESHOLD,
       with_payload: true
     })
   });
@@ -116,6 +121,7 @@ export async function searchVectorsWithFilter(queryVector: number[], assetIds: s
       vector: queryVector,
       limit: limit,
       filter: filter,
+      score_threshold: CLIP_SCORE_THRESHOLD,
       with_payload: true
     })
   });
