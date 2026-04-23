@@ -58,7 +58,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <div className="flex h-screen w-screen overflow-hidden bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 font-sans tracking-wide transition-colors duration-200">
         <GlobalSidebar />
-        <div className="flex-1 min-w-0 h-full relative">
+        <div className="flex-1 min-w-0 h-full relative overflow-y-auto">
           <Outlet />
         </div>
       </div>
