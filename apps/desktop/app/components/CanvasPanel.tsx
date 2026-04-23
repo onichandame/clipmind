@@ -466,7 +466,19 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
               };
 
               return (
-                <AccordionSection key="footage" id="footage" title="🎬 挑选素材" activeId={activePanelId} setActiveId={setActivePanelId}>
+                <AccordionSection
+                  key="footage"
+                  id="footage"
+                  title="🎬 挑选素材"
+                  activeId={activePanelId}
+                  setActiveId={setActivePanelId}
+                  badge={selectedIds.length > 0 ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-500/30">
+                      <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z" /></svg>
+                      已精选 {selectedIds.length} · AI 将围绕精选工作
+                    </span>
+                  ) : undefined}
+                >
                   <div className="flex flex-col gap-4 max-h-[65vh] overflow-y-auto pr-2 pb-4 pt-1">
 
                     {/* 0. 极速上传并发管道 Pipeline UI */}
@@ -509,7 +521,7 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
                           onClick={() => queryClient.setQueryData(['project', projectId], (old: any) => old ? { ...old, project: { ...old.project, retrievedAssetIds: [] } } : old)}
                           className="text-[10px] px-2.5 py-1.5 bg-white dark:bg-zinc-800 border border-indigo-200 dark:border-indigo-500/30 rounded shadow-sm hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-colors text-indigo-600 dark:text-indigo-300"
                         >
-                          显示全量
+                          取消聚焦
                         </button>
                       </div>
                     )}
