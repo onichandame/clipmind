@@ -172,12 +172,15 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 ? ['footage', 'outline', 'plan']   // 素材驱动：素材→策划→剪辑
                 : ['outline', 'footage', 'plan'];  // 策划驱动：策划→素材→剪辑
 
-              // 按依赖链判断活动项：按 stepOrder 顺序，第一个未完成的步骤为 active
-              let dynamicActiveId: string | null = null;
-              for (const step of stepOrder) {
-                if (step === 'outline' && !hasOutline) { dynamicActiveId = 'outline'; break; }
-                if (step === 'footage' && !hasFootage) { dynamicActiveId = 'footage'; break; }
-                if (step === 'plan'    && !hasPlan)    { dynamicActiveId = 'plan';    break; }
+              // Active pill = the step currently being worked on.
+              // Advances only when a downstream milestone is reached, not on intermediate data.
+              // 素材驱动: footage active until outline generated → outline active until plan generated → plan
+              // 策划驱动: outline active until footage selected → footage active until plan generated → plan
+              let dynamicActiveId: string;
+              if (workflowMode === 'material') {
+                dynamicActiveId = !hasOutline ? 'footage' : !hasPlan ? 'outline' : 'plan';
+              } else {
+                dynamicActiveId = !hasFootage ? 'outline' : !hasPlan ? 'footage' : 'plan';
               }
 
               const STEP_NUMS = ['①', '②', '③'];
@@ -186,12 +189,13 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 idea:     { outline: '策划大纲', footage: '挑选素材', plan: '剪辑方案' },
               };
               const modeKey = workflowMode === 'material' ? 'material' : 'idea';
+              const activeIndex = stepOrder.indexOf(dynamicActiveId);
               const pillsData = stepOrder.map((id, index) => ({
                 id,
                 num: STEP_NUMS[index],
                 text: stepTextLabels[modeKey][id],
                 isActive: dynamicActiveId === id,
-                isDone: id === 'outline' ? hasOutline : id === 'footage' ? hasFootage : hasPlan,
+                isDone: index < activeIndex,
               }));
 
           return (
