@@ -8,7 +8,6 @@ import { db } from "../db";
 import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
 import { ossClient } from "../utils/oss";
-import { globalHotTopicsCache } from "../utils/hot-topics";
 import { MATERIAL_MODE_PROMPT_CONTEXT, IDEA_MODE_PROMPT_CONTEXT } from "../utils/workflow-copy";
 import { serverConfig } from "../env";
 import { googleSearch } from "../utils/searchapi";
@@ -33,14 +32,6 @@ app.post("/", async (c) => {
   } else if (currProject.workflowMode === 'idea') {
     dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${IDEA_MODE_PROMPT_CONTEXT}\n\n`;
   }
-
-  // 动态注入每日全网热点情报作为 RAG 上下文雏形
-  dynamicSystemPrompt += `\n\n${globalHotTopicsCache}\n\n`;
-
-  // 强制 AI 主动使用热点进行破冰与策划引导
-  dynamicSystemPrompt += `**你的行动指南 (Hot Topics Guidance)**:\n`;
-  dynamicSystemPrompt += `1. **破冰引导**: 当用户不知拍什么，或你们刚刚开始对话时，你必须主动从上述《今日全网热点风向标》中挑选 1-2 个最具短视频传播潜力的热点，向用户抛出话题建议。\n`;
-  dynamicSystemPrompt += `2. **大纲结合**: 当用户要求策划内容时，尽可能结合当日热点的情绪价值或讨论度，帮助用户“蹭流量”。但在回 复中只需提一句“结合了今日的XX热点”，保持对话极简，绝不要大段复述 榜单。\n\n`;
 
   dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
 

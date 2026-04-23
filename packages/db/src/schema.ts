@@ -1,5 +1,5 @@
 // app/db/schema.ts
-import { mysqlTable, varchar, text, int, timestamp, json } from 'drizzle-orm/mysql-core';
+import { mysqlTable, varchar, text, int, timestamp, json, boolean, index } from 'drizzle-orm/mysql-core';
 
 // ==========================================
 // 模块 A：全局资产库 (The Asset Data Layer)
@@ -71,3 +71,27 @@ export const editingPlans = mysqlTable('editing_plans', {
   clips: json('clips'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+// ==========================================
+// 模块 C：热点库 (Hotspot Library)
+// ==========================================
+
+export const hotspots = mysqlTable('hotspots', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  batchId: varchar('batch_id', { length: 36 }).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  category: varchar('category', { length: 40 }).notNull(),
+  title: varchar('title', { length: 200 }).notNull(),
+  description: text('description').notNull(),
+  source: varchar('source', { length: 20 }).notNull(), // xiaohongshu | wechat | douyin | bilibili | mixed
+  sourceUrls: json('source_urls').$type<string[]>().notNull(),
+  heatMetric: varchar('heat_metric', { length: 50 }).notNull(),
+  heatScore: int('heat_score').notNull(),
+  rationale: text('rationale'),
+  rawContext: json('raw_context'),
+  fetchedAt: timestamp('fetched_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  activeByCategory: index('idx_hotspots_active_category').on(t.isActive, t.category, t.heatScore),
+  batchIdx: index('idx_hotspots_batch').on(t.batchId),
+}));

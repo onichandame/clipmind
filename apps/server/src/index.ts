@@ -25,14 +25,16 @@ app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'ClipMind Hono API'
 // 挂载独立业务路由
 app.route('/api/projects', projectsRoute);
 import assetsRoute from './routes/assets';
+import hotspotsRoute from './routes/hotspots';
 import { startDanglingOssCleanupJob } from './jobs/cleanup-dangling-oss';
-import { startHotTopicsJob } from './jobs/fetch-hot-topics';
+import { startHotspotsPipeline } from './jobs/hotspots-pipeline';
 
 app.route('/api/chat', chatRoute);
 app.route('/api/oss-callback', ossCallbackRoute);
 app.route('/api/asr-callback', asrCallbackRoute);
 app.route('/api/upload-token', uploadTokenRoute);
 app.route('/api/assets', assetsRoute);
+app.route('/api/hotspots', hotspotsRoute);
 
 const startServer = async () => {
   try {
@@ -43,8 +45,8 @@ const startServer = async () => {
 
     // 启动定时清理任务防线
     startDanglingOssCleanupJob();
-    // 启动全网热点抓取调度
-    startHotTopicsJob();
+    // 启动热点库采集管道
+    startHotspotsPipeline();
 
     serve({ fetch: app.fetch, port: serverConfig.PORT }, (info) => {
       console.log(`🚀 Server listening on port ${info.port} [CORS Allowed: ${serverConfig.CORS_ORIGIN.join(', ')}]`);
