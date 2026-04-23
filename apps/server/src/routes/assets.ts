@@ -15,7 +15,7 @@ app.get("/", async (c) => {
     // 数据库仅存储 Key，分发层实时生成带有 Expires/Signature 的临时链接 (默认 1 小时有效)
     const mappedAssets = allAssets.map(asset => {
       const sign = (key: string | null) =>
-        key ? ossClient.signatureUrl(key, { expires: 3600 }) : null;
+        key ? ossClient.signatureUrl(key, { expires: 3600, secure: true }) : null;
 
       return {
         ...asset,
