@@ -1,10 +1,11 @@
 import { Link, useLocation } from "react-router";
-import { LayoutGrid, Library, Moon, Sun } from "lucide-react";
+import { LayoutGrid, Library, Flame, Moon, Sun } from "lucide-react";
 import { useState, useEffect } from "react";
 
 export function GlobalSidebar() {
   const location = useLocation();
   const isAssets = location.pathname.startsWith("/assets");
+  const isHotspots = location.pathname.startsWith("/hotspots");
   const [isDark, setIsDark] = useState(false);
 
   // [架构师决断]: 初始化时读取系统 DOM 的实际状态，确保与 root.tsx 的注入一致
@@ -47,6 +48,11 @@ export function GlobalSidebar() {
         <Link to="/assets" title="全局素材库">
           <div className={`w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer transition-all duration-200 ${isAssets ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-sm border border-zinc-200 dark:border-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/40 hover:text-zinc-700 dark:hover:text-zinc-300'}`}>
             <Library className="w-5 h-5" />
+          </div>
+        </Link>
+        <Link to="/hotspots" title="热点库">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer transition-all duration-200 ${isHotspots ? 'bg-white dark:bg-zinc-800 text-orange-500 shadow-sm border border-zinc-200 dark:border-zinc-700/50' : 'text-zinc-500 hover:bg-zinc-200/50 dark:hover:bg-zinc-800/40 hover:text-orange-500 dark:hover:text-orange-400'}`}>
+            <Flame className="w-5 h-5" />
           </div>
         </Link>
       </div>

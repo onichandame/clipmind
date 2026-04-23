@@ -43,8 +43,9 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
   const setEditingPlan = useCanvasStore((s) => s.setEditingPlan);
   const revalidator = useRevalidator();
+  const autoTriggeredRef = useRef<Record<string, boolean>>({});
 
-  const { messages, setMessages, sendMessage, status, } = useChat({
+  const { messages, setMessages, sendMessage, regenerate, status, } = useChat({
     id: projectId,
 
 
@@ -120,6 +121,20 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     useCanvasStore.getState().setOutlineContent(projectId, "", "system");
     useCanvasStore.getState().clearDirtyState(projectId);
   }, [projectId, initialMessages.length]);
+
+  // 热点创作自动触发：仅当会话恰好只有一条 user 消息时（热点播种场景），
+  // 立即触发 AI 回复，无需用户手动发送。
+  useEffect(() => {
+    if (
+      !autoTriggeredRef.current[projectId] &&
+      messages.length === 1 &&
+      messages[0]?.role === 'user' &&
+      status === 'ready'
+    ) {
+      autoTriggeredRef.current[projectId] = true;
+      regenerate({ body: { projectId, currentOutline: outlineContent, isDirty } });
+    }
+  }, [messages.length, status, projectId]);
 
   // 4. 自动滚动到底部 (防抖动与白屏崩溃防线)
   useEffect(() => {
