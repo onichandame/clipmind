@@ -6,7 +6,6 @@ import {
   Trash2,
   Clock,
   LayoutGrid,
-  ShoppingBasket,
   Sparkles
 } from "lucide-react";
 import { useState } from "react";
@@ -132,7 +131,6 @@ export default function Home() {
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500 uppercase transition-colors">
                   <th className="px-6 py-4 font-semibold">项目名称</th>
-                  <th className="px-6 py-4 font-semibold text-center">素材篮</th>
                   <th className="px-6 py-4 font-semibold">更新时间</th>
                   <th className="px-6 py-4"></th>
                 </tr>
@@ -146,12 +144,6 @@ export default function Home() {
                   >
                     <td className="px-6 py-4 font-bold text-zinc-900 dark:text-zinc-200 dark:group-hover:text-white transition-colors">
                       {p.title}
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center justify-center gap-1.5 text-zinc-500 transition-colors">
-                        <ShoppingBasket size={14} className={p.basketCount > 0 ? "text-zinc-800 dark:text-zinc-300" : ""} />
-                        <span className="text-sm">{p.basketCount}</span>
-                      </div>
                     </td>
                     <td className="px-6 py-4 text-sm text-zinc-500 transition-colors">
                       {new Date(p.updatedAt).toLocaleDateString()}

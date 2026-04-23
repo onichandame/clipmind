@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router";
-import { Trash2, ShoppingBasket } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { IconButton } from "./IconButton";
 
 type Project = {
@@ -35,11 +35,6 @@ export function ProjectCard({ project, onDelete }: { project: Project; onDelete:
         {project.title || "未命名项目"}
       </h4>
       <div className="flex items-center gap-3 text-sm text-zinc-500 transition-colors">
-        <span className="flex items-center gap-1">
-          <ShoppingBasket size={14} />
-          {project.basketCount} 段素材
-        </span>
-        <span>•</span>
         <span>{new Date(project.updatedAt).toLocaleDateString()}</span>
       </div>
     </div>
