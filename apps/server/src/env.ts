@@ -17,6 +17,8 @@ const serverEnvSchema = z.object({
   OPENAI_BASE_URL: z.string().url({ message: "OPENAI_BASE_URL 必须是合法的 URL" }),
   QDRANT_URL: z.string().url({ message: "QDRANT_URL 必须是合法的 URL" }),
   QDRANT_API_KEY: z.string().optional(),
+  SEARCHAPI_KEY: z.string().optional(),
+  FIRECRAWL_API_KEY: z.string().optional(),
 });
 
 export const serverConfig = serverEnvSchema.parse(process.env);

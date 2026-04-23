@@ -10,6 +10,9 @@ import { searchVectors } from "../utils/qdrant";
 import { ossClient } from "../utils/oss";
 import { globalHotTopicsCache } from "../utils/hot-topics";
 import { MATERIAL_MODE_PROMPT_CONTEXT, IDEA_MODE_PROMPT_CONTEXT } from "../utils/workflow-copy";
+import { serverConfig } from "../env";
+import { googleSearch } from "../utils/searchapi";
+import { scrapeWebpage } from "../utils/firecrawl";
 
 const app = new Hono();
 
@@ -40,6 +43,14 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `2. **大纲结合**: 当用户要求策划内容时，尽可能结合当日热点的情绪价值或讨论度，帮助用户“蹭流量”。但在回 复中只需提一句“结合了今日的XX热点”，保持对话极简，绝不要大段复述 榜单。\n\n`;
 
   dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
+
+  if (serverConfig.SEARCHAPI_KEY) {
+    dynamicSystemPrompt += `**【网络检索能力】**: 你拥有 \`search_web\` 工具，可实时搜索最新信息。`;
+    if (serverConfig.FIRECRAWL_API_KEY) {
+      dynamicSystemPrompt += `结合 \`fetch_webpage\` 可获取完整的网页正文。`;
+    }
+    dynamicSystemPrompt += `当用户询问当下热点、事实核查、实时资讯等需要互联网知识的问题时，你必须主动调用这些工具，而非依赖训练数据。\n\n`;
+  }
 
   // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
   dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
@@ -317,6 +328,47 @@ app.post("/", async (c) => {
           }
         }
       }),
+
+      ...(serverConfig.SEARCHAPI_KEY ? {
+        search_web: tool({
+          description: "Search the web for up-to-date information on any topic. Use when the user asks about current events, trends, facts, or anything that requires real-world knowledge beyond your training data.",
+          inputSchema: z.object({
+            query: z.string().describe('The search query'),
+          }),
+          execute: async ({ query }) => {
+            try {
+              console.log(`[WebSearch] Searching: "${query}"`);
+              const results = await googleSearch(query);
+              return results
+                .map(r => `<result>\n<title>${r.title}</title>\n<url>${r.link}</url>\n<snippet>${r.snippet}</snippet>\n</result>`)
+                .join('\n');
+            } catch (error: any) {
+              console.error('❌ search_web failed:', error);
+              return { success: false, error: error.message };
+            }
+          },
+        }),
+      } : {}),
+
+      ...(serverConfig.FIRECRAWL_API_KEY ? {
+        fetch_webpage: tool({
+          description: "Fetch and read the full content of one or more web pages. Use after search_web when you need the complete article or page content, not just the snippet.",
+          inputSchema: z.object({
+            url: z.union([z.string(), z.array(z.string())]).describe('A URL or list of URLs to fetch'),
+          }),
+          execute: async ({ url }) => {
+            const urls = Array.isArray(url) ? url : [url];
+            const parts = await Promise.all(
+              urls.map(async (u) => {
+                console.log(`[WebFetch] Reading ${u}`);
+                const content = await scrapeWebpage(u);
+                return `<webpage><url>${u}</url><content>${content ?? 'Failed to fetch content'}</content></webpage>`;
+              }),
+            );
+            return parts.join('\n\n');
+          },
+        }),
+      } : {}),
 
       search_clips: tool({
         description: "【微观检索】在指定的视频资产（assetIds）范围内，深入检索符合条件的台词/画面切片。用于支撑剪辑方案(Editing Plan)的精确排期。注意：必须传入 assetIds 数组进行定向狙击。",
