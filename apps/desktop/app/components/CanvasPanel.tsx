@@ -153,14 +153,13 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
       return res.json();
     },
     onSuccess: (_, variables) => {
-      // [Arch] 悲观更新：网络请求成功后手动写入缓存，避免触发无 queryFn 的 invalidate 崩溃
+      // Immediately reflect the new mode so the UI switches from the selector to the canvas.
       queryClient.setQueryData(['project', projectId], (oldData: any) => {
         if (!oldData) return oldData;
-        return {
-          ...oldData,
-          project: { ...oldData.project, workflowMode: variables }
-        };
+        return { ...oldData, project: { ...oldData.project, workflowMode: variables } };
       });
+      // Refetch to pull in the server-persisted follow-up message.
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
     }
   });
   const retrievedClips = useCanvasStore((s) => s.projects[projectId]?.retrievedClips || []);
@@ -398,8 +397,17 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
                         </svg>
                       </div>
-                      <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待灵感降临...</h3>
-                      <p className="text-zinc-500 dark:text-zinc-400 text-sm">在左侧告诉我想做什么，我会为你生成结构化的视频大纲</p>
+                      {workflowMode === 'material' ? (
+                        <>
+                          <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待素材就绪…</h3>
+                          <p className="text-zinc-500 dark:text-zinc-400 text-sm">先在上方选好素材，再在左侧告诉我视频目标，大纲会自动生成</p>
+                        </>
+                      ) : (
+                        <>
+                          <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">等待灵感降临…</h3>
+                          <p className="text-zinc-500 dark:text-zinc-400 text-sm">在左侧告诉我想做什么，我会结合今日热点为你生成拍摄大纲</p>
+                        </>
+                      )}
                     </div>
                   )}
                 </AccordionSection>

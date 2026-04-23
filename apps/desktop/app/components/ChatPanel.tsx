@@ -167,15 +167,19 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 if (step === 'plan'    && !hasPlan)    { dynamicActiveId = 'plan';    break; }
               }
 
-              const pillsData = stepOrder.map((id) => {
-                const labels: Record<string, { num: string; text: string }> = {
-                  outline: { num: '①', text: '热点' },
-                  footage: { num: '②', text: '素材' },
-                  plan:    { num: '③', text: '剪辑' },
-                };
-                const label = labels[id];
-                return { id, num: label.num, text: label.text, isActive: dynamicActiveId === id, isDone: id === 'outline' ? hasOutline : id === 'footage' ? hasFootage : hasPlan };
-              });
+              const STEP_NUMS = ['①', '②', '③'];
+              const stepTextLabels: Record<string, Record<string, string>> = {
+                material: { outline: '策划大纲', footage: '上传素材', plan: '剪辑方案' },
+                idea:     { outline: '策划热点', footage: '匹配素材', plan: '剪辑方案' },
+              };
+              const modeKey = workflowMode === 'material' ? 'material' : 'idea';
+              const pillsData = stepOrder.map((id, index) => ({
+                id,
+                num: STEP_NUMS[index],
+                text: stepTextLabels[modeKey][id],
+                isActive: dynamicActiveId === id,
+                isDone: id === 'outline' ? hasOutline : id === 'footage' ? hasFootage : hasPlan,
+              }));
 
           return (
             <div className="flex flex-col h-full bg-transparent">
@@ -308,7 +312,13 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       <div className="px-5 py-4 pb-6 bg-transparent">
         <form onSubmit={handleSubmit} className="relative flex items-end">
           <div className="relative w-full flex items-center bg-white dark:bg-zinc-800/60 border border-zinc-300 dark:border-zinc-700/60 hover:border-zinc-400 dark:hover:border-zinc-600 focus-within:border-indigo-500/50 focus-within:bg-zinc-50 dark:focus-within:bg-zinc-800 transition-all rounded-2xl shadow-sm overflow-hidden">
-            <input type="text" name="content" disabled={isLoading || !projectData?.project?.workflowMode} autoComplete="off" placeholder={projectData?.project?.workflowMode ? "输入你想创作的内容..." : "请先在右侧选择创作起点"} className="flex-1 w-full bg-transparent text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-4 py-3.5 focus:outline-none disabled:opacity-50 transition-colors" />
+            <input type="text" name="content" disabled={isLoading || !projectData?.project?.workflowMode} autoComplete="off" placeholder={
+                projectData?.project?.workflowMode === 'material'
+                  ? "素材选好后，告诉我你的视频目标…"
+                  : projectData?.project?.workflowMode === 'idea'
+                    ? "告诉我你想做什么视频，或从热点出发…"
+                    : "请先在右侧选择创作起点"
+              } className="flex-1 w-full bg-transparent text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-4 py-3.5 focus:outline-none disabled:opacity-50 transition-colors" />
             <div className="pr-2 flex-shrink-0">
               <button type="submit" disabled={isLoading || !projectData?.project?.workflowMode} className="p-1.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-50 disabled:bg-zinc-200 dark:disabled:bg-zinc-700 disabled:text-zinc-400 dark:disabled:text-zinc-500">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>
