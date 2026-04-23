@@ -95,10 +95,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
       // 架构师干预：基于深层探针截获的真实结构，精准提取流式大纲
       const outlinePart = last?.parts?.filter(p => isToolUIPart(p)).find((p) => p.type === 'tool-updateOutline');
-      const input = outlinePart?.input as { contentMd: string } | undefined
-      if (input?.contentMd) {
-        setOutlineContent(projectId, input.contentMd, "agent");
-        if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
+      if (outlinePart && (outlinePart.state === 'input-streaming' || outlinePart.state === 'input-available')) {
+        const input = outlinePart.input as { contentMd: string } | undefined;
+        if (input?.contentMd) {
+          setOutlineContent(projectId, input.contentMd, "agent");
+          if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
+        }
       }
     }
   }, [messages, status, setOutlineContent, setActiveMode, projectId]);
@@ -243,19 +245,18 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 })()}
 
                 {/* 2. Tool Invocations 状态渲染 (v6 Parts 适配) */}
-                {message?.parts?.filter((p: any) => p.type === 'tool-invocation' || p.toolCallId || (p.type && p.type.startsWith('tool-'))).map((toolPart: any, index: number) => {
-                  const invocation = toolPart.type === 'tool-invocation' ? toolPart.toolInvocation : toolPart;
-                  const state = invocation.state || toolPart.state;
-                  const toolName = invocation.toolName || toolPart.toolName || toolPart.type;
+                {message?.parts?.filter((p: any) => isToolUIPart(p)).map((toolPart: any, index: number) => {
+                  const state = toolPart.state;
+                  const toolName = toolPart.toolName || toolPart.type;
 
                   // [架构师规范] 精准拦截目标工具，并确保在 prose 外层渲染，防止 Markdown 样式污染
                   if (toolName?.includes('generateEditingPlan')) {
-                    if (state === 'result') {
+                    if (state === 'output-available') {
                       // 检查后端是否明确返回了错误
-                      if (invocation.result && invocation.result.success === false) {
+                      if (toolPart.output && toolPart.output.success === false) {
                         return (
                           <div key={index} className="mt-4 mb-2 p-3 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
-                            ⚠️ 方案解析失败: {invocation.result.error || '未知错误'}
+                            ⚠️ 方案解析失败: {toolPart.output.error || '未知错误'}
                           </div>
                         );
                       }
@@ -265,7 +266,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                           <span className="text-sm font-medium">剪辑方案已生成并保存！🎬</span>
                         </div>
                       );
-                    } else if (state === 'call' || state === 'partial-call') {
+                    } else if (state === 'input-available' || state === 'input-streaming') {
                       // 流式传输过程中的优雅占位
                       return (
                         <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3 animate-pulse">
@@ -276,8 +277,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                     }
                   }
 
-                  // 兼容旧版以及其它工具 (大纲更新、素材检索等)
-                  const isCalling = state === 'streaming' || state === 'input-streaming' || state === 'input-available' || state === 'partial-call';
+                  // 其它工具 (大纲更新、素材检索等)
+                  const isCalling = state === 'input-streaming' || state === 'input-available';
                   const isOutline = toolName?.includes('updateOutline');
                   const isPlan = toolName?.includes('generateEditingPlan');
 

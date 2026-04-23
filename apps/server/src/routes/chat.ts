@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { projectOutlines, editingPlans, assets, projects } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
-import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, SystemModelMessage, hasToolCall } from "ai";
+import { streamText, tool, convertToModelMessages, UIMessage, isStepCount, hasToolCall } from "ai";
 import { z } from "zod";
 import { inArray, eq } from "drizzle-orm";
 import { db } from "../db";
@@ -125,28 +125,17 @@ app.post("/", async (c) => {
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
   const finalSystemPrompt = dynamicSystemPrompt + `\n\n【系统高优先级指令】：在执行完任何工具（Tool）后，你绝对不能静默结束对话。你必须在收到工具结果后，追加一段面向用户的自然语言（Text）说明，告知用户工具的执行结果或下一步建议！`;
-  console.log('--- [Debug] Dynamic System Prompt ---');
-  console.log(finalSystemPrompt);
-  console.log('-------------------------------------');
-
-
   const result = streamText({
     model, system: finalSystemPrompt, messages: safeMessages,
     maxRetries: 3,
-    stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')],
+    stopWhen: [isStepCount(MAX_STEPS), hasToolCall('generateEditingPlan')],
 
     // 硬约束：利用 prepareStep 在执行流中动态拦截，防止 Agent 哑火
-    prepareStep: async ({ stepNumber, messages }) => {
-      // 场景判定：如果已经到了最后一步的边缘（stepNumber 从 0 开始计算）
+    prepareStep: async ({ stepNumber }) => {
       if (stepNumber === MAX_STEPS - 1) {
-        const systemMsg = messages.find(msg => msg.role === `system`) as SystemModelMessage
-        systemMsg.content +=
-          '\r\n【系统高优先级警告】：这是你本次响应的最后一步。当前所有工具已被禁用。你必须立刻根据上文的所有对话历史和已获取的工具结果，输出一段面向用户的最终纯文本总结。严禁直接终止对话。'
         return {
-          // 强制该步无法调用任何工具
           toolChoice: 'none',
-          // 动态注入针对最后一步的强烈指令
-          system: systemMsg
+          system: finalSystemPrompt + '\n\n【系统高优先级警告】：这是你本次响应的最后一步。当前所有工具已被禁用。你必须立刻根据上文的所有对话历史和已获取的工具结果，输出一段面向用户的最终纯文本总结。严禁直接终止对话。',
         };
       }
       return {};
@@ -310,39 +299,6 @@ app.post("/", async (c) => {
       search_clips: tool({
         description: "【微观检索】在指定的视频资产（assetIds）范围内，深入检索符合条件的台词/画面切片。用于支撑剪辑方案(Editing Plan)的精确排期。注意：必须传入 assetIds 数组进行定向狙击。",
         inputSchema: z.object({
-          action: z.enum(['add', 'remove']).describe('操作类型：add(加入篮子), remove(移出篮子)'),
-          assetIds: z.array(z.string()).describe('素材 ID 数组')
-        }),
-        execute: async ({ action, assetIds }) => {
-          try {
-            // 读取当前项目状态
-            const existingProject = await db.select({ selectedAssetIds: projects.selectedAssetIds })
-              .from(projects).where(eq(projects.id, projectId)).limit(1);
-            const currentSelected = existingProject[0]?.selectedAssetIds as string[] || [];
-
-            let nextSelected = [...currentSelected];
-            if (action === 'add') {
-              nextSelected = Array.from(new Set([...nextSelected, ...assetIds]));
-            } else {
-              nextSelected = nextSelected.filter(id => !assetIds.includes(id));
-            }
-
-            // 落盘
-            await db.update(projects)
-              .set({ selectedAssetIds: nextSelected })
-              .where(eq(projects.id, projectId));
-
-            return { success: true, action, count: assetIds.length, totalInBasket: nextSelected.length };
-          } catch (error: any) {
-            console.error("❌ manage_footage_basket 失败:", error);
-            return { success: false, error: error.message };
-          }
-        }
-      }),
-
-      search_clips: tool({
-        description: "【微观检索】在指定的视频资产（assetIds）范围内，深入检索符合条件的台词/画面切片。用于支撑剪辑方案(Editing Plan)的精确排期。注意：必须传入 assetIds 数组进行定向狙击。",
-        inputSchema: z.object({
           query: z.string().describe('具体的台词或微观动作意图'),
           assetIds: z.array(z.string()).describe('目标视频的 ID 数组 (可从选材篮子或 search_assets 中获取)'),
           limit: z.number().min(1).max(20).optional().default(10)
@@ -376,33 +332,17 @@ app.post("/", async (c) => {
         }
       })
     },
+    onStepFinish: async ({ toolResults }) => {
+      if (toolResults?.length) {
+        console.log(`[Step] tools:`, toolResults.map(t => t.toolName).join(', '));
+      }
+    },
     onFinish: async ({ response }) => {
       try {
-        console.log(`[Chat] streamText 结束，开始持久化对话到 Project: ${projectId}`);
-
-        // 获取当前数据库中已有的历史消息
-        const existingProject = await db.select({
-          uiMessages: projects.uiMessages
-        }).from(projects).where(eq(projects.id, projectId)).limit(1);
-
-        if (existingProject.length === 0) {
-          console.warn(`⚠️ [Chat] 未找到对应项目 ${projectId}，放弃持久化。`);
-          return;
-        }
-
-        let existingMessages: UIMessage[] = [];
-        if (existingProject[0].uiMessages && Array.isArray(existingProject[0].uiMessages)) {
-          existingMessages = existingProject[0].uiMessages as UIMessage[];
-        }
-
-        // [Arch] 读写分离重构 (写链路)：100% 底层数据无损落盘。
-        // 写入经过安全清洗的 coreHistory，结合官方规范解析的 userCoreMessages
         const updatedMessages = [...coreHistory, ...userCoreMessages, ...response.messages];
-
         await db.update(projects)
           .set({ uiMessages: updatedMessages })
           .where(eq(projects.id, projectId));
-
         console.log(`[Chat] ✅ 对话持久化成功，当前总消息数: ${updatedMessages.length}`);
       } catch (error) {
         console.error(`❌ [Chat] 对话持久化失败:`, error);

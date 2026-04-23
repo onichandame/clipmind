@@ -66,15 +66,15 @@ MySQL + Qdrant (vector search)
 ### Vercel AI SDK / ReAct loop
 
 - `MAX_STEPS` is 20; the tool chain (`search_assets → search_clips → manage_footage_basket → updateOutline → generateEditingPlan`) easily exceeds 10 steps with retries
-- Always pair `stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')]` — `stopWhen` is OR logic
-- `hasToolCall` is imported from `'ai'`, same package as `stepCountIs`
+- Always pair `stopWhen: [isStepCount(MAX_STEPS), hasToolCall('generateEditingPlan')]` — `stopWhen` is OR logic
+- `hasToolCall` is imported from `'ai'`, same package as `isStepCount`
 - `prepareStep` references the `MAX_STEPS` constant; do not hardcode step numbers
 - LLMs output unpredictable key casing (`endtime` vs `endTime`); always use `z.preprocess` to normalize before Zod validation
 
 ### Storage: two locations for editing plans (do not confuse)
 
-- `editingPlans` **table** (`packages/db/src/schema.ts` line ~63) — actual storage written by `generateEditingPlan`
-- `projects.editingPlans` **JSON column** (schema.ts line ~48) — legacy, never written to by server code
+- `editingPlans` **table** in `packages/db/src/schema.ts` — actual storage written by `generateEditingPlan`
+- `projects.editingPlans` **JSON column** on the `projects` table — legacy, never written to by server code
 
 Always read/write from the table.
 
@@ -117,8 +117,6 @@ Always read/write from the table.
 
 **Do not `select *` on project list queries** — `projects.uiMessages` is a large JSON blob that causes OOM.
 
-**Do not touch `apps/server/src/routes/chat.ts` lines 273–304** — duplicate `search_clips` definition that is a latent bug; the correct definition follows at lines 306–340.
-
 **Do not commit `apps/desktop/src-tauri/bin/ffmpeg-*`** (sidecar binaries).
 
 **Production runtime is `tsx`** (esbuild-based JIT transpile); never run full `tsc` compilation on the server in production — it causes OOM on complex Drizzle+Zod type graphs.
@@ -130,6 +128,17 @@ Always read/write from the table.
 ## Testing Policy
 
 **Do NOT run any tests or typechecks** (e.g., `pnpm --filter desktop typecheck`, `tsc`, unit tests). The user performs e2e testing manually to verify changes. Submit code changes directly for the user's verification.
+
+## AI SDK Knowledge Base
+
+Before editing any file that imports from `'ai'` or `'@ai-sdk/*'`, read the local knowledge base first:
+
+- `docs/ai-sdk/README.md` — quick-reference for correct imports and API names
+- `docs/ai-sdk/backend-patterns.md` — `streamText`, tools, `stopWhen`, `prepareStep`, `onFinish`
+- `docs/ai-sdk/frontend-patterns.md` — `useChat`, typed tool parts, state names
+- `docs/ai-sdk/improvements.md` — known issues and deprecations to avoid repeating
+
+Key gotchas captured there: `isStepCount` (not `stepCountIs`), typed tool parts (`tool-{name}` not `tool-invocation`), and `inputSchema` (not `parameters`).
 
 ## Key Files
 
