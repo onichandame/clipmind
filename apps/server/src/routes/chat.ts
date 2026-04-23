@@ -91,7 +91,7 @@ app.post("/", async (c) => {
                   }
 
                   if (selectedIds.length > 0) {
-                    const selectedNames = involvedAssets.filter(a => selectedIds.includes(a.id)).map(a => `- 【${a.filename}】(ID: ${a.id}) | 内容摘要: ${a.summary || '暂无摘要'}`);
+                    const selectedNames = involvedAssets.filter(a => selectedIds.includes(a.id)).map(a => `- 【${a.filename}】| 内容摘要: ${a.summary || '暂无摘要'}`);
                     dynamicSystemPrompt += `\n- **Selected Assets (User's Pick)**: The user has hand-picked these assets for the final edit:\n${selectedNames.join('\n')}\n`;
                     dynamicSystemPrompt += `> [系统强烈提示]：你必须明确知道用户已经选好了上述具体文件，并深度理解其【内容摘要】。当用户要求构思剧情、修改大纲或生成剪辑方案时，你必须基于这些摘要进行推理！\n`;
                   }
@@ -282,10 +282,13 @@ app.post("/", async (c) => {
             // 过滤已删除素材：Qdrant 向量可能滞后于 DB 删除操作
             const rawAssetIds = rawAssets.map(a => a.assetId);
             const existingAssets = rawAssetIds.length > 0
-              ? await db.select({ id: assets.id }).from(assets).where(inArray(assets.id, rawAssetIds))
+              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(inArray(assets.id, rawAssetIds))
               : [];
             const existingIdSet = new Set(existingAssets.map(a => a.id));
-            const assetsFound = rawAssets.filter(a => existingIdSet.has(a.assetId));
+            const filenameMap = new Map(existingAssets.map(a => [a.id, a.filename]));
+            const assetsFound = rawAssets
+              .filter(a => existingIdSet.has(a.assetId))
+              .map(a => ({ ...a, filename: filenameMap.get(a.assetId) ?? '' }));
 
             // [Arch] 状态持久化：将宏观检索命中的资产ID写入聚合根，驱动前端聚光灯UI
             const hitAssetIds = assetsFound.map(a => a.assetId);
@@ -389,13 +392,21 @@ app.post("/", async (c) => {
             const { searchVectorsWithFilter } = await import("../utils/qdrant");
             const qdrantResults = await searchVectorsWithFilter(vector, assetIds, limit);
 
-            const clips = qdrantResults.map((p: any) => ({
+            const rawClips = qdrantResults.map((p: any) => ({
               score: p.score,
               assetId: p.payload?.assetId,
               text: p.payload?.text,
               startTime: p.payload?.startTime,
               endTime: p.payload?.endTime,
             }));
+
+            // 补充 filename，让 LLM 能以可读名称引用素材而无需展示内部 ID
+            const clipAssetIds = Array.from(new Set(rawClips.map((c: any) => c.assetId).filter(Boolean)));
+            const clipAssets = clipAssetIds.length > 0
+              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(inArray(assets.id, clipAssetIds))
+              : [];
+            const clipFilenameMap = new Map(clipAssets.map(a => [a.id, a.filename]));
+            const clips = rawClips.map((c: any) => ({ ...c, filename: clipFilenameMap.get(c.assetId) ?? '' }));
 
             console.log(`[RAG-Micro] 精搜命中 ${clips.length} 个特定切片。`);
             return {
