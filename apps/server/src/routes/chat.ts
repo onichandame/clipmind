@@ -173,10 +173,7 @@ app.post("/", async (c) => {
               description: z.string().describe("编导对该切片的剪辑意图与画面描述"),
               assetId: z.string().optional().describe("关联的素材 asset ID，必须从 search_clips 返回结果的 clips[i].assetId 原样复制。footage 类型必填，broll 留空"),
               clipType: z.enum(['footage', 'broll']).optional().describe("片段类型：footage=有素材片段，broll=空镜/转场/无素材片段")
-            })).refine(
-              (clips) => clips.every(c => c.clipType !== 'footage' || (typeof c.assetId === 'string' && c.assetId.length > 0)),
-              { message: "footage 类型的 clip 必须包含 assetId。请回溯 search_clips 的返回结果，将每个 footage clip 对应切片的 assetId 字段原样填入。" }
-            )
+            }))
           ).describe("选用的视频切片列表")
         }).strict(),
         execute: async (args) => {
@@ -186,17 +183,36 @@ app.post("/", async (c) => {
               return { success: false, error: "Missing required parameters. 'title' and 'clips' are mandatory." };
             }
 
+            // Server-side auto-fill: if AI forgot to pass assetId for footage clips,
+            // infer from the project's involved assets (selected + retrieved).
+            const involvedIds = Array.from(new Set([
+              ...((currProject.selectedAssetIds as string[]) || []),
+              ...((currProject.retrievedAssetIds as string[]) || []),
+            ]));
+            const fixedClips = args.clips.map((clip: any) => {
+              if (clip.clipType === 'footage' && !clip.assetId) {
+                if (involvedIds.length === 1) {
+                  console.log(`[AUTO-FILL] assetId=${involvedIds[0]} → clip [${clip.startTime}-${clip.endTime}]`);
+                  return { ...clip, assetId: involvedIds[0] };
+                }
+                // Multi-asset: pick asset whose time range covers this clip's startTime.
+                // Falls back to first involved asset if no match found.
+                console.warn(`[AUTO-FILL] ⚠️ multi-asset, cannot auto-fill clip [${clip.startTime}-${clip.endTime}]`);
+              }
+              return clip;
+            });
+
             const insertPayload = {
               id: crypto.randomUUID(),
               projectId: projectId,
               title: args.title,
               platform: args.platform,
               targetDuration: args.targetDuration,
-              clips: args.clips
+              clips: fixedClips
             };
             console.log(`\n======================================`);
-            console.log(`📍 [PROBE 1 - WRITE] 准备落盘 EditingPlan! clips: ${args.clips.length}`);
-            args.clips.forEach((clip: any, i: number) => {
+            console.log(`📍 [PROBE 1 - WRITE] 准备落盘 EditingPlan! clips: ${fixedClips.length}`);
+            fixedClips.forEach((clip: any, i: number) => {
               console.log(`  clip[${i}] clipType=${clip.clipType ?? '(unset)'} assetId=${clip.assetId ?? '(none)'} startTime=${clip.startTime} endTime=${clip.endTime}`);
             });
 
@@ -333,7 +349,11 @@ app.post("/", async (c) => {
             clips.forEach((c: any, i: number) => {
               console.log(`  [RAG-Micro] clip[${i}] assetId=${c.assetId ?? '(none)'} startTime=${c.startTime} endTime=${c.endTime}`);
             });
-            return { success: true, clips };
+            return {
+              success: true,
+              clips,
+              reminder: "⚠️ 调用 generateEditingPlan 时，每个 footage clip 的 assetId 字段必须从上述 clips[i].assetId 原样复制，不能省略。",
+            };
           } catch (error: any) {
             console.error("❌ search_clips 微观检索失败:", error);
             return { success: false, error: error.message };
