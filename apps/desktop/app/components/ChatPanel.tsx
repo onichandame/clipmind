@@ -296,6 +296,20 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                   const isCalling = state === 'input-streaming' || state === 'input-available';
                   const isOutline = toolName?.includes('updateOutline');
                   const isPlan = toolName?.includes('generateEditingPlan');
+                  const isWebSearch = toolName?.includes('search_web');
+                  const isFetchPage = toolName?.includes('fetch_webpage');
+
+                  const callingLabel = isOutline ? "正在构思大纲..."
+                    : isPlan ? "正在生成剪辑方案..."
+                    : isWebSearch ? "正在网络搜索..."
+                    : isFetchPage ? "正在读取网页..."
+                    : "正在检索素材...";
+
+                  const doneLabel = isOutline ? "大纲已同步"
+                    : isPlan ? "剪辑方案生成完毕"
+                    : isWebSearch ? "网络搜索完成"
+                    : isFetchPage ? "网页读取完成"
+                    : "素材检索完成";
 
                   return (
                     <div key={index} className="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-3 py-2 rounded-lg border border-indigo-500/20 my-2 mt-3">
@@ -305,9 +319,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                         <div className="text-lg leading-none">✨</div>
                       )}
                       <span className="text-sm font-medium">
-                        {isCalling
-                          ? (isOutline ? "正在构思大纲..." : isPlan ? "正在生成剪辑方案..." : "正在检索素材...")
-                          : (isOutline ? "大纲已同步" : isPlan ? "剪辑方案生成完毕" : "素材检索完成")}
+                        {isCalling ? callingLabel : doneLabel}
                       </span>
                     </div>
                   );
