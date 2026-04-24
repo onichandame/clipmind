@@ -18,12 +18,10 @@ export function PlanCanvas({ projectId }: PlanCanvasProps) {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-8 bg-zinc-50 dark:bg-zinc-950">
-      <div className="max-w-4xl mx-auto flex flex-col gap-8">
-        {editingPlans.map((plan, idx) => (
-          <EditingPlanCard key={idx} plan={plan} />
-        ))}
-      </div>
+    <div className="flex flex-col gap-8">
+      {editingPlans.map((plan, idx) => (
+        <EditingPlanCard key={idx} plan={plan} />
+      ))}
     </div>
   );
 }

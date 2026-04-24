@@ -136,7 +136,6 @@ Before editing any file that imports from `'ai'` or `'@ai-sdk/*'`, read the loca
 - `docs/ai-sdk/README.md` — quick-reference for correct imports and API names
 - `docs/ai-sdk/backend-patterns.md` — `streamText`, tools, `stopWhen`, `prepareStep`, `onFinish`
 - `docs/ai-sdk/frontend-patterns.md` — `useChat`, typed tool parts, state names
-- `docs/ai-sdk/improvements.md` — known issues and deprecations to avoid repeating
 
 Key gotchas captured there: `isStepCount` (not `stepCountIs`), typed tool parts (`tool-{name}` not `tool-invocation`), and `inputSchema` (not `parameters`).
 
