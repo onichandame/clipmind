@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { projectOutlines, editingPlans, assets, projects } from "@clipmind/db";
+import { projectOutlines, editingPlans, assets, assetChunks, projects } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
@@ -52,19 +52,16 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 【精挑（人工操作）】: 精挑是纯人工操作，**AI 不得替用户执行精挑**。当用户对某个素材满意、或询问如何精挑时，你应明确告知：请在右侧素材面板中点击素材上的"精挑"按钮进行手动精挑。你的职责是推荐与描述，最终的精挑决策权归用户。\n`;
   dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n\n`;
   dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。此规范仅适用于大纲生成，不影响剪辑方案生成。\n\n`;
-  dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片（含 assetId、startTime、endTime），再将这些字段原样传入 \`generateEditingPlan\`。禁止跳过 \`search_clips\` 直接生成方案，否则 assetId 缺失将导致方案无法关联素材。\n\n`;
+  dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
   dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
   // 【剪辑方案格式要求】注入
   dynamicSystemPrompt += `\n\n**【剪辑方案格式要求】**\n`;
-  dynamicSystemPrompt += `1. 每个 clip 必须指定 clipType：\n`;
-  dynamicSystemPrompt += `   - footage：有对应素材的片段，assetId 必填且必须直接从 search_clips 返回结果的 clips[i].assetId 字段原样复制，禁止省略或自造\n`;
-  dynamicSystemPrompt += `   - broll：空镜/转场/无素材片段，assetId 留空\n`;
-  dynamicSystemPrompt += `2. **assetId 传递规则（关键）**：当你调用 search_clips 后，返回的每个切片对象都带有 assetId 字段。在随后调用 generateEditingPlan 时，你选用哪个切片，就必须把那个切片的 assetId 原样写入对应 clip 的 assetId 字段。这是硬约束，违反会导致工具调用失败。\n`;
-  dynamicSystemPrompt += `3. description 字段必须具有直接指导价值：写明镜头意图、画面描述、剪辑手法，而不是笼统概述\n`;
-  dynamicSystemPrompt += `4. 禁止生成无 assetId 的 footage 类型 clip — 如果找不到对应素材，应标记为 broll\n`;
-  dynamicSystemPrompt += `5. text 字段写该片段的台词/旁白/文案内容\n`;
-  dynamicSystemPrompt += `6. 字段名必须严格使用 camelCase：startTime、endTime（不是 starttime 或 endtime）\n`;
-  dynamicSystemPrompt += `7. **【关键】startTime/endTime 是源素材的时间戳，不是成片输出时间轴**：这两个字段必须直接从 search_clips 返回结果的 clips[i].startTime / clips[i].endTime 原样复制。禁止自行推算、归零或累加——这些值是源素材的绝对时间点，用于告知剪辑师从哪段原片截取，与成片的播放顺序无关。\n\n`;
+  dynamicSystemPrompt += `1. 每个 clip 只需要你提供两个创作字段：\n`;
+  dynamicSystemPrompt += `   - text：该片段在成片中呈现的台词 / 旁白 / 字幕文案\n`;
+  dynamicSystemPrompt += `   - description：剪辑意图，必须写明镜头、画面、节奏、转场等具有直接指导价值的信息，不要笼统概述\n`;
+  dynamicSystemPrompt += `2. 若要使用某段源素材，把 search_clips 返回结果中对应切片的 id 字段原样填到 clipId。后端会据此自动补全 assetId、startTime、endTime 及片段类型，你【不需要也禁止】重复输出这些字段。\n`;
+  dynamicSystemPrompt += `3. 对于不依赖具体源素材的片段（空镜、纯旁白、转场、待补录镜头），省略 clipId 即可，后端会自动识别为 broll。\n`;
+  dynamicSystemPrompt += `4. 禁止自造 clipId —— clipId 必须来自 search_clips 的返回结果。\n\n`;
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -161,32 +158,11 @@ app.post("/", async (c) => {
           title: z.string().describe("剪辑方案的标题"),
           platform: z.string().describe("目标发布平台（如抖音、B站、小红书等）"),
           targetDuration: z.number().describe("目标视频时长（秒）"),
-          clips: z.preprocess(
-            (val) => {
-              if (!Array.isArray(val)) return val;
-              return val.map((clip: any) => {
-                const normalized = { ...clip };
-                // 容错：LLM 偶尔输出小写 key（如 endtime → endTime）
-                if ('endtime' in normalized && !('endTime' in normalized)) {
-                  normalized.endTime = normalized.endtime;
-                  delete normalized.endtime;
-                }
-                if ('starttime' in normalized && !('startTime' in normalized)) {
-                  normalized.startTime = normalized.starttime;
-                  delete normalized.starttime;
-                }
-                return normalized;
-              });
-            },
-            z.array(z.object({
-              startTime: z.number().describe("源素材切片的起始时间（毫秒），必须从 search_clips 返回结果原样复制，禁止自行推算"),
-              endTime: z.number().describe("源素材切片的结束时间（毫秒），必须从 search_clips 返回结果原样复制，禁止自行推算"),
-              text: z.string().describe("切片台词内容"),
-              description: z.string().describe("编导对该切片的剪辑意图与画面描述"),
-              assetId: z.string().optional().describe("关联的素材 asset ID，必须从 search_clips 返回结果的 clips[i].assetId 原样复制。footage 类型必填，broll 留空"),
-              clipType: z.enum(['footage', 'broll']).optional().describe("片段类型：footage=有素材片段，broll=空镜/转场/无素材片段")
-            }))
-          ).describe("选用的视频切片列表")
+          clips: z.array(z.object({
+            text: z.string().describe("该片段在成片中呈现的台词 / 旁白 / 字幕文案"),
+            description: z.string().describe("剪辑意图，写明镜头、画面、节奏、转场等具有直接指导价值的信息"),
+            clipId: z.string().optional().describe("源素材切片的 id，必须从 search_clips 返回结果的 clips[i].id 原样复制；若为空镜/转场/纯旁白等不依赖源素材的片段则省略")
+          })).describe("选用的片段列表。只需提供 text/description，以及可选的 clipId 指向源切片；其它字段（assetId、startTime、endTime、clipType）由后端自动补全")
         }).strict(),
         execute: async (args) => {
           try {
@@ -195,23 +171,47 @@ app.post("/", async (c) => {
               return { success: false, error: "Missing required parameters. 'title' and 'clips' are mandatory." };
             }
 
-            // Server-side auto-fill: if AI forgot to pass assetId for footage clips,
-            // infer from the project's involved assets (selected + retrieved).
-            const involvedIds = Array.from(new Set([
-              ...((currProject.selectedAssetIds as string[]) || []),
-              ...((currProject.retrievedAssetIds as string[]) || []),
-            ]));
-            const fixedClips = args.clips.map((clip: any) => {
-              if (clip.clipType === 'footage' && !clip.assetId) {
-                if (involvedIds.length === 1) {
-                  console.log(`[AUTO-FILL] assetId=${involvedIds[0]} → clip [${clip.startTime}-${clip.endTime}]`);
-                  return { ...clip, assetId: involvedIds[0] };
-                }
-                // Multi-asset: pick asset whose time range covers this clip's startTime.
-                // Falls back to first involved asset if no match found.
-                console.warn(`[AUTO-FILL] ⚠️ multi-asset, cannot auto-fill clip [${clip.startTime}-${clip.endTime}]`);
+            // 后端补全：只收 text/description/clipId，其它字段由此处从 assetChunks 查表反查
+            const clipIds = Array.from(new Set(
+              args.clips.map((c: any) => c.clipId).filter((id: any) => typeof id === 'string' && id.length > 0)
+            ));
+            const chunks = clipIds.length > 0
+              ? await db.select({
+                  id: assetChunks.id,
+                  assetId: assetChunks.assetId,
+                  startTime: assetChunks.startTime,
+                  endTime: assetChunks.endTime,
+                }).from(assetChunks).where(inArray(assetChunks.id, clipIds))
+              : [];
+            const chunkMap = new Map(chunks.map(c => [c.id, c]));
+
+            const missing = clipIds.filter(id => !chunkMap.has(id));
+            if (missing.length > 0) {
+              console.warn(`⚠️ [generateEditingPlan] 无效 clipId: ${missing.join(', ')}`);
+              return {
+                success: false,
+                error: `clipId 不存在: ${missing.join(', ')}。请先调用 search_clips 获取有效切片 id，再以原样传入 clipId。`
+              };
+            }
+
+            const enrichedClips = args.clips.map((clip: any) => {
+              if (clip.clipId) {
+                const chunk = chunkMap.get(clip.clipId)!;
+                return {
+                  text: clip.text,
+                  description: clip.description,
+                  clipType: 'footage' as const,
+                  clipId: chunk.id,
+                  assetId: chunk.assetId,
+                  startTime: chunk.startTime,
+                  endTime: chunk.endTime,
+                };
               }
-              return clip;
+              return {
+                text: clip.text,
+                description: clip.description,
+                clipType: 'broll' as const,
+              };
             });
 
             const insertPayload = {
@@ -220,7 +220,7 @@ app.post("/", async (c) => {
               title: args.title,
               platform: args.platform,
               targetDuration: args.targetDuration,
-              clips: fixedClips
+              clips: enrichedClips
             };
             await db.insert(editingPlans).values(insertPayload);
 
@@ -365,6 +365,7 @@ app.post("/", async (c) => {
             const qdrantResults = await searchVectorsWithFilter(vector, assetIds, limit);
 
             const rawClips = qdrantResults.map((p: any) => ({
+              id: p.id,
               score: p.score,
               assetId: p.payload?.assetId,
               text: p.payload?.text,
@@ -384,7 +385,7 @@ app.post("/", async (c) => {
             return {
               success: true,
               clips,
-              reminder: "⚠️ 调用 generateEditingPlan 时，每个 footage clip 的 assetId 字段必须从上述 clips[i].assetId 原样复制，不能省略。",
+              reminder: "⚠️ 调用 generateEditingPlan 时，要使用某切片就把它的 id 字段原样填到对应 clip 的 clipId；其余字段（assetId、startTime、endTime）由后端自动补全，无需你重复传递。",
             };
           } catch (error: any) {
             console.error("❌ search_clips 微观检索失败:", error);
