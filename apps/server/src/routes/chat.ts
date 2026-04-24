@@ -61,7 +61,8 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `3. description 字段必须具有直接指导价值：写明镜头意图、画面描述、剪辑手法，而不是笼统概述\n`;
   dynamicSystemPrompt += `4. 禁止生成无 assetId 的 footage 类型 clip — 如果找不到对应素材，应标记为 broll\n`;
   dynamicSystemPrompt += `5. text 字段写该片段的台词/旁白/文案内容\n`;
-  dynamicSystemPrompt += `6. 字段名必须严格使用 camelCase：startTime、endTime（不是 starttime 或 endtime）\n\n`;
+  dynamicSystemPrompt += `6. 字段名必须严格使用 camelCase：startTime、endTime（不是 starttime 或 endtime）\n`;
+  dynamicSystemPrompt += `7. **【关键】startTime/endTime 是源素材的时间戳，不是成片输出时间轴**：这两个字段必须直接从 search_clips 返回结果的 clips[i].startTime / clips[i].endTime 原样复制。禁止自行推算、归零或累加——这些值是源素材的绝对时间点，用于告知剪辑师从哪段原片截取，与成片的播放顺序无关。\n\n`;
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -176,8 +177,8 @@ app.post("/", async (c) => {
               });
             },
             z.array(z.object({
-              startTime: z.number().describe("切片起始时间（毫秒）"),
-              endTime: z.number().describe("切片结束时间（毫秒）"),
+              startTime: z.number().describe("源素材切片的起始时间（毫秒），必须从 search_clips 返回结果原样复制，禁止自行推算"),
+              endTime: z.number().describe("源素材切片的结束时间（毫秒），必须从 search_clips 返回结果原样复制，禁止自行推算"),
               text: z.string().describe("切片台词内容"),
               description: z.string().describe("编导对该切片的剪辑意图与画面描述"),
               assetId: z.string().optional().describe("关联的素材 asset ID，必须从 search_clips 返回结果的 clips[i].assetId 原样复制。footage 类型必填，broll 留空"),
