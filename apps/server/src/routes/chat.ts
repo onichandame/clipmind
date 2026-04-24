@@ -46,11 +46,12 @@ app.post("/", async (c) => {
   // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
   dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
   dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
-  dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`generate_outline\`, \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
+  dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
   dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`。若涉及素材检索，禁止同时修改大纲。\n`;
   dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n`;
   dynamicSystemPrompt += `- 【精挑（人工操作）】: 精挑是纯人工操作，**AI 不得替用户执行精挑**。当用户对某个素材满意、或询问如何精挑时，你应明确告知：请在右侧素材面板中点击素材上的"精挑"按钮进行手动精挑。你的职责是推荐与描述，最终的精挑决策权归用户。\n`;
-  dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话或大纲策划阶段滥用此工具。\n\n`;
+  dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n\n`;
+  dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。没有摘要时，才可用 \`search_clips\` 检索内容，然后再调用 \`updateOutline\`。\n\n`;
   dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
   // 【剪辑方案格式要求】注入
   dynamicSystemPrompt += `\n\n**【剪辑方案格式要求】**\n`;
