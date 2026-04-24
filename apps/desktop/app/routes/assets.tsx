@@ -4,7 +4,7 @@ import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
 import { AssetDetailModal } from "../components/AssetDetailModal";
 import { useState, useEffect } from "react";
 import { useRevalidator, useLoaderData } from "react-router";
-import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud, Trash2 } from "lucide-react";
+import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud, Trash2, X } from "lucide-react";
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -108,6 +108,7 @@ export default function AssetsLibrary() {
   const jobs = useCanvasStore(s => s.uploadJobs);
   const setJobs = useCanvasStore(s => s.setUploadJobs);
   const updateJob = useCanvasStore(s => s.updateUploadJob);
+  const clearCompletedJobs = useCanvasStore(s => s.clearCompletedUploadJobs);
 
   const handleSelectFiles = async () => {
     // 兼容大写后缀名 (如相机直接导出的 .MOV / .MP4)
@@ -219,29 +220,8 @@ export default function AssetsLibrary() {
     }
   };
 
-  // 架构师注入：任务全完成后的延时清理逻辑 (自动关闭上传区)
-  useEffect(() => {
-    if (jobs.length === 0) return;
-
-    // 检查是否所有任务都已到达终态 ('ready' 或 'error')
-    const allFinished = jobs.every(j => j.status === 'ready' || j.status === 'error');
-
-    if (allFinished) {
-      const timer = setTimeout(() => {
-        // 利用 setState 的回调形式，执行终态双重校验 (防 Race Condition)
-        setJobs(currentJobs => {
-          const stillAllFinished = currentJobs.every(j => j.status === 'ready' || j.status === 'error');
-          if (stillAllFinished) {
-            return []; // 清空任务，从而触发 jobs.length === 0 隐去上传区
-          }
-          return currentJobs; // 期间有新任务加入，放弃清理
-        });
-      }, 3000); // 留出 3 秒展示成功状态的视觉缓冲期
-
-      // 清理函数：如果在 3 秒内 jobs 数组发生变化（如加入新任务），立即撤销销毁计划
-      return () => clearTimeout(timer);
-    }
-  }, [jobs]);
+  // 上传区改为手动关闭：所有任务到达终态 (ready/error) 后显示关闭按钮，用户确认后再清空
+  const allJobsFinished = jobs.length > 0 && jobs.every(j => j.status === 'ready' || j.status === 'error');
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-8 font-sans transition-colors duration-200">
@@ -257,9 +237,20 @@ export default function AssetsLibrary() {
         {/* 极速上传并发管道 Pipeline UI */}
         {jobs.length > 0 && (
           <div className="mb-8 p-4 bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800/80 rounded-xl space-y-3 transition-colors">
-            <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-2 transition-colors">
-              <Activity className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> 上传区
-            </h2>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider flex items-center gap-2 transition-colors">
+                <Activity className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> 上传区
+              </h2>
+              {allJobsFinished && (
+                <button
+                  onClick={clearCompletedJobs}
+                  title="关闭上传区"
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" /> 关闭
+                </button>
+              )}
+            </div>
             {jobs.map(job => (
               <div key={job.id} className="space-y-2">
                 <div className="flex items-center gap-4 bg-white dark:bg-zinc-950 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800/50 shadow-sm dark:shadow-none transition-colors">
