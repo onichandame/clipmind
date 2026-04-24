@@ -3,6 +3,7 @@ use reqwest::{
     Client,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -374,6 +375,9 @@ async fn process_video_asset(
     let mut audio_exit_code: Option<i32> = None;
     // "Stream #X:Y: Audio:" 出现说明源文件有音频轨；用来区分"无音频"和"真错误"
     let mut source_has_audio_stream = false;
+    // 保留 FFmpeg stderr 的尾部，方便非 0 退出时把真实错误原因回传给前端
+    const STDERR_TAIL_CAP: usize = 40;
+    let mut stderr_tail: VecDeque<String> = VecDeque::with_capacity(STDERR_TAIL_CAP);
 
     while let Some(event) = rx_audio.recv().await {
         match event {
@@ -400,6 +404,11 @@ async fn process_video_asset(
                     source_has_audio_stream = true;
                 }
 
+                if stderr_tail.len() == STDERR_TAIL_CAP {
+                    stderr_tail.pop_front();
+                }
+                stderr_tail.push_back(line.trim_end().to_string());
+
                 if last_emit.elapsed() > Duration::from_millis(500) {
                     let _ = app_ffmpeg.emit(
                         "ffmpeg-progress",
@@ -418,10 +427,16 @@ async fn process_video_asset(
 
     if audio_exit_code != Some(0) {
         if source_has_audio_stream {
+            let tail = stderr_tail
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
             return Err(format!(
-                "{} FFmpeg 音频抽取退出码非0: {:?}，音视频分离失败",
+                "{} FFmpeg 音频抽取退出码非0: {:?}，音视频分离失败\n--- FFmpeg stderr (tail) ---\n{}",
                 env_tag(),
-                audio_exit_code
+                audio_exit_code,
+                tail
             ));
         }
         // 无音频流（如飞书快速录屏）——"Output file #0 does not contain any stream"属预期行为

@@ -44,8 +44,10 @@ import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanv
 function ErrorHint({ message }: { message?: string }) {
   const [copied, setCopied] = useState(false);
   const msg = message ?? '';
-  // Rust 侧 env_tag() 会给错误串打上 [macos/<arch>] 前缀；无此前缀则按通用错误处理
+  // Gatekeeper 仅在 spawn / sidecar 初始化失败时触发；FFmpeg 自身退出码非 0 不属于 Gatekeeper 问题，显示原始错误即可
   const isMac = msg.includes('[macos/');
+  const isGatekeeperLike =
+    isMac && (msg.includes('spawn failed') || msg.includes('无法初始化 FFmpeg Sidecar'));
   const cmd = 'sudo xattr -cr /Applications/ClipMind.app';
 
   const handleCopy = async () => {
@@ -58,7 +60,7 @@ function ErrorHint({ message }: { message?: string }) {
     }
   };
 
-  if (isMac) {
+  if (isGatekeeperLike) {
     return (
       <div className="rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 p-4 text-sm">
         <div className="font-medium text-red-900 dark:text-red-200 mb-2">
