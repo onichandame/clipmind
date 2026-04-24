@@ -1,16 +1,14 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { env } from '../env';
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
-import { Menu, ShoppingBasket, ChevronDown, ChevronRight, Film, CheckCircle2, AlertCircle, Activity, Clock } from "lucide-react";
+import { Film, CheckCircle2, AlertCircle, Activity, Clock } from "lucide-react";
 import { useCanvasStore } from "../store/useCanvasStore";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "./Button";
 import { PlanCanvas } from "./canvas/PlanCanvas";
 import { AccordionSection } from "./AccordionSection";
-
-type CanvasMode = "outline" | "footage" | "plan";
 
 interface OutlineData {
   contentMd: string;
@@ -24,15 +22,9 @@ interface CanvasPanelProps {
   onToggleBasket: () => void;
 }
 
-const modeLabels: Record<CanvasMode, string> = {
-  outline: "📝 策划大纲",
-  footage: "🎬 素材检索",
-  plan: "📋 剪辑方案",
-};
-
 
 export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }: CanvasPanelProps) {
-  const { activeMode, setActiveMode, setOutlineContent, activePanelId, setActivePanelId } = useCanvasStore();
+  const { setOutlineContent, activePanelId, setActivePanelId } = useCanvasStore();
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
 
   const queryClient = useQueryClient();
@@ -191,8 +183,6 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
   const jobs = useCanvasStore(s => s.uploadJobs);
   const setJobs = useCanvasStore(s => s.setUploadJobs);
   const updateJob = useCanvasStore(s => s.updateUploadJob);
-
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // 获取全局素材库素材
   const { data: allAssets = [] } = useQuery({
@@ -365,41 +355,8 @@ export function CanvasPanel({ projectId, projectTitle, outline, onToggleBasket }
 
         {/* 右侧：操作区 (与左侧 flex-1 对称以保证中部绝对居中) */}
         <div className="flex-1 flex items-center justify-end gap-2">
-
-          {/* 窄屏态：汉堡菜单唤起按钮 */}
-          <div className="lg:hidden relative">
-            <Button variant="secondary" size="sm" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="px-2">
-              <Menu size={18} />
-            </Button>
-          </div>
         </div>
       </div>
-
-      {/* 窄屏态：汉堡下拉菜单 */}
-      {isMobileMenuOpen && (
-        <div className="absolute top-14 left-0 w-full bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800/50 z-40 flex flex-col p-4 shadow-xl lg:hidden gap-5 animate-in slide-in-from-top-2">
-          <div className="flex flex-col gap-3">
-            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">切换视图</span>
-            <div className="grid grid-cols-1 gap-2">
-              {(["outline", "footage", "plan"] as CanvasMode[]).map((mode) => (
-                <Button
-                  key={mode}
-                  variant={activeMode === mode ? "primary" : "secondary"}
-                  size="md"
-                  fullWidth
-                  onClick={() => {
-                    setActiveMode(mode);
-                    setIsMobileMenuOpen(false);
-                  }}
-                >
-                  {modeLabels[mode]}
-                </Button>
-              ))}
-            </div>
-          </div>
-
-        </div>
-      )}
 
       {/* 主画布区：手风琴任务流 */}
       <div className="flex-1 overflow-y-auto w-full p-6 lg:p-10 bg-zinc-50 dark:bg-zinc-950">
