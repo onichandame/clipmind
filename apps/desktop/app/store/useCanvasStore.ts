@@ -3,7 +3,7 @@ import { create } from 'zustand';
 type CanvasMode = 'outline' | 'footage' | 'plan';
 
 export type JobStatus = 'queued' | 'compressing' | 'uploading' | 'ready' | 'error';
-export interface UploadJob { id: string; filename: string; sourcePath: string; status: JobStatus; progress: number; }
+export interface UploadJob { id: string; filename: string; sourcePath: string; status: JobStatus; progress: number; errorMessage?: string; }
 
 interface ProjectState {
   outlineContent: string;

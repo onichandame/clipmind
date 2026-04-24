@@ -14,6 +14,10 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Semaphore;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+fn env_tag() -> String {
+    format!("[{}/{}]", std::env::consts::OS, std::env::consts::ARCH)
+}
+
 #[tauri::command]
 async fn upload_asset(
     app: AppHandle,
@@ -346,7 +350,7 @@ async fn process_video_asset(
     let (mut rx_audio, _child_audio) = app_ffmpeg
         .shell()
         .sidecar("ffmpeg")
-        .map_err(|e| format!("无法初始化 FFmpeg Sidecar (audio): {}", e))?
+        .map_err(|e| format!("{} 无法初始化 FFmpeg Sidecar (audio): {}", env_tag(), e))?
         .args([
             "-i",
             &local_path_clone,
@@ -363,7 +367,7 @@ async fn process_video_asset(
             "-y",
         ])
         .spawn()
-        .map_err(|e| format!("FFmpeg audio spawn failed: {}", e))?;
+        .map_err(|e| format!("{} FFmpeg audio spawn failed: {}", env_tag(), e))?;
 
     let mut last_emit = Instant::now();
     let mut extracted_duration = 0.0;
@@ -415,7 +419,8 @@ async fn process_video_asset(
     if audio_exit_code != Some(0) {
         if source_has_audio_stream {
             return Err(format!(
-                "FFmpeg 音频抽取退出码非0: {:?}，音视频分离失败",
+                "{} FFmpeg 音频抽取退出码非0: {:?}，音视频分离失败",
+                env_tag(),
                 audio_exit_code
             ));
         }
@@ -430,7 +435,7 @@ async fn process_video_asset(
     let (mut rx_thumb, _child_thumb) = app_ffmpeg
         .shell()
         .sidecar("ffmpeg")
-        .map_err(|e| format!("无法初始化 FFmpeg Sidecar (thumb): {}", e))?
+        .map_err(|e| format!("{} 无法初始化 FFmpeg Sidecar (thumb): {}", env_tag(), e))?
         .args([
             "-ss",
             "00:00:00.500",
@@ -444,7 +449,7 @@ async fn process_video_asset(
             "-y",
         ])
         .spawn()
-        .map_err(|e| format!("FFmpeg thumb spawn failed: {}", e))?;
+        .map_err(|e| format!("{} FFmpeg thumb spawn failed: {}", env_tag(), e))?;
 
     let mut thumb_exit_code: Option<i32> = None;
     while let Some(event) = rx_thumb.recv().await {
@@ -460,10 +465,7 @@ async fn process_video_asset(
         );
     }
 
-    println!(
-        "[Job {}] FFmpeg 双轨分离完毕，准备进入直传队列...",
-        job_id
-    );
+    println!("[Job {}] FFmpeg 双轨分离完毕，准备进入直传队列...", job_id);
 
     // 约束 4: STT 完成后必须释放并发许可
     drop(_permit);
@@ -481,6 +483,8 @@ async fn process_video_asset(
     // 约束 4 & 5: 开启 tokio::spawn 异步上传，不阻塞主流程
     tokio::spawn(async move {
         let client = Client::new();
+        // job_id 会在下方 async 块内被 serde_json::json! 宏 move 走；这里预先留一份给失败分支的事件发射使用
+        let job_id_for_err = job_id.clone();
 
         let async_flow: Result<(), String> = async {
             let token_payload = serde_json::json!({ "filename": filename_clone });
@@ -489,17 +493,21 @@ async fn process_video_asset(
                 .json(&token_payload)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("{} 请求上传 token 失败: {}", env_tag(), e))?
                 .json::<UploadTokenResponse>()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("{} 解析上传 token 响应失败: {}", env_tag(), e))?;
 
             // 轨道 1: 视频直传 (直接读取原始物理文件，实现 0 拷贝和 0 损耗)
             let file = tokio::fs::File::open(&local_path_clone)
                 .await
-                .map_err(|e| format!("无法打开原始视频文件: {}", e))?;
+                .map_err(|e| format!("{} 无法打开原始视频文件: {}", env_tag(), e))?;
 
-            let file_size = file.metadata().await.map_err(|e| e.to_string())?.len();
+            let file_size = file
+                .metadata()
+                .await
+                .map_err(|e| format!("{} 读取视频文件元数据失败: {}", env_tag(), e))?
+                .len();
 
             use futures_util::StreamExt;
             let stream = FramedRead::new(file, BytesCodec::new());
@@ -551,14 +559,16 @@ async fn process_video_asset(
                 .body(body)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("{} 视频直传网络错误: {}", env_tag(), e))?;
 
             if !video_res.status().is_success() {
                 let status = video_res.status();
                 let err_text = video_res.text().await.unwrap_or_default();
                 return Err(format!(
-                    "视频直传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
-                    status, err_text
+                    "{} 视频直传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
+                    env_tag(),
+                    status,
+                    err_text
                 ));
             }
 
@@ -591,8 +601,12 @@ async fn process_video_asset(
             if has_audio {
                 let audio_file = tokio::fs::File::open(&temp_audio)
                     .await
-                    .map_err(|e| format!("无法打开音频文件: {}", e))?;
-                let audio_size = audio_file.metadata().await.map_err(|e| e.to_string())?.len();
+                    .map_err(|e| format!("{} 无法打开音频文件: {}", env_tag(), e))?;
+                let audio_size = audio_file
+                    .metadata()
+                    .await
+                    .map_err(|e| format!("{} 读取音频文件元数据失败: {}", env_tag(), e))?
+                    .len();
                 let audio_stream = FramedRead::new(audio_file, BytesCodec::new());
                 let audio_res = client
                     .put(&token_res.audio_upload_url)
@@ -601,13 +615,15 @@ async fn process_video_asset(
                     .body(reqwest::Body::wrap_stream(audio_stream))
                     .send()
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| format!("{} 音频直传网络错误: {}", env_tag(), e))?;
                 if !audio_res.status().is_success() {
                     let status = audio_res.status();
                     let err_text = audio_res.text().await.unwrap_or_default();
                     return Err(format!(
-                        "音频上传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
-                        status, err_text
+                        "{} 音频上传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
+                        env_tag(),
+                        status,
+                        err_text
                     ));
                 }
                 println!("[Probe-Upload] 音频轨道上传成功");
@@ -632,7 +648,7 @@ async fn process_video_asset(
                 .json(&report_payload)
                 .send()
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("{} 落盘回调请求失败: {}", env_tag(), e))?;
 
             println!(
                 "[Probe-Upload] Hono 报告响应状态码: {}",
@@ -651,6 +667,10 @@ async fn process_video_asset(
 
         if let Err(err) = async_flow {
             eprintln!("[Probe-Error] Cloud upload pipeline failed: {}", err);
+            let _ = app_clone.emit(
+                "upload-error",
+                serde_json::json!({ "id": job_id_for_err, "message": err }),
+            );
         } else {
             println!("[Probe-Upload] 整个上传任务成功结束。");
         }

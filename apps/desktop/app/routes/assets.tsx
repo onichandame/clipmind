@@ -39,6 +39,64 @@ export async function clientLoader() {
 
 import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanvasStore';
 
+// 出错卡片下方的操作指引：识别 macOS 专属失败，直接给用户可复制的绕过命令
+function ErrorHint({ message }: { message?: string }) {
+  const [copied, setCopied] = useState(false);
+  const msg = message ?? '';
+  // Rust 侧 env_tag() 会给错误串打上 [macos/<arch>] 前缀；无此前缀则按通用错误处理
+  const isMac = msg.includes('[macos/');
+  const cmd = 'sudo xattr -cr /Applications/ClipMind.app';
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // 剪贴板不可用时 <code> 仍可 select-all 手动复制
+    }
+  };
+
+  if (isMac) {
+    return (
+      <div className="rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 p-4 text-sm">
+        <div className="font-medium text-red-900 dark:text-red-200 mb-2">
+          macOS Gatekeeper 阻止了 FFmpeg 启动
+        </div>
+        <div className="text-red-800 dark:text-red-300 mb-3">
+          请打开"终端"执行以下命令（会要求输入 Mac 开机密码），然后重新打开 ClipMind 并重试上传：
+        </div>
+        <div className="flex items-center gap-2 mb-3">
+          <code className="flex-1 px-3 py-2 bg-zinc-900 text-zinc-100 rounded font-mono text-xs select-all break-all">
+            {cmd}
+          </code>
+          <button
+            onClick={handleCopy}
+            className={`shrink-0 px-3 py-2 rounded text-xs font-medium transition-colors ${copied ? 'bg-emerald-600 text-white' : 'bg-red-600 hover:bg-red-700 text-white'}`}
+          >
+            {copied ? '已复制' : '复制命令'}
+          </button>
+        </div>
+        <details className="text-xs text-red-700 dark:text-red-400">
+          <summary className="cursor-pointer select-none">技术细节</summary>
+          <code className="mt-2 block p-2 bg-red-100 dark:bg-red-950/50 rounded break-all whitespace-pre-wrap">
+            {msg}
+          </code>
+        </details>
+      </div>
+    );
+  }
+
+  if (!msg) return null;
+  return (
+    <div className="rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 px-3 py-2">
+      <code className="text-xs text-red-700 dark:text-red-300 break-all whitespace-pre-wrap">
+        {msg}
+      </code>
+    </div>
+  );
+}
+
 export default function AssetsLibrary() {
   // 核心变更：从 Loader 中实时获取数据库数据
   const assets = useLoaderData<typeof clientLoader>();
@@ -70,6 +128,7 @@ export default function AssetsLibrary() {
   useEffect(() => {
     let unlistenUpload: () => void;
     let unlistenFFmpeg: () => void;
+    let unlistenError: () => void;
 
     import('@tauri-apps/api/event').then(({ listen }) => {
       // 监听上传进度
@@ -93,11 +152,17 @@ export default function AssetsLibrary() {
           (j.status === 'compressing' && j.progress < 90) ? { ...j, progress: j.progress + 2 } : j
         ));
       }).then(fn => unlistenFFmpeg = fn);
+
+      // 监听后台上传阶段的失败（tokio::spawn 阶段，前台 invoke 已 Ok 返回，只能走事件回流）
+      listen<{ id: string, message: string }>('upload-error', (event) => {
+        updateJob(event.payload.id, { status: 'error', errorMessage: event.payload.message });
+      }).then(fn => unlistenError = fn);
     });
 
     return () => {
       if (unlistenUpload) unlistenUpload();
       if (unlistenFFmpeg) unlistenFFmpeg();
+      if (unlistenError) unlistenError();
     };
   }, []);
 
@@ -145,8 +210,9 @@ export default function AssetsLibrary() {
       // 注意：UI 最终状态的完成 (ready) 和重新拉取 (revalidate) 
       // 会由组件外部监听 'upload-progress' 达 100% 时的事件统一处理。
     } catch (error: any) {
-      updateJob(job.id, { status: 'error' });
-      console.error("处理管道异常中断:", error);
+      const msg = typeof error === 'string' ? error : (error?.message ?? String(error));
+      updateJob(job.id, { status: 'error', errorMessage: msg });
+      console.error("处理管道异常中断:", msg);
     }
   };
 
@@ -192,23 +258,29 @@ export default function AssetsLibrary() {
               <Activity className="w-4 h-4 text-indigo-500 dark:text-indigo-400" /> 上传区
             </h2>
             {jobs.map(job => (
-              <div key={job.id} className="flex items-center gap-4 bg-white dark:bg-zinc-950 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800/50 shadow-sm dark:shadow-none transition-colors">
-                <div className="flex-1 truncate text-sm text-zinc-800 dark:text-zinc-300 transition-colors">{job.filename}</div>
-                <div className="flex-[2] flex items-center gap-3 text-xs">
-                  <span className={`w-28 shrink-0 whitespace-nowrap font-medium ${job.status === 'compressing' ? 'text-amber-400 animate-pulse' : job.status === 'uploading' ? 'text-blue-400' : job.status === 'ready' ? 'text-emerald-400' : 'text-zinc-500'}`}>
-                    {job.status === 'queued' && '等待中...'}
-                    {job.status === 'compressing' && '⚙️ 极速处理中'}
-                    {job.status === 'uploading' && `☁️ 上传中 ${job.progress}%`}
-                    {job.status === 'ready' && '✅ 上传完毕，AI 接管'}
-                    {job.status === 'error' && '❌ 处理失败'}
-                  </span>
-                  <div className="flex-1 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden transition-colors">
-                    <div
-                      className={`h-full transition-all duration-300 ${job.status === 'compressing' ? 'w-full bg-amber-500/50 animate-pulse' : job.status === 'ready' ? 'w-full bg-emerald-500' : 'bg-blue-500'}`}
-                      style={{ width: job.status === 'uploading' ? `${job.progress}%` : undefined }}
-                    />
+              <div key={job.id} className="space-y-2">
+                <div className="flex items-center gap-4 bg-white dark:bg-zinc-950 p-3 rounded-lg border border-zinc-200 dark:border-zinc-800/50 shadow-sm dark:shadow-none transition-colors">
+                  <div className="flex-1 truncate text-sm text-zinc-800 dark:text-zinc-300 transition-colors">{job.filename}</div>
+                  <div className="flex-[2] flex items-center gap-3 text-xs">
+                    <span
+                      title={job.status === 'error' ? job.errorMessage : undefined}
+                      className={`w-28 shrink-0 whitespace-nowrap font-medium ${job.status === 'compressing' ? 'text-amber-400 animate-pulse' : job.status === 'uploading' ? 'text-blue-400' : job.status === 'ready' ? 'text-emerald-400' : 'text-zinc-500'}`}
+                    >
+                      {job.status === 'queued' && '等待中...'}
+                      {job.status === 'compressing' && '⚙️ 极速处理中'}
+                      {job.status === 'uploading' && `☁️ 上传中 ${job.progress}%`}
+                      {job.status === 'ready' && '✅ 上传完毕，AI 接管'}
+                      {job.status === 'error' && '❌ 处理失败'}
+                    </span>
+                    <div className="flex-1 h-1.5 bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden transition-colors">
+                      <div
+                        className={`h-full transition-all duration-300 ${job.status === 'compressing' ? 'w-full bg-amber-500/50 animate-pulse' : job.status === 'ready' ? 'w-full bg-emerald-500' : 'bg-blue-500'}`}
+                        style={{ width: job.status === 'uploading' ? `${job.progress}%` : undefined }}
+                      />
+                    </div>
                   </div>
                 </div>
+                {job.status === 'error' && <ErrorHint message={job.errorMessage} />}
               </div>
             ))}
           </div>
