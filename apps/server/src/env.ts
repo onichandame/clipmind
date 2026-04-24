@@ -11,6 +11,8 @@ const serverEnvSchema = z.object({
   DATABASE_URL: z.string().url({ message: "DATABASE_URL 必须是有效的连接字符串" }),
   ALIYUN_ACCESS_KEY_ID: z.string().min(1, "缺少 ALIYUN_ACCESS_KEY_ID"),
   ALIYUN_ACCESS_KEY_SECRET: z.string().min(1, "缺少 ALIYUN_ACCESS_KEY_SECRET"),
+  ALIYUN_OSS_REGION: z.string().min(1, "缺少 ALIYUN_OSS_REGION"),
+  ALIYUN_OSS_BUCKET: z.string().min(1, "缺少 ALIYUN_OSS_BUCKET"),
   ALIYUN_ASR_APPKEY: z.string().min(1, "缺少 ALIYUN_ASR_APPKEY"),
   PUBLIC_WEBHOOK_DOMAIN: z.string().url({ message: "PUBLIC_WEBHOOK_DOMAIN 必须是合法的 URL" }),
   OPENAI_API_KEY: z.string().min(1, "缺少 OPENAI_API_KEY"),

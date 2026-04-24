@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { db } from '../db';
 import { projects, projectOutlines, editingPlans, assets, hotspots } from '@clipmind/db/schema';
 import { desc, eq, inArray, sql } from 'drizzle-orm';
-import { ossClient } from '../utils/oss';
+import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
 
 const app = new Hono();
@@ -148,9 +148,7 @@ app.get('/:id', async (c) => {
         const clip = projectData.retrievedClips[i];
 
         // 1. 签名缩略图
-        if (clip.thumbnailUrl && !clip.thumbnailUrl.startsWith('http')) {
-          clip.thumbnailUrl = ossClient.signatureUrl(clip.thumbnailUrl, { expires: 7200, secure: true });
-        }
+        clip.thumbnailUrl = signAssetViewUrl(clip.thumbnailUrl);
 
         // 2. 溯源防线：根据 assetId 去底层查出真实视频 ossUrl，并强制签发下载 Header
         if (clip.assetId) {
@@ -161,16 +159,8 @@ app.get('/:id', async (c) => {
             }).from(assets).where(eq(assets.id, clip.assetId));
 
             if (assetRecord && assetRecord.ossUrl) {
-              // 补齐文件名元数据
               clip.filename = assetRecord.filename;
-              // 编码文件名防中文乱码
-              const safeFilename = encodeURIComponent(clip.filename || 'clipmind_video.mp4');
-              clip.videoUrl = ossClient.signatureUrl(assetRecord.ossUrl, {
-                expires: 7200,
-                secure: true,
-                // 注入强制下载响应头，绕过前端 iframe/沙盒预览拦截
-                response: { 'content-disposition': `attachment; filename="${safeFilename}"` }
-              });
+              clip.videoUrl = signAssetDownloadUrl(assetRecord.ossUrl, clip.filename);
             }
           } catch (e) {
             console.error(`🚨 无法为素材切片注入下载链接 (AssetID: ${clip.assetId})`, e);
@@ -202,12 +192,8 @@ app.get('/:id', async (c) => {
           const asset = assetMap.get(clip.assetId);
           if (!asset) continue;
           clip.fileName = asset.filename;
-          if (asset.thumbnailUrl) {
-            clip.thumbnailUrl = ossClient.signatureUrl(asset.thumbnailUrl, { expires: 7200 });
-          }
-          if (asset.ossUrl) {
-            clip.videoUrl = ossClient.signatureUrl(asset.ossUrl, { expires: 7200 });
-          }
+          clip.thumbnailUrl = signAssetViewUrl(asset.thumbnailUrl);
+          clip.videoUrl = signAssetViewUrl(asset.ossUrl);
         }
       }
     }
@@ -216,17 +202,12 @@ app.get('/:id', async (c) => {
     if (Array.isArray(projectData.editingPlans)) {
       projectData.editingPlans = projectData.editingPlans.map((plan: any) => {
         if (Array.isArray(plan.clips)) {
-          plan.clips = plan.clips.map((clip: any) => {
-            const signedClip = { ...clip };
-            if (clip.thumbnailUrl && !clip.thumbnailUrl.startsWith('http')) {
-              signedClip.thumbnailUrl = ossClient.signatureUrl(clip.thumbnailUrl, { expires: 7200, secure: true });
-            }
-            if (clip.videoUrl && !clip.videoUrl.startsWith('http')) {
-              // 签发下载授权，强迫浏览器下载而不是在线播放
-              signedClip.videoUrl = ossClient.signatureUrl(clip.videoUrl, { expires: 7200, secure: true, response: { 'content-disposition': `attachment; filename="${clip.fileName || 'clipmind_video.mp4'}"` } });
-            }
-            return signedClip;
-          });
+          plan.clips = plan.clips.map((clip: any) => ({
+            ...clip,
+            thumbnailUrl: signAssetViewUrl(clip.thumbnailUrl),
+            // 签发下载授权，强迫浏览器下载而不是在线播放
+            videoUrl: signAssetDownloadUrl(clip.videoUrl, clip.fileName),
+          }));
         }
         return plan;
       });

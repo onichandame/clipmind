@@ -7,7 +7,6 @@ import { inArray, eq } from "drizzle-orm";
 import { db } from "../db";
 import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
-import { ossClient } from "../utils/oss";
 import { MATERIAL_MODE_PROMPT_CONTEXT, IDEA_MODE_PROMPT_CONTEXT } from "../utils/workflow-copy";
 import { serverConfig } from "../env";
 import { googleSearch } from "../utils/searchapi";

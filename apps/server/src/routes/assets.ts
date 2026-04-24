@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { assets } from "@clipmind/db";
 import { desc, eq } from "drizzle-orm";
 import { db } from "../db";
-import { ossClient } from "../utils/oss";
+import { signAssetViewUrl } from "../utils/oss";
 import { deleteVectorsByAssetId } from "../utils/qdrant";
 
 const app = new Hono();
@@ -12,18 +12,13 @@ app.get("/", async (c) => {
     const allAssets = await db.select().from(assets).orderBy(desc(assets.createdAt));
 
     // 架构升级：私有 Bucket 动态签名策略
-    // 数据库仅存储 Key，分发层实时生成带有 Expires/Signature 的临时链接 (默认 1 小时有效)
-    const mappedAssets = allAssets.map(asset => {
-      const sign = (key: string | null) =>
-        key ? ossClient.signatureUrl(key, { expires: 3600, secure: true }) : null;
-
-      return {
-        ...asset,
-        ossUrl: sign(asset.ossUrl),
-        audioOssUrl: sign(asset.audioOssUrl),
-        thumbnailUrl: sign(asset.thumbnailUrl),
-      };
-    });
+    // 数据库仅存储 Key，分发层实时生成带有 Expires/Signature 的临时链接 (统一走 utils/oss 签发器，强制 HTTPS)
+    const mappedAssets = allAssets.map(asset => ({
+      ...asset,
+      ossUrl: signAssetViewUrl(asset.ossUrl),
+      audioOssUrl: signAssetViewUrl(asset.audioOssUrl),
+      thumbnailUrl: signAssetViewUrl(asset.thumbnailUrl),
+    }));
 
     return c.json(mappedAssets);
   } catch (error) {

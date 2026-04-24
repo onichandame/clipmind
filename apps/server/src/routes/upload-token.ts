@@ -1,5 +1,5 @@
-import OSS from 'ali-oss';
 import { Hono } from 'hono';
+import { signUploadUrl } from '../utils/oss';
 
 const app = new Hono();
 
@@ -12,10 +12,6 @@ app.post("/", async (c) => {
       return c.json({ error: 'filename is required' }, 400);
     }
 
-    if (!process.env.ALIYUN_OSS_REGION || !process.env.ALIYUN_ACCESS_KEY_ID || !process.env.ALIYUN_ACCESS_KEY_SECRET || !process.env.ALIYUN_OSS_BUCKET) {
-      throw new Error('❌ OSS 环境变量未配置齐全');
-    }
-
     const uniqueId = crypto.randomUUID();
     const videoExt = (filename.split('.').pop() || 'mp4').toLowerCase();
 
@@ -24,32 +20,15 @@ app.post("/", async (c) => {
     const audioObjectKey = `assets/${uniqueId}/audio.aac`;
     const thumbObjectKey = `assets/${uniqueId}/thumb.jpg`;
 
-    const client = new OSS({
-      region: process.env.ALIYUN_OSS_REGION,
-      accessKeyId: process.env.ALIYUN_ACCESS_KEY_ID,
-      accessKeySecret: process.env.ALIYUN_ACCESS_KEY_SECRET,
-      bucket: process.env.ALIYUN_OSS_BUCKET,
-      secure: true,
-    });
-
-    // 并发生成两条上传轨道 (明确限定 Content-Type 防止直传被拦截)
-    const videoUploadUrl = client.signatureUrl(videoObjectKey, {
-      expires: 3600, method: 'PUT', 'Content-Type': 'video/' + (videoExt === 'mov' ? 'quicktime' : 'mp4')
-    });
-    const audioUploadUrl = client.signatureUrl(audioObjectKey, {
-      expires: 3600, method: 'PUT', 'Content-Type': 'audio/aac'
-    });
-    const thumbUploadUrl = client.signatureUrl(thumbObjectKey, {
-      expires: 3600, method: 'PUT', 'Content-Type': 'image/jpeg'
-    });
+    const videoContentType = 'video/' + (videoExt === 'mov' ? 'quicktime' : 'mp4');
 
     return c.json({
       assetId: uniqueId,
-      videoUploadUrl,
+      videoUploadUrl: signUploadUrl(videoObjectKey, videoContentType),
       videoObjectKey,
-      audioUploadUrl,
+      audioUploadUrl: signUploadUrl(audioObjectKey, 'audio/aac'),
       audioObjectKey,
-      thumbUploadUrl,
+      thumbUploadUrl: signUploadUrl(thumbObjectKey, 'image/jpeg'),
       thumbObjectKey
     }, 200);
 
