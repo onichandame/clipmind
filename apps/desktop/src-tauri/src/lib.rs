@@ -505,6 +505,13 @@ async fn process_video_asset(
         // job_id 会在下方 async 块内被 serde_json::json! 宏 move 走；这里预先留一份给失败分支的事件发射使用
         let job_id_for_err = job_id.clone();
 
+        // 上传阶段启动信号：立刻发一个 0% 事件，让前端从 "压缩中" 翻到 "上传中"
+        // 否则快速上传场景 (文件小 / 网络快) 500ms 节流内根本没有中间 progress 事件，UI 会卡在压缩态直到 90/100 跳完
+        let _ = app_clone.emit(
+            "upload-progress",
+            serde_json::json!({ "id": &job_id, "progress": 0 }),
+        );
+
         let async_flow: Result<(), String> = async {
             let token_payload = serde_json::json!({ "filename": filename_clone });
             let token_res = client
@@ -533,11 +540,12 @@ async fn process_video_asset(
 
             let mut total_read = 0u64;
             let mut last_emit = std::time::Instant::now();
-            let throttle = std::time::Duration::from_millis(500);
+            // 200ms 节流：在 IPC 防风暴和 UI 可见性之间取平衡，小文件也能看到若干中间进度
+            let throttle = std::time::Duration::from_millis(200);
             let app_emitter = app_clone.clone();
             let emit_job_id = job_id.clone();
 
-            // 拦截并包装流，计算精确进度并注入 500ms 节流防风暴
+            // 拦截并包装流，计算精确进度并注入节流防风暴
             let progress_stream = stream.map(move |result| {
                 match result {
                     Ok(bytes_mut) => {

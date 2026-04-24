@@ -141,11 +141,17 @@ export default function AssetsLibrary() {
         if (isComplete) {
           revalidator.revalidate(); // 触发页面数据重新拉取
         }
-        setJobs(current => current.map(j =>
-          j.id === event.payload.id
-            ? { ...j, progress: event.payload.progress, status: isComplete ? 'ready' : j.status }
-            : j
-        ));
+        setJobs(current => current.map(j => {
+          if (j.id !== event.payload.id) return j;
+          // 收到进度事件即视为进入上传阶段；若已 ready/error 则不降级
+          let nextStatus: JobStatus = j.status;
+          if (isComplete) {
+            nextStatus = 'ready';
+          } else if (j.status === 'compressing' || j.status === 'queued') {
+            nextStatus = 'uploading';
+          }
+          return { ...j, progress: event.payload.progress, status: nextStatus };
+        }));
       }).then(fn => unlistenUpload = fn);
 
       // 监听压缩进度并在控制台打印
