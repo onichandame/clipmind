@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Clock, Video, Download, VideoOff } from 'lucide-react';
+import { Clock, Video, VideoOff } from 'lucide-react';
 
 export interface EditingClip {
   startTime: string;
@@ -100,7 +100,7 @@ export function EditingPlanCard({ plan, onPushToEditor }: EditingPlanCardProps) 
                   <div className="w-20 h-[45px] rounded bg-zinc-100 dark:bg-zinc-800 overflow-hidden relative group/thumb border border-zinc-200 dark:border-zinc-700/50 shadow-sm">
                     <img src={thumbUrl} alt="thumbnail" className="w-full h-full object-cover" />
                     {clip.videoUrl && (
-                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
                         <button
                           onClick={(e) => {
                             e.preventDefault();
@@ -110,13 +110,13 @@ export function EditingPlanCard({ plan, onPushToEditor }: EditingPlanCardProps) 
                             document.body.appendChild(a);
                             a.click();
                             document.body.removeChild(a);
-                            setToastMsg(`开始下载：${fName || '视频素材'}\n请前往系统「下载」目录查看`);
+                            setToastMsg(`开始下载：${fName || '视频素材'}（完整原片）\n请前往系统「下载」目录查看`);
                             setTimeout(() => setToastMsg(null), 4000);
                           }}
-                          className="p-2 rounded-full bg-white/20 hover:bg-white/40 text-white transition-colors"
-                          title="下载该素材原片"
+                          className="px-2 py-1 rounded-full bg-white/25 hover:bg-white/45 text-white transition-colors flex items-center justify-center"
+                          title="下载完整原始素材文件"
                         >
-                          <Download className="w-5 h-5" />
+                          <span className="text-[9px] font-semibold leading-none">下载原片</span>
                         </button>
                       </div>
                     )}
