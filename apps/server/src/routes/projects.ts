@@ -193,7 +193,7 @@ app.get('/:id', async (c) => {
           if (!asset) continue;
           clip.fileName = asset.filename;
           clip.thumbnailUrl = signAssetViewUrl(asset.thumbnailUrl);
-          clip.videoUrl = signAssetViewUrl(asset.ossUrl);
+          clip.videoUrl = signAssetDownloadUrl(asset.ossUrl, asset.filename);
         }
       }
     }
@@ -205,8 +205,6 @@ app.get('/:id', async (c) => {
           plan.clips = plan.clips.map((clip: any) => ({
             ...clip,
             thumbnailUrl: signAssetViewUrl(clip.thumbnailUrl),
-            // 签发下载授权，强迫浏览器下载而不是在线播放
-            videoUrl: signAssetDownloadUrl(clip.videoUrl, clip.fileName),
           }));
         }
         return plan;
