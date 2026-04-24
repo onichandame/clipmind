@@ -335,8 +335,16 @@ async fn process_video_asset(
     println!("[Job {}] 🟢 独占 CPU 开始执行预处理...", job_id);
 
     // 物理隔离：只生成音频临时文件，原视频将直接从原始路径上传
-    let temp_audio = format!("temp_{}.aac", job_id);
-    let temp_thumb = format!("temp_{}_thumb.jpg", job_id);
+    // 必须放进系统 tmp 目录：macOS 上 .app 的 CWD 是只读卷的 /，相对路径写入会触发 "Read-only file system"
+    let tmp_dir = std::env::temp_dir();
+    let temp_audio = tmp_dir
+        .join(format!("clipmind_{}.aac", job_id))
+        .to_string_lossy()
+        .into_owned();
+    let temp_thumb = tmp_dir
+        .join(format!("clipmind_{}_thumb.jpg", job_id))
+        .to_string_lossy()
+        .into_owned();
 
     let app_clone = app.clone(); // 留给 tokio::spawn 异步上传使用
     let app_ffmpeg = app.clone(); // 专供 FFmpeg 闭包使用
@@ -427,11 +435,7 @@ async fn process_video_asset(
 
     if audio_exit_code != Some(0) {
         if source_has_audio_stream {
-            let tail = stderr_tail
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n");
+            let tail = stderr_tail.iter().cloned().collect::<Vec<_>>().join("\n");
             return Err(format!(
                 "{} FFmpeg 音频抽取退出码非0: {:?}，音视频分离失败\n--- FFmpeg stderr (tail) ---\n{}",
                 env_tag(),
