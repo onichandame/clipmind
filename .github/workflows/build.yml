@@ -7,19 +7,23 @@ on:
 jobs:
   build:
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
+            platform-label: macOS-AppleSilicon
           - os: macos-latest
             target: x86_64-apple-darwin
+            platform-label: macOS-Intel
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            platform-label: Linux-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            platform-label: Windows-x64
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -54,6 +58,7 @@ jobs:
 
       - name: Build Tauri App
         # Pinned to v0.5.25 for reproducibility (avoid floating tag drift)
+        # No tagName/releaseName here — release is handled by the release job below
         uses: tauri-apps/tauri-action@v0.5.25
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -62,13 +67,99 @@ jobs:
         with:
           projectPath: apps/desktop
           args: --target ${{ matrix.target }}
-          tagName: v__VERSION__
-          releaseName: 'ClipMind v__VERSION__'
-          releaseBody: |
-            Automated release of ClipMind Desktop Client.
-            
-            **🍎 macOS Apple Silicon (M1~M4) Users:**
-            If you see an "App is damaged" error, it is due to strict macOS Gatekeeper checks on unnotarized apps. Run this command in Terminal to bypass:
-            `sudo xattr -cr /Applications/ClipMind.app`
-          releaseDraft: true
+
+      - name: Rename and collect artifacts (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          mkdir -p dist
+          LABEL="${{ matrix.platform-label }}"
+          BUNDLE_DIR="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          find "$BUNDLE_DIR/dmg" -name "*.dmg" | while read f; do
+            base=$(basename "$f" .dmg)
+            # Strip trailing arch segment (_aarch64 or _x64)
+            stem=$(echo "$base" | sed 's/_[^_]*$//')
+            cp "$f" "dist/${stem}_${LABEL}.dmg"
+          done
+
+      - name: Rename and collect artifacts (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          mkdir -p dist
+          LABEL="${{ matrix.platform-label }}"
+          BUNDLE_DIR="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          find "$BUNDLE_DIR/appimage" -name "*.AppImage" | while read f; do
+            base=$(basename "$f" .AppImage)
+            # Strip trailing arch segment (_amd64)
+            stem=$(echo "$base" | sed 's/_[^_]*$//')
+            cp "$f" "dist/${stem}_${LABEL}.AppImage"
+          done
+
+      - name: Rename and collect artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $label = "${{ matrix.platform-label }}"
+          $bundleDir = "apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+
+          # NSIS installer: ClipMind_x.x.x_x64-setup.exe → ClipMind_x.x.x_Windows-x64-setup.exe
+          Get-ChildItem "$bundleDir/nsis" -Filter "*-setup.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            $stem = $_.BaseName -replace '-setup$', '' -replace '_x64$', ''
+            Copy-Item $_.FullName "dist/${stem}_${label}-setup.exe"
+          }
+
+          # MSI installer: ClipMind_x.x.x_x64_en-US.msi → ClipMind_x.x.x_Windows-x64.msi
+          Get-ChildItem "$bundleDir/msi" -Filter "*.msi" -ErrorAction SilentlyContinue | ForEach-Object {
+            $stem = $_.BaseName -replace '_en-US$', '' -replace '_x64$', ''
+            Copy-Item $_.FullName "dist/${stem}_${label}.msi"
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.platform-label }}
+          path: dist/
+
+  release:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get app version
+        id: version
+        run: echo "version=$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: ClipMind v${{ steps.version.outputs.version }}
+          draft: true
           prerelease: false
+          files: artifacts/*
+          body: |
+            Automated release of ClipMind Desktop Client.
+
+            **Download guide:**
+            | File | Platform |
+            |------|----------|
+            | `*_macOS-AppleSilicon.dmg` | macOS on M1 / M2 / M3 / M4 |
+            | `*_macOS-Intel.dmg` | macOS on Intel CPU |
+            | `*_Windows-x64-setup.exe` | Windows (recommended installer) |
+            | `*_Windows-x64.msi` | Windows (MSI package) |
+            | `*_Linux-x64.AppImage` | Linux x86-64 |
+
+            **🍎 macOS "App is damaged" error:** macOS Gatekeeper blocks unnotarized apps. Run this in Terminal to bypass:
+            ```
+            sudo xattr -cr /Applications/ClipMind.app
+            ```
