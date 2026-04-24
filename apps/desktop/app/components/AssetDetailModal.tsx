@@ -18,9 +18,17 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
         className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Thumbnail */}
+        {/* Video / Thumbnail */}
         <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden rounded-t-xl">
-          {asset.thumbnailUrl ? (
+          {asset.ossUrl ? (
+            <video
+              src={asset.ossUrl}
+              poster={asset.thumbnailUrl}
+              controls
+              preload="metadata"
+              className="w-full h-full object-contain"
+            />
+          ) : asset.thumbnailUrl ? (
             <>
               <img
                 src={asset.thumbnailUrl}

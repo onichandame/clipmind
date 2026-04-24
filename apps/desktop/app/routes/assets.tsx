@@ -14,6 +14,7 @@ export interface Asset {
   id: string;
   filename: string;
   objectKey: string;
+  ossUrl?: string;
   thumbnailUrl?: string;
   fileSize: number;
   duration: number;
