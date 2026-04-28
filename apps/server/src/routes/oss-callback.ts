@@ -1,78 +1,83 @@
 import { Hono } from "hono";
-import { assets } from "@clipmind/db";
-import { eq } from "drizzle-orm";
+import { z } from "zod";
+import { assets, webhookNonces } from "@clipmind/db";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db";
+import { verifyWebhookPayload } from "../utils/auth";
 
 const app = new Hono();
 
+const callbackSchema = z.object({
+  callbackToken: z.string().min(1),
+});
+
+// HMAC-verified upload-completion webhook. The Rust shell calls this after each
+// successful PUT to OSS, presenting the callbackToken returned by /api/upload-token.
+//
+// Trust model:
+// - HMAC-signed payload binds userId+assetId+kind+objectKey+iat+nonce.
+// - iat is rejected if older than WEBHOOK_TTL_SECONDS (1h) — bounded replay window.
+// - nonce is consumed atomically via webhook_nonces dup-key insert — single-use within TTL.
+// - objectKey is read from the verified payload, never from the request body.
 app.post("/", async (c) => {
   try {
-    console.log("\n==========================================");
-    console.log("[DEBUG: OSS-Callback] 1. 收到客户端落盘 POST 请求");
-    const body = await c.req.json();
-    console.log("[DEBUG: OSS-Callback] 2. 解析的请求体:", JSON.stringify(body));
-    
-    // 修复数据断层：严格对齐 Rust 侧 ReportPayload 的 camelCase 结构
-    const { id, filename, ossUrl, audioOssUrl, thumbnailUrl, fileSize, duration } = body;
+    const body = await c.req.json().catch(() => null);
+    const parsed = callbackSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'Invalid payload' }, 400);
+    }
+    const { callbackToken } = parsed.data;
 
-    if (!filename || !ossUrl) {
-      console.error("[DEBUG: OSS-Callback] ❌ 参数缺失，拒绝请求");
-      return new Response(JSON.stringify({ error: 'Missing parameters' }), { status: 400 });
+    const result = verifyWebhookPayload(callbackToken);
+    if (!result.ok) {
+      console.warn('[OSS-Callback] HMAC verification failed:', result.reason);
+      return c.json({ error: 'Invalid signature' }, 401);
     }
 
-    // 防御：Webhook 幂等性校验
-    console.log(`[DEBUG: OSS-Callback] 3. 开始执行幂等性校验, ossUrl: ${ossUrl}`);
-    const existing = await db.select().from(assets).where(eq(assets.ossUrl, ossUrl)).limit(1);
-    if (existing.length > 0) {
-      console.log(`⚠️ Webhook 幂等拦截：${objectKey} 已存在，忽略重复请求。`);
-      return new Response(JSON.stringify({ success: true, msg: "Idempotent return" }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
+    const { userId, assetId, kind, objectKey, nonce } = result.payload;
+
+    // Atomically consume the nonce — duplicate insert means replay → reject.
+    try {
+      await db.insert(webhookNonces).values({ nonce });
+    } catch (e: any) {
+      const msg = String(e?.code || e?.message || '');
+      if (msg.includes('ER_DUP_ENTRY') || msg.includes('Duplicate')) {
+        console.warn('[OSS-Callback] nonce replay rejected:', nonce.slice(0, 8));
+        return c.json({ error: 'Token already used' }, 409);
+      }
+      throw e;
     }
 
-    // 统一使用 Rust 端透传的业务 assetId，保证端云 ID 绝对一致
-    const assetId = id || crypto.randomUUID();
+    if (kind === 'audio') {
+      await db
+        .update(assets)
+        .set({ audioOssUrl: objectKey, asrStatus: 'pending' })
+        .where(and(eq(assets.id, assetId), eq(assets.userId, userId)));
 
-    // 将资产信息及多轨流媒体链接全量落盘到 MySQL
-    const initialAsrStatus = audioOssUrl ? 'pending' : 'skipped';
-
-    await db.insert(assets).values({
-      id: assetId,
-      filename: filename,
-      ossUrl: ossUrl,
-      audioOssUrl: audioOssUrl,
-      thumbnailUrl: thumbnailUrl,
-      fileSize: fileSize || 0,
-      duration: duration || 0,
-      status: 'ready',
-      asrStatus: initialAsrStatus
-    });
-
-    console.log(`✅ Webhook 触发成功：已将 ${filename} 写入数据库！`);
-
-    // 💡 异步触发 ASR 任务 (不阻塞 Webhook 响应)
-    if (!audioOssUrl) {
-      console.log(`[OSS-Callback] 5.5 audioOssUrl 为空（无音频轨），跳过 ASR，asrStatus=skipped`);
-    } else {
-      console.log(`[DEBUG: OSS-Callback] 4. 准备动态导入 aliyun-asr 模块...`);
+      // Fire ASR asynchronously — audio always uploads, so this is the only path to transcripts.
       import('../utils/aliyun-asr').then(({ submitAliyunAsrTask }) => {
-        console.log(`[DEBUG: OSS-Callback] 5. 模块导入成功，正在调用 submitAliyunAsrTask`);
-        submitAliyunAsrTask(assetId, audioOssUrl).catch(err => {
-          console.error("[DEBUG: OSS-Callback] ❌ submitAliyunAsrTask 内部抛出异常:", err);
+        submitAliyunAsrTask(assetId, objectKey).catch(err => {
+          console.error("[OSS-Callback] submitAliyunAsrTask failed:", err);
         });
       }).catch(err => {
-        console.error("[DEBUG: OSS-Callback] ❌ 动态导入 aliyun-asr 失败:", err);
+        console.error("[OSS-Callback] aliyun-asr import failed:", err);
       });
+    } else if (kind === 'thumbnail') {
+      await db
+        .update(assets)
+        .set({ thumbnailUrl: objectKey, status: 'ready' })
+        .where(and(eq(assets.id, assetId), eq(assets.userId, userId)));
+    } else if (kind === 'video-backup') {
+      await db
+        .update(assets)
+        .set({ videoOssKey: objectKey, backupStatus: 'backed_up' })
+        .where(and(eq(assets.id, assetId), eq(assets.userId, userId)));
     }
 
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return c.json({ success: true });
   } catch (error) {
-    console.error('❌ Webhook 写入数据库失败:', error);
-    return new Response(JSON.stringify({ error: 'Database Error' }), { status: 500 });
+    console.error('❌ OSS callback error:', error);
+    return c.json({ error: 'Internal Error' }, 500);
   }
 });
 

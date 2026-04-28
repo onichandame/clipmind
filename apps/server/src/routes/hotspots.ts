@@ -2,8 +2,11 @@ import { Hono } from 'hono';
 import { db } from '../db';
 import { hotspots } from '@clipmind/db/schema';
 import { desc, eq, and, count } from 'drizzle-orm';
+import { requireAuth } from '../middleware/auth';
 
 const app = new Hono();
+
+app.use('*', requireAuth);
 
 app.get('/', async (c) => {
   const category = c.req.query('category');

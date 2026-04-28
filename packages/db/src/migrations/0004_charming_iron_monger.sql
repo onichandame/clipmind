@@ -1,1 +1,0 @@
-ALTER TABLE `projects` ADD `ui_messages` json DEFAULT ('[]');

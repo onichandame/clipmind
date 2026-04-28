@@ -3,36 +3,49 @@ import { projectOutlines, editingPlans, assets, assetChunks, projects } from "@c
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
-import { inArray, eq } from "drizzle-orm";
+import { inArray, eq, and } from "drizzle-orm";
 import { db } from "../db";
 import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
-import { MATERIAL_MODE_PROMPT_CONTEXT, IDEA_MODE_PROMPT_CONTEXT } from "../utils/workflow-copy";
+import { MATERIAL_MODE_PROMPT_CONTEXT, IDEA_MODE_PROMPT_CONTEXT, FREECHAT_PROMPT_CONTEXT } from "../utils/workflow-copy";
 import { serverConfig } from "../env";
 import { googleSearch } from "../utils/searchapi";
 import { scrapeWebpage } from "../utils/firecrawl";
+import { requireAuth } from "../middleware/auth";
 
 const app = new Hono();
 
+app.use('*', requireAuth);
+
 app.post("/", async (c) => {
+  const user = c.get('user');
   const body = await c.req.json();
   const { messages, projectId, currentOutline, isDirty } = body as { messages: UIMessage[]; projectId: string; currentOutline?: string; isDirty?: boolean; };
 
-  // [Arch] SSOT: 在请求起点先行获取项目实体，作为后续 Prompt 注入与写链路的单一真理源
-  const [currProject] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+  // [Arch] SSOT: 在请求起点先行获取项目实体（owner-scoped），作为后续 Prompt 注入与写链路的单一真理源
+  const [currProject] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
+    .limit(1);
   if (!currProject) return c.json({ error: "Project not found" }, 404);
 
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
   let dynamicSystemPrompt = SYSTEM_PROMPT;
+  const isFreeChat = currProject.workflowMode === 'freechat';
 
   // 注入工作流模式上下文，引导 AI 针对当前创作模式给出合适的响应
   if (currProject.workflowMode === 'material') {
     dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${MATERIAL_MODE_PROMPT_CONTEXT}\n\n`;
   } else if (currProject.workflowMode === 'idea') {
     dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${IDEA_MODE_PROMPT_CONTEXT}\n\n`;
+  } else if (isFreeChat) {
+    dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${FREECHAT_PROMPT_CONTEXT}\n\n`;
   }
 
-  dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
+  if (!isFreeChat) {
+    dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
+  }
 
   if (serverConfig.SEARCHAPI_KEY) {
     dynamicSystemPrompt += `**【网络检索能力】**: 你拥有 \`search_web\` 工具，可实时搜索最新信息。`;
@@ -42,7 +55,8 @@ app.post("/", async (c) => {
     dynamicSystemPrompt += `当用户询问当下热点、事实核查、实时资讯等需要互联网知识的问题时，你必须主动调用这些工具，而非依赖训练数据。\n\n`;
   }
 
-  // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions)
+  // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions) — 只在结构化工作流中生效
+  if (!isFreeChat) {
   dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
   dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
   dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
@@ -69,6 +83,7 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `2. 若要使用某段源素材，把 search_clips 返回结果中对应切片的 id 字段原样填到 clipId。后端会据此自动补全 assetId、startTime、endTime 及片段类型，你【不需要也禁止】重复输出这些字段。\n`;
   dynamicSystemPrompt += `3. 对于不依赖具体源素材的片段（空镜、纯旁白、转场、待补录镜头），省略 clipId 即可，后端会自动识别为 broll。\n`;
   dynamicSystemPrompt += `4. 禁止自造 clipId —— clipId 必须来自 search_clips 的返回结果。\n\n`;
+  } // end of !isFreeChat structured-prompt block
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -76,12 +91,12 @@ app.post("/", async (c) => {
                 const allInvolvedIds = Array.from(new Set([...retrievedIds, ...selectedIds]));
 
                 if (allInvolvedIds.length > 0) {
-                  // [Arch] 解决大模型“内容盲区”：拿 UUID 去 assets 表换取真实的文件名与内容摘要(summary)
+                  // [Arch] 解决大模型“内容盲区”：拿 UUID 去 assets 表换取真实的文件名与内容摘要(summary)，限定当前用户。
                   const involvedAssets = await db.select({
                     id: assets.id,
                     filename: assets.filename,
                     summary: assets.summary
-                  }).from(assets).where(inArray(assets.id, allInvolvedIds));
+                  }).from(assets).where(and(inArray(assets.id, allInvolvedIds), eq(assets.userId, user.id)));
 
                   if (retrievedIds.length > 0) {
                     const retrievedNames = involvedAssets.filter(a => retrievedIds.includes(a.id)).map(a => `【${a.filename}】(内容: ${a.summary || '暂无摘要'})`);
@@ -142,10 +157,13 @@ app.post("/", async (c) => {
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
   const finalSystemPrompt = dynamicSystemPrompt + `\n\n【系统高优先级指令】：在执行完任何工具（Tool）后，你绝对不能静默结束对话。你必须在收到工具结果后，追加一段面向用户的自然语言（Text）说明，告知用户工具的执行结果或下一步建议！`;
+  const stopConditions = isFreeChat
+    ? [stepCountIs(MAX_STEPS)]
+    : [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')];
   const result = streamText({
     model, system: finalSystemPrompt, messages: safeMessages,
     maxRetries: 3,
-    stopWhen: [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')],
+    stopWhen: stopConditions,
 
     // 硬约束：利用 prepareStep 在执行流中动态拦截，防止 Agent 哑火
     prepareStep: async ({ stepNumber }) => {
@@ -159,6 +177,7 @@ app.post("/", async (c) => {
     },
 
     tools: {
+      ...(isFreeChat ? {} : {
       generateEditingPlan: tool({
         description: "基于素材检索结果，生成结构化的剪辑方案（Editing Plan）并持久化到数据库。禁止在对话中输出大段方案，必须调用此工具。",
         inputSchema: z.object({
@@ -179,6 +198,7 @@ app.post("/", async (c) => {
             }
 
             // 后端补全：只收 text/description/clipId，其它字段由此处从 assetChunks 查表反查
+            // 防越权：通过 INNER JOIN assets + userId 过滤，确保只能引用当前用户拥有的素材切片
             const clipIds = Array.from(new Set(
               args.clips.map((c: any) => c.clipId).filter((id: any) => typeof id === 'string' && id.length > 0)
             ));
@@ -188,7 +208,10 @@ app.post("/", async (c) => {
                   assetId: assetChunks.assetId,
                   startTime: assetChunks.startTime,
                   endTime: assetChunks.endTime,
-                }).from(assetChunks).where(inArray(assetChunks.id, clipIds))
+                })
+                .from(assetChunks)
+                .innerJoin(assets, eq(assets.id, assetChunks.assetId))
+                .where(and(inArray(assetChunks.id, clipIds), eq(assets.userId, user.id)))
               : [];
             const chunkMap = new Map(chunks.map(c => [c.id, c]));
 
@@ -266,6 +289,7 @@ app.post("/", async (c) => {
           }
         }
       }),
+      }),
       search_assets: tool({
         description: "【宏观检索】基于用户意图，在大盘视频库中进行鸟瞰式检索。返回的是视频素材的全局ID(assetId)和宏观总结(Summary)。当需要寻找特定主题或题材的视频时，必须优先调用此工具以防Token爆炸。",
         inputSchema: z.object({
@@ -287,10 +311,10 @@ app.post("/", async (c) => {
               summary: r.payload.text
             }));
 
-            // 过滤已删除素材：Qdrant 向量可能滞后于 DB 删除操作
+            // 过滤已删除素材：Qdrant 向量可能滞后于 DB 删除操作；同时按 userId 隔离，防止跨用户素材泄露
             const rawAssetIds = rawAssets.map(a => a.assetId);
             const existingAssets = rawAssetIds.length > 0
-              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(inArray(assets.id, rawAssetIds))
+              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(and(inArray(assets.id, rawAssetIds), eq(assets.userId, user.id)))
               : [];
             const existingIdSet = new Set(existingAssets.map(a => a.id));
             const filenameMap = new Map(existingAssets.map(a => [a.id, a.filename]));
@@ -300,7 +324,7 @@ app.post("/", async (c) => {
 
             // [Arch] 状态持久化：将宏观检索命中的资产ID写入聚合根，驱动前端聚光灯UI
             const hitAssetIds = assetsFound.map(a => a.assetId);
-            await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(eq(projects.id, projectId));
+            await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(and(eq(projects.id, projectId), eq(projects.userId, user.id)));
 
             console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产（已过滤 ${rawAssets.length - assetsFound.length} 个幽灵向量）并已持久化至 Project。`);
             return { success: true, assets: assetsFound };
@@ -366,10 +390,22 @@ app.post("/", async (c) => {
             }
 
             console.log(`[RAG-Micro] LLM 在指定视频中精搜切片: "${query}", assetIds: ${assetIds.length}`);
+
+            // 防越权：把传入的 assetIds 收敛到当前用户拥有的素材，再进入向量层
+            const ownedAssetIds = await db
+              .select({ id: assets.id })
+              .from(assets)
+              .where(and(inArray(assets.id, assetIds), eq(assets.userId, user.id)));
+            const ownedIdSet = new Set(ownedAssetIds.map(a => a.id));
+            const safeAssetIds = assetIds.filter(id => ownedIdSet.has(id));
+            if (safeAssetIds.length === 0) {
+              return { success: true, clips: [] };
+            }
+
             const [vector] = await generateEmbeddings([query]);
 
             const { searchVectorsWithFilter } = await import("../utils/qdrant");
-            const qdrantResults = await searchVectorsWithFilter(vector, assetIds, limit);
+            const qdrantResults = await searchVectorsWithFilter(vector, safeAssetIds, limit);
 
             const rawClips = qdrantResults.map((p: any) => ({
               id: p.id,
@@ -380,10 +416,10 @@ app.post("/", async (c) => {
               endTime: p.payload?.endTime,
             }));
 
-            // 补充 filename，让 LLM 能以可读名称引用素材而无需展示内部 ID
+            // 补充 filename，让 LLM 能以可读名称引用素材而无需展示内部 ID（owner-scoped）
             const clipAssetIds = Array.from(new Set(rawClips.map((c: any) => c.assetId).filter(Boolean)));
             const clipAssets = clipAssetIds.length > 0
-              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(inArray(assets.id, clipAssetIds))
+              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(and(inArray(assets.id, clipAssetIds), eq(assets.userId, user.id)))
               : [];
             const clipFilenameMap = new Map(clipAssets.map(a => [a.id, a.filename]));
             const clips = rawClips.map((c: any) => ({ ...c, filename: clipFilenameMap.get(c.assetId) ?? '' }));
@@ -413,7 +449,7 @@ app.post("/", async (c) => {
           : [...coreHistory, ...userCoreMessages, ...response.messages];
         await db.update(projects)
           .set({ uiMessages: updatedMessages })
-          .where(eq(projects.id, projectId));
+          .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)));
         console.log(`[Chat] ✅ 对话持久化成功，当前总消息数: ${updatedMessages.length}`);
       } catch (error) {
         console.error(`❌ [Chat] 对话持久化失败:`, error);

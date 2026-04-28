@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { serverConfig } from './env';
-import { runMigrations } from '@clipmind/db';
+import { runSystemMigrations } from './migrator';
 import { db } from './db';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -11,6 +11,7 @@ import ossCallbackRoute from './routes/oss-callback';
 import asrCallbackRoute from './routes/asr-callback';
 import uploadTokenRoute from './routes/upload-token';
 import projectsRoute from './routes/projects';
+import authRoute from './routes/auth';
 
 const app = new Hono();
 
@@ -21,6 +22,9 @@ app.use('/api/*', cors({
 }));
 
 app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'ClipMind Hono API' }));
+
+// Auth 路由（无需 requireAuth 守卫，自身处理校验）
+app.route('/api/auth', authRoute);
 
 // 挂载独立业务路由
 app.route('/api/projects', projectsRoute);
@@ -38,10 +42,7 @@ app.route('/api/hotspots', hotspotsRoute);
 
 const startServer = async () => {
   try {
-    console.log('🔄 [Database] Running migrations...');
-    // 直接调用 db 包封装的方法，彻底解耦路径与 Drizzle 细节
-    await runMigrations(serverConfig.DATABASE_URL);
-    console.log('✅ [Database] Migrations completed.');
+    await runSystemMigrations();
 
     // 启动定时清理任务防线
     startDanglingOssCleanupJob();

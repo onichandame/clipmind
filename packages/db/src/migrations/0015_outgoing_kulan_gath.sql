@@ -1,1 +1,0 @@
-ALTER TABLE `projects` ADD `workflow_mode` varchar(20);

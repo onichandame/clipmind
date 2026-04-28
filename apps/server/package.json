@@ -12,6 +12,7 @@
     "@clipmind/db": "workspace:*",
     "@hono/node-server": "^1.11.0",
     "@mendable/firecrawl-js": "^4.19.0",
+    "@node-rs/argon2": "^2.0.2",
     "ai": "^6.0.154",
     "ali-oss": "^6.23.0",
     "dotenv": "^16.4.5",

@@ -1,14 +1,18 @@
 import { Hono } from 'hono';
 import { db } from '../db';
 import { projects, projectOutlines, editingPlans, assets, hotspots } from '@clipmind/db/schema';
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { desc, eq, inArray, and } from 'drizzle-orm';
 import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
+import { requireAuth } from '../middleware/auth';
 
 const app = new Hono();
 
-// 1. 获取项目列表
+app.use('*', requireAuth);
+
+// 1. 获取项目列表（按当前登录用户限定）
 app.get('/', async (c) => {
+  const user = c.get('user');
   try {
     const data = await db
       .select({
@@ -16,8 +20,10 @@ app.get('/', async (c) => {
         title: projects.title,
         createdAt: projects.createdAt,
         updatedAt: projects.updatedAt,
+        workflowMode: projects.workflowMode,
       })
       .from(projects)
+      .where(eq(projects.userId, user.id))
       .orderBy(desc(projects.updatedAt));
 
     return c.json({ projects: data });
@@ -28,19 +34,41 @@ app.get('/', async (c) => {
 });
 
 app.post('/', async (c) => {
+  const user = c.get('user');
   try {
-          const newId = crypto.randomUUID();
-          const GREETING = INITIAL_GREETING;
+    const body = await c.req.json().catch(() => ({}));
+    const requestedMode = body?.workflowMode;
+    const workflowMode =
+      requestedMode === 'material' || requestedMode === 'idea' || requestedMode === 'freechat'
+        ? requestedMode
+        : null;
+    const seedMessage = typeof body?.seedMessage === 'string' && body.seedMessage.trim().length > 0
+      ? body.seedMessage.trim()
+      : null;
 
-          // 1. 物理创建项目记录（包含初始 Greeting 消息）
-    // [Arch] 读写分离：使用纯净 CoreMessage 结构入库
+    // 默认初始消息：结构化模式给一段引导；自由对话模式更轻量。
+    const initialMessages: any[] = [];
+    if (seedMessage) {
+      // 自由对话来自 landing page 的"直接说想法" — 把它作为第一条 user 消息，
+      // ChatPanel 的 autoTriggeredRef 会自动触发 AI 回复。
+      initialMessages.push({ id: crypto.randomUUID(), role: 'user', content: seedMessage });
+    } else if (workflowMode === 'freechat') {
+      initialMessages.push({
+        role: 'assistant',
+        content: '随便聊吧。我可以帮你检索素材、查询资讯，或者只是给你建议。',
+      });
+    } else {
+      initialMessages.push({ role: 'assistant', content: INITIAL_GREETING });
+    }
+
+    const newId = crypto.randomUUID();
+
     await db.insert(projects).values({
       id: newId,
-      title: "未命名大纲",
-      uiMessages: [{
-        role: 'assistant',
-        content: GREETING,
-      }],
+      userId: user.id,
+      title: body?.title?.trim() || (seedMessage ? seedMessage.slice(0, 40) : '未命名大纲'),
+      workflowMode,
+      uiMessages: initialMessages,
     });
 
     return c.json({ success: true, id: newId });
@@ -50,11 +78,12 @@ app.post('/', async (c) => {
   }
 });
 
-// 3. 删除项目
+// 3. 删除项目（owner-scoped）
 app.delete('/:id', async (c) => {
+  const user = c.get('user');
   const id = c.req.param('id');
   try {
-    await db.delete(projects).where(eq(projects.id, id));
+    await db.delete(projects).where(and(eq(projects.id, id), eq(projects.userId, user.id)));
     return c.json({ success: true });
   } catch (error) {
     console.error("Failed to delete project:", error);
@@ -64,9 +93,13 @@ app.delete('/:id', async (c) => {
 
 // 4. 获取项目详情及会话上下文
 app.get('/:id', async (c) => {
+  const user = c.get('user');
   const id = c.req.param('id');
   try {
-    const projectRes = await db.select().from(projects).where(eq(projects.id, id));
+    const projectRes = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, id), eq(projects.userId, user.id)));
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
@@ -117,7 +150,6 @@ app.get('/:id', async (c) => {
             parts: parts
           });
         } else if (msg.role === "tool" && Array.isArray(msg.content)) {
-          // 将工具结果回填至 UIMessage 的 parts 中
           for (const toolResult of msg.content) {
             if (toolResult.type === "tool-result") {
               const targetAssistant = initialMessages.find(m =>
@@ -136,40 +168,46 @@ app.get('/:id', async (c) => {
       }
     }
 
-    // [Arch] 读链路 JIT 签发：拦截 retrievedClips，将物理 Object Key 重新签发为 2 小时临时 URL
     const projectData = projectRes[0] as any;
-
-    // [Arch] 缝合脑裂：将物理表查询到的 planRes 注入 projectData，供前端画布流式卡片渲染
     projectData.editingPlans = planRes;
 
     if (Array.isArray(projectData.retrievedClips)) {
-      // [Arch] JIT 签发升级：遍历并异步补齐原片下载链接
       for (let i = 0; i < projectData.retrievedClips.length; i++) {
         const clip = projectData.retrievedClips[i];
 
-        // 1. 签名缩略图
         clip.thumbnailUrl = signAssetViewUrl(clip.thumbnailUrl);
 
-        // 2. 溯源防线：根据 assetId 去底层查出真实视频 ossUrl，并强制签发下载 Header
+        // 本地优先：从 assets 表反查归属信息。仅在 videoOssKey 存在（已云备份）时签发 download URL；
+        // 否则前端通过 useAssetUri(assetId) 走本地 asset:// 协议解析。
         if (clip.assetId) {
           try {
-            const [assetRecord] = await db.select({
-              ossUrl: assets.ossUrl,
-              filename: assets.filename
-            }).from(assets).where(eq(assets.id, clip.assetId));
+            const [assetRecord] = await db
+              .select({
+                videoOssKey: assets.videoOssKey,
+                filename: assets.filename,
+                backupStatus: assets.backupStatus,
+                originDeviceId: assets.originDeviceId,
+              })
+              .from(assets)
+              .where(and(eq(assets.id, clip.assetId), eq(assets.userId, user.id)));
 
-            if (assetRecord && assetRecord.ossUrl) {
+            if (assetRecord) {
               clip.filename = assetRecord.filename;
-              clip.videoUrl = signAssetDownloadUrl(assetRecord.ossUrl, clip.filename);
+              clip.backupStatus = assetRecord.backupStatus;
+              clip.originDeviceId = assetRecord.originDeviceId;
+              if (assetRecord.videoOssKey) {
+                clip.videoUrl = signAssetDownloadUrl(assetRecord.videoOssKey, assetRecord.filename);
+              }
             }
           } catch (e) {
-            console.error(`🚨 无法为素材切片注入下载链接 (AssetID: ${clip.assetId})`, e);
+            console.error(`🚨 无法为素材切片注入元数据 (AssetID: ${clip.assetId})`, e);
           }
         }
       }
     }
 
-    // [Arch] JIT 签发 editing plan clips：批量补齐 asset 元数据并签发签名 URL
+    // [Arch] JIT 元数据补齐 editing plan clips：批量写入 backupStatus/originDeviceId/filename，
+    // 仅在已云备份时附带可签发的 videoUrl，本地优先方案由前端通过 useAssetUri 解析。
     if (projectData.editingPlans && Array.isArray(projectData.editingPlans)) {
       for (const plan of projectData.editingPlans) {
         if (!plan.clips || !Array.isArray(plan.clips)) continue;
@@ -178,12 +216,17 @@ app.get('/:id', async (c) => {
           .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
         if (assetIds.length === 0) continue;
 
-        const assetRows = await db.select({
-          id: assets.id,
-          filename: assets.filename,
-          ossUrl: assets.ossUrl,
-          thumbnailUrl: assets.thumbnailUrl,
-        }).from(assets).where(inArray(assets.id, assetIds));
+        const assetRows = await db
+          .select({
+            id: assets.id,
+            filename: assets.filename,
+            videoOssKey: assets.videoOssKey,
+            thumbnailUrl: assets.thumbnailUrl,
+            backupStatus: assets.backupStatus,
+            originDeviceId: assets.originDeviceId,
+          })
+          .from(assets)
+          .where(and(inArray(assets.id, assetIds), eq(assets.userId, user.id)));
 
         const assetMap = new Map(assetRows.map((a: any) => [a.id, a]));
 
@@ -193,22 +236,11 @@ app.get('/:id', async (c) => {
           if (!asset) continue;
           clip.fileName = asset.filename;
           clip.thumbnailUrl = signAssetViewUrl(asset.thumbnailUrl);
-          clip.videoUrl = signAssetDownloadUrl(asset.ossUrl, asset.filename);
+          clip.backupStatus = asset.backupStatus;
+          clip.originDeviceId = asset.originDeviceId;
+          clip.videoUrl = asset.videoOssKey ? signAssetDownloadUrl(asset.videoOssKey, asset.filename) : null;
         }
       }
-    }
-
-    // [Arch] 读链路 JIT 签发：拦截 editingPlans，将物理 Object Key 重新签发为下载/预览 URL
-    if (Array.isArray(projectData.editingPlans)) {
-      projectData.editingPlans = projectData.editingPlans.map((plan: any) => {
-        if (Array.isArray(plan.clips)) {
-          plan.clips = plan.clips.map((clip: any) => ({
-            ...clip,
-            thumbnailUrl: signAssetViewUrl(clip.thumbnailUrl),
-          }));
-        }
-        return plan;
-      });
     }
 
     return c.json({
@@ -224,6 +256,7 @@ app.get('/:id', async (c) => {
 
 // 5. 更新项目消息（替换整个 uiMessages 数组）
 app.put('/:id/messages', async (c) => {
+  const user = c.get('user');
   const id = c.req.param('id');
   const body = await c.req.json();
   const { uiMessages } = body as { uiMessages: unknown[] };
@@ -233,9 +266,10 @@ app.put('/:id/messages', async (c) => {
   }
 
   try {
-    await db.update(projects)
+    await db
+      .update(projects)
       .set({ uiMessages, updatedAt: new Date() })
-      .where(eq(projects.id, id));
+      .where(and(eq(projects.id, id), eq(projects.userId, user.id)));
     return c.json({ success: true });
   } catch (error) {
     console.error('Failed to update messages:', error);
@@ -243,14 +277,13 @@ app.put('/:id/messages', async (c) => {
   }
 });
 
-// [Arch] 局部增量更新 (PATCH) - 支持项目名称等元数据修改
 app.patch('/:id', async (c) => {
+  const user = c.get('user');
   const id = c.req.param('id');
   const body = await c.req.json();
 
   const updatePayload: Record<string, any> = { updatedAt: new Date() };
 
-  // 遵循 PATCH 原则，仅处理传递的增量字段
   if (body.title !== undefined) {
     if (typeof body.title !== 'string' || body.title.trim() === '') {
       return c.json({ error: 'title must be a non-empty string' }, 400);
@@ -258,57 +291,58 @@ app.patch('/:id', async (c) => {
     updatePayload.title = body.title.trim();
   }
 
+  if (body.workflowMode !== undefined) {
+    if (
+      body.workflowMode !== 'material' &&
+      body.workflowMode !== 'idea' &&
+      body.workflowMode !== 'freechat' &&
+      body.workflowMode !== null
+    ) {
+      return c.json({ error: 'Invalid workflowMode' }, 400);
+    }
+    updatePayload.workflowMode = body.workflowMode;
 
-      // [Arch] 允许更新工作流模式起点
-      if (body.workflowMode !== undefined) {
-        if (body.workflowMode !== 'material' && body.workflowMode !== 'idea' && body.workflowMode !== null) {
-          return c.json({ error: 'Invalid workflowMode' }, 400);
-        }
-        updatePayload.workflowMode = body.workflowMode;
+    if (body.workflowMode === 'material' || body.workflowMode === 'idea') {
+      const [current] = await db
+        .select({ uiMessages: projects.uiMessages })
+        .from(projects)
+        .where(and(eq(projects.id, id), eq(projects.userId, user.id)))
+        .limit(1);
 
-        // Append a mode-specific follow-up assistant message on first mode selection.
-        // Dedup guard: only appends if the identical message is not already present.
-        if (body.workflowMode === 'material' || body.workflowMode === 'idea') {
-          const [current] = await db
-            .select({ uiMessages: projects.uiMessages })
-            .from(projects)
-            .where(eq(projects.id, id))
-            .limit(1);
-
-          if (current) {
-            const existingMessages = (current.uiMessages as any[]) || [];
-            const followupContent = body.workflowMode === 'material'
-              ? MATERIAL_MODE_FOLLOWUP
-              : IDEA_MODE_FOLLOWUP;
-            const alreadyPresent = existingMessages.some(
-              (m: any) => m.role === 'assistant' && m.content === followupContent
-            );
-            if (!alreadyPresent) {
-              updatePayload.uiMessages = [
-                ...existingMessages,
-                { role: 'assistant', content: followupContent },
-              ];
-            }
-          }
+      if (current) {
+        const existingMessages = (current.uiMessages as any[]) || [];
+        const followupContent = body.workflowMode === 'material'
+          ? MATERIAL_MODE_FOLLOWUP
+          : IDEA_MODE_FOLLOWUP;
+        const alreadyPresent = existingMessages.some(
+          (m: any) => m.role === 'assistant' && m.content === followupContent
+        );
+        if (!alreadyPresent) {
+          updatePayload.uiMessages = [
+            ...existingMessages,
+            { role: 'assistant', content: followupContent },
+          ];
         }
       }
+    }
+  }
 
-      // [Arch] 允许更新精挑素材篮子 (Asset 级别)
-      if (body.selectedAssetIds !== undefined) {
-        if (!Array.isArray(body.selectedAssetIds)) {
-          return c.json({ error: 'selectedAssetIds must be an array' }, 400);
-        }
-        updatePayload.selectedAssetIds = body.selectedAssetIds;
-      }
+  if (body.selectedAssetIds !== undefined) {
+    if (!Array.isArray(body.selectedAssetIds)) {
+      return c.json({ error: 'selectedAssetIds must be an array' }, 400);
+    }
+    updatePayload.selectedAssetIds = body.selectedAssetIds;
+  }
 
-      if (Object.keys(updatePayload).length === 1) {
+  if (Object.keys(updatePayload).length === 1) {
     return c.json({ success: true, message: 'No fields to update' });
   }
 
   try {
-    await db.update(projects)
+    await db
+      .update(projects)
       .set(updatePayload)
-      .where(eq(projects.id, id));
+      .where(and(eq(projects.id, id), eq(projects.userId, user.id)));
     return c.json({ success: true });
   } catch (error) {
     console.error('Failed to patch project:', error);
@@ -325,6 +359,7 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 app.post('/from-hotspot', async (c) => {
+  const user = c.get('user');
   const body = await c.req.json().catch(() => null);
   if (!body?.hotspotId) return c.json({ error: 'hotspotId required' }, 400);
 
@@ -348,6 +383,7 @@ app.post('/from-hotspot', async (c) => {
   const newId = crypto.randomUUID();
   await db.insert(projects).values({
     id: newId,
+    userId: user.id,
     title: hotspot.title,
     workflowMode: 'idea',
     uiMessages: [{ id: crypto.randomUUID(), role: 'user', content: seedMessage }],

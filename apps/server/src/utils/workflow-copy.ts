@@ -14,3 +14,6 @@ export const MATERIAL_MODE_PROMPT_CONTEXT =
 
 export const IDEA_MODE_PROMPT_CONTEXT =
   "当前项目处于【想法驱动工作流】。用户从创意或热点出发进行创作。优先引导用户描述创作概念，结合今日热点生成拍摄大纲（使用 updateOutline），再进行素材匹配。若用户尚未提供创意方向，主动从今日热点中推荐 1-2 个传播潜力较强的话题。";
+
+export const FREECHAT_PROMPT_CONTEXT =
+  "当前项目处于【自由对话模式】。用户没有预设的工作流；与他们正常对话即可。你可以使用 search_assets / search_clips 帮助检索素材，也可以使用 search_web / fetch_webpage 查询资讯。**禁止主动调用 generateEditingPlan 或 updateOutline**——这两个工具在本模式下被禁用。当用户的目标变得明确（要做剪辑或要写大纲），请提示他们另开一个素材驱动 / 想法驱动模式的项目以解锁完整工作流。";

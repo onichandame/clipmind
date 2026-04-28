@@ -24,6 +24,9 @@ const serverEnvSchema = z.object({
   HOTSPOTS_CRON_SCHEDULE: z.string().default('0 5 * * *'),
   HOTSPOTS_MIN_CORPUS: z.coerce.number().int().min(1).default(5),
   HOTSPOTS_MAX_ITEMS: z.coerce.number().int().min(1).default(20),
+  // Auth + webhook trust boundary
+  AUTH_SESSION_TTL_DAYS: z.coerce.number().int().min(1).default(30),
+  WEBHOOK_HMAC_SECRET: z.string().min(32, 'WEBHOOK_HMAC_SECRET 至少 32 字符（用于签名 OSS/ASR 回调载荷）'),
 });
 
 export const serverConfig = serverEnvSchema.parse(process.env);
