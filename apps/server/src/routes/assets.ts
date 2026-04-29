@@ -57,6 +57,51 @@ app.get("/", async (c) => {
   }
 });
 
+// POST /api/assets/preflight — hash-only dedup check before FFmpeg.
+// Hit: creates project_assets pointing at the existing media_files row, returns
+//   { dedupHit: true, assetId, mediaFileId, alreadyProcessed }.
+//   Caller skips FFmpeg + uploads entirely.
+// Miss: returns { dedupHit: false }. Caller must proceed to FFmpeg, then POST /api/assets.
+app.post("/preflight", async (c) => {
+  const user = c.get('user');
+  try {
+    const body = await c.req.json();
+    const { projectId, fileHash, filename, localPath, originDeviceId } = body || {};
+    if (!projectId || !fileHash || !filename || !localPath || !originDeviceId) {
+      return c.json({ error: 'projectId, fileHash, filename, localPath, originDeviceId required' }, 400);
+    }
+
+    const [existing] = await db
+      .select()
+      .from(mediaFiles)
+      .where(and(eq(mediaFiles.userId, user.id), eq(mediaFiles.fileHash, fileHash)))
+      .limit(1);
+
+    if (!existing) {
+      return c.json({ dedupHit: false });
+    }
+
+    const projectAssetId = crypto.randomUUID();
+    await db.insert(projectAssets).values({
+      id: projectAssetId,
+      projectId,
+      userId: user.id,
+      mediaFileId: existing.id,
+      filename,
+      localPath,
+      originDeviceId,
+      backupStatus: 'local_only',
+    });
+
+    const alreadyProcessed = existing.status === 'ready'
+      && (existing.asrStatus === 'completed' || existing.asrStatus === 'skipped');
+    return c.json({ dedupHit: true, assetId: projectAssetId, mediaFileId: existing.id, alreadyProcessed });
+  } catch (error) {
+    console.error('❌ 资产 preflight 失败:', error);
+    return c.json({ error: 'Database Error' }, 500);
+  }
+});
+
 // POST /api/assets — pre-register + dedup by fileHash
 // Returns { assetId, mediaFileId, alreadyProcessed }
 app.post("/", async (c) => {
