@@ -15,6 +15,13 @@
       "when": 1777368753557,
       "tag": "0001_brainy_blacklash",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1777428071996,
+      "tag": "0002_gifted_lake",
+      "breakpoints": true
     }
   ]
 }

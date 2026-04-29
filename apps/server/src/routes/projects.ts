@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { db } from '../db';
 import { projects, projectOutlines, editingPlans, assets, hotspots } from '@clipmind/db/schema';
-import { desc, eq, inArray, and } from 'drizzle-orm';
+import { desc, eq, inArray, and, sql } from 'drizzle-orm';
 import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
 import { requireAuth } from '../middleware/auth';
@@ -10,26 +10,60 @@ const app = new Hono();
 
 app.use('*', requireAuth);
 
-// 1. 获取项目列表（按当前登录用户限定）
+// 1. 获取项目列表（按当前登录用户限定）。
+//    ?pinned=true   仅置顶项目（无分页，按 pinnedAt 降序）
+//    ?pinned=false  仅未置顶项目（支持 limit/offset 分页）
+//    省略 pinned    全部项目，置顶在前 (兼容旧调用)
 app.get('/', async (c) => {
   const user = c.get('user');
+  const pinnedParam = c.req.query('pinned');
+  const limitParam = Number.parseInt(c.req.query('limit') ?? '', 10);
+  const offsetParam = Number.parseInt(c.req.query('offset') ?? '', 10);
+  const paginated = Number.isFinite(limitParam) && limitParam > 0;
+  const limit = paginated ? Math.min(limitParam, 100) : null;
+  const offset = Number.isFinite(offsetParam) && offsetParam > 0 ? offsetParam : 0;
+
   try {
-    const data = await db
+    const conds = [eq(projects.userId, user.id)];
+    let orderBy;
+    if (pinnedParam === 'true') {
+      conds.push(sql`${projects.pinnedAt} IS NOT NULL`);
+      orderBy = [desc(projects.pinnedAt)];
+    } else if (pinnedParam === 'false') {
+      conds.push(sql`${projects.pinnedAt} IS NULL`);
+      orderBy = [desc(projects.updatedAt)];
+    } else {
+      orderBy = [desc(sql`${projects.pinnedAt} IS NOT NULL`), desc(projects.pinnedAt), desc(projects.updatedAt)];
+    }
+
+    const baseQuery = db
       .select({
         id: projects.id,
         title: projects.title,
         createdAt: projects.createdAt,
         updatedAt: projects.updatedAt,
         workflowMode: projects.workflowMode,
+        pinnedAt: projects.pinnedAt,
       })
       .from(projects)
-      .where(eq(projects.userId, user.id))
-      .orderBy(desc(projects.updatedAt));
+      .where(and(...conds))
+      .orderBy(...orderBy);
 
-    return c.json({ projects: data });
+    if (limit !== null) {
+      // Fetch limit+1 to detect whether more rows exist without a separate COUNT.
+      const rows = await baseQuery.limit(limit + 1).offset(offset);
+      const hasMore = rows.length > limit;
+      return c.json({
+        projects: hasMore ? rows.slice(0, limit) : rows,
+        nextOffset: hasMore ? offset + limit : null,
+      });
+    }
+
+    const data = await baseQuery;
+    return c.json({ projects: data, nextOffset: null });
   } catch (error) {
     console.error("Failed to fetch projects:", error);
-    return c.json({ projects: [] }, 500);
+    return c.json({ projects: [], nextOffset: null }, 500);
   }
 });
 
@@ -332,6 +366,13 @@ app.patch('/:id', async (c) => {
       return c.json({ error: 'selectedAssetIds must be an array' }, 400);
     }
     updatePayload.selectedAssetIds = body.selectedAssetIds;
+  }
+
+  if (body.pinned !== undefined) {
+    if (typeof body.pinned !== 'boolean') {
+      return c.json({ error: 'pinned must be a boolean' }, 400);
+    }
+    updatePayload.pinnedAt = body.pinned ? new Date() : null;
   }
 
   if (Object.keys(updatePayload).length === 1) {
