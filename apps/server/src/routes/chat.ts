@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { projectOutlines, editingPlans, assets, assetChunks, projects } from "@clipmind/db";
+import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, projects } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
@@ -91,12 +91,14 @@ app.post("/", async (c) => {
                 const allInvolvedIds = Array.from(new Set([...retrievedIds, ...selectedIds]));
 
                 if (allInvolvedIds.length > 0) {
-                  // [Arch] 解决大模型“内容盲区”：拿 UUID 去 assets 表换取真实的文件名与内容摘要(summary)，限定当前用户。
+                  // IDs are project_assets.id — join media_files for summary
                   const involvedAssets = await db.select({
-                    id: assets.id,
-                    filename: assets.filename,
-                    summary: assets.summary
-                  }).from(assets).where(and(inArray(assets.id, allInvolvedIds), eq(assets.userId, user.id)));
+                    id: projectAssets.id,
+                    filename: projectAssets.filename,
+                    summary: mediaFiles.summary,
+                  }).from(projectAssets)
+                    .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+                    .where(and(inArray(projectAssets.id, allInvolvedIds), eq(projectAssets.userId, user.id)));
 
                   if (retrievedIds.length > 0) {
                     const retrievedNames = involvedAssets.filter(a => retrievedIds.includes(a.id)).map(a => `【${a.filename}】(内容: ${a.summary || '暂无摘要'})`);
@@ -213,16 +215,22 @@ app.post("/", async (c) => {
             const clipIds = Array.from(new Set(
               args.clips.map((c: any) => c.clipId).filter((id: any) => typeof id === 'string' && id.length > 0)
             ));
+            // Join projectAssets to get project_assets.id (the assetId stored in editing plan clips)
             const chunks = clipIds.length > 0
               ? await db.select({
                   id: assetChunks.id,
-                  assetId: assetChunks.assetId,
+                  mediaFileId: assetChunks.mediaFileId,
+                  projectAssetId: projectAssets.id,
                   startTime: assetChunks.startTime,
                   endTime: assetChunks.endTime,
                 })
                 .from(assetChunks)
-                .innerJoin(assets, eq(assets.id, assetChunks.assetId))
-                .where(and(inArray(assetChunks.id, clipIds), eq(assets.userId, user.id)))
+                .innerJoin(mediaFiles, eq(mediaFiles.id, assetChunks.mediaFileId))
+                .innerJoin(projectAssets, and(
+                  eq(projectAssets.mediaFileId, assetChunks.mediaFileId),
+                  eq(projectAssets.projectId, projectId)
+                ))
+                .where(and(inArray(assetChunks.id, clipIds), eq(mediaFiles.userId, user.id)))
               : [];
             const chunkMap = new Map(chunks.map(c => [c.id, c]));
 
@@ -243,7 +251,7 @@ app.post("/", async (c) => {
                   description: clip.description,
                   clipType: 'footage' as const,
                   clipId: chunk.id,
-                  assetId: chunk.assetId,
+                  assetId: chunk.projectAssetId, // project_assets.id for JIT enrichment in projects.ts
                   startTime: chunk.startTime,
                   endTime: chunk.endTime,
                 };
@@ -334,19 +342,32 @@ app.post("/", async (c) => {
               summary: r.payload.text
             }));
 
-            // 过滤已删除素材：Qdrant 向量可能滞后于 DB 删除操作；同时按 userId 隔离，防止跨用户素材泄露
-            const rawAssetIds = rawAssets.map(a => a.assetId);
-            const existingAssets = rawAssetIds.length > 0
-              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(and(inArray(assets.id, rawAssetIds), eq(assets.userId, user.id)))
+            // Qdrant returns mediaFileId in payload.assetId — translate to project_assets.id
+            const rawMediaFileIds = rawAssets.map(a => a.assetId);
+            const ownedPAs = rawMediaFileIds.length > 0
+              ? await db.select({
+                  id: projectAssets.id,
+                  mediaFileId: projectAssets.mediaFileId,
+                  filename: projectAssets.filename,
+                }).from(projectAssets)
+                  .where(and(
+                    inArray(projectAssets.mediaFileId, rawMediaFileIds),
+                    eq(projectAssets.projectId, projectId),
+                    eq(projectAssets.userId, user.id)
+                  ))
               : [];
-            const existingIdSet = new Set(existingAssets.map(a => a.id));
-            const filenameMap = new Map(existingAssets.map(a => [a.id, a.filename]));
+            const existingIdSet = new Set(ownedPAs.map(a => a.mediaFileId));
+            const mediaFileToPAId = new Map(ownedPAs.map(a => [a.mediaFileId, a.id]));
+            const filenameMap = new Map(ownedPAs.map(a => [a.mediaFileId, a.filename]));
             const assetsFound = rawAssets
               .filter(a => existingIdSet.has(a.assetId))
-              .map(a => ({ ...a, filename: filenameMap.get(a.assetId) ?? '' }));
+              .map(a => ({
+                ...a,
+                assetId: mediaFileToPAId.get(a.assetId) ?? a.assetId, // return project_assets.id
+                filename: filenameMap.get(a.assetId) ?? '',
+              }));
 
-            // [Arch] 状态持久化：将宏观检索命中的资产ID写入聚合根，驱动前端聚光灯UI
-            const hitAssetIds = assetsFound.map(a => a.assetId);
+            const hitAssetIds = assetsFound.map(a => a.assetId); // project_assets.id values
             await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(and(eq(projects.id, projectId), eq(projects.userId, user.id)));
 
             console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产（已过滤 ${rawAssets.length - assetsFound.length} 个幽灵向量）并已持久化至 Project。`);
@@ -414,38 +435,40 @@ app.post("/", async (c) => {
 
             console.log(`[RAG-Micro] LLM 在指定视频中精搜切片: "${query}", assetIds: ${assetIds.length}`);
 
-            // 防越权：把传入的 assetIds 收敛到当前用户拥有的素材，再进入向量层
-            const ownedAssetIds = await db
-              .select({ id: assets.id })
-              .from(assets)
-              .where(and(inArray(assets.id, assetIds), eq(assets.userId, user.id)));
-            const ownedIdSet = new Set(ownedAssetIds.map(a => a.id));
-            const safeAssetIds = assetIds.filter(id => ownedIdSet.has(id));
-            if (safeAssetIds.length === 0) {
+            // assetIds are project_assets.id — translate to mediaFileId for Qdrant filter
+            const ownedRows = await db
+              .select({ id: projectAssets.id, mediaFileId: projectAssets.mediaFileId, filename: projectAssets.filename })
+              .from(projectAssets)
+              .where(and(
+                inArray(projectAssets.id, assetIds),
+                eq(projectAssets.projectId, projectId),
+                eq(projectAssets.userId, user.id)
+              ));
+            if (ownedRows.length === 0) {
               return { success: true, clips: [] };
             }
+            const mediaFileIds = ownedRows.map(r => r.mediaFileId);
+            // Reverse map: mediaFileId → project_assets.id (for response) and filename
+            const mediaIdToPAId = new Map(ownedRows.map(r => [r.mediaFileId, r.id]));
+            const mediaIdToFilename = new Map(ownedRows.map(r => [r.mediaFileId, r.filename]));
 
             const [vector] = await generateEmbeddings([query]);
 
             const { searchVectorsWithFilter } = await import("../utils/qdrant");
-            const qdrantResults = await searchVectorsWithFilter(vector, safeAssetIds, limit);
+            const qdrantResults = await searchVectorsWithFilter(vector, mediaFileIds, limit);
 
-            const rawClips = qdrantResults.map((p: any) => ({
-              id: p.id,
-              score: p.score,
-              assetId: p.payload?.assetId,
-              text: p.payload?.text,
-              startTime: p.payload?.startTime,
-              endTime: p.payload?.endTime,
-            }));
-
-            // 补充 filename，让 LLM 能以可读名称引用素材而无需展示内部 ID（owner-scoped）
-            const clipAssetIds = Array.from(new Set(rawClips.map((c: any) => c.assetId).filter(Boolean)));
-            const clipAssets = clipAssetIds.length > 0
-              ? await db.select({ id: assets.id, filename: assets.filename }).from(assets).where(and(inArray(assets.id, clipAssetIds), eq(assets.userId, user.id)))
-              : [];
-            const clipFilenameMap = new Map(clipAssets.map(a => [a.id, a.filename]));
-            const clips = rawClips.map((c: any) => ({ ...c, filename: clipFilenameMap.get(c.assetId) ?? '' }));
+            const clips = qdrantResults.map((p: any) => {
+              const mfId = p.payload?.assetId; // mediaFileId in Qdrant payload
+              return {
+                id: p.id,
+                score: p.score,
+                assetId: mediaIdToPAId.get(mfId) ?? mfId, // expose project_assets.id to LLM
+                filename: mediaIdToFilename.get(mfId) ?? '',
+                text: p.payload?.text,
+                startTime: p.payload?.startTime,
+                endTime: p.payload?.endTime,
+              };
+            });
 
             console.log(`[RAG-Micro] 精搜命中 ${clips.length} 个特定切片。`);
             return {

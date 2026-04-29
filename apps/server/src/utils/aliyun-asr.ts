@@ -1,4 +1,4 @@
-import { assets } from "@clipmind/db";
+import { mediaFiles } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { serverConfig } from "../env";
@@ -11,7 +11,8 @@ import { signAssetViewUrl } from "./oss";
  * @param assetId 本地资产 ID
  * @param audioOssUrl 需要识别的音频公网/预签名 URL
  */
-export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) {
+export async function submitAliyunAsrTask(mediaFileId: string, audioOssUrl: string) {
+  const assetId = mediaFileId; // local alias for logging
   console.log("\n------------------------------------------");
   console.log(`[DEBUG: Aliyun-ASR] 1. submitAliyunAsrTask 被调用`);
   console.log(`[DEBUG: Aliyun-ASR] 接收参数 - assetId: ${assetId}, audioOssUrl: ${audioOssUrl}`);
@@ -64,14 +65,13 @@ export async function submitAliyunAsrTask(assetId: string, audioOssUrl: string) 
 
     const taskId = response.TaskId;
 
-    // 更新状态机：标记为处理中，记录真实的任务 ID
-    await db.update(assets)
+    await db.update(mediaFiles)
       .set({ asrTaskId: taskId, asrStatus: 'processing' })
-      .where(eq(assets.id, assetId));
+      .where(eq(mediaFiles.id, mediaFileId));
 
     console.log(`✅ [ASR Pipeline] 任务提交成功, 真实 TaskId: ${taskId}`);
   } catch (error) {
-    await db.update(assets).set({ asrStatus: 'failed' }).where(eq(assets.id, assetId));
+    await db.update(mediaFiles).set({ asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
     console.error(`❌ [ASR Pipeline] 任务提交失败:`, error);
   }
 }

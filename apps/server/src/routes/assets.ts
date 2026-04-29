@@ -1,88 +1,142 @@
 import { Hono } from "hono";
-import { assets } from "@clipmind/db";
-import { desc, eq, and } from "drizzle-orm";
+import { mediaFiles, projectAssets } from "@clipmind/db";
+import { desc, eq, and, inArray } from "drizzle-orm";
 import { db } from "../db";
-import { signAssetViewUrl } from "../utils/oss";
-import { deleteVectorsByAssetId } from "../utils/qdrant";
+import { signAssetViewUrl, signAssetDownloadUrl } from "../utils/oss";
+import { deleteVectorsByAssetId, QDRANT_SUMMARY_COLLECTION } from "../utils/qdrant";
 import { requireAuth } from "../middleware/auth";
 
 const app = new Hono();
 
 app.use('*', requireAuth);
 
+// GET /api/assets?projectId=xxx — list project-scoped assets joining media_files for processing state
 app.get("/", async (c) => {
   const user = c.get('user');
+  const projectId = c.req.query('projectId');
+  if (!projectId) {
+    return c.json({ error: 'projectId query param required' }, 400);
+  }
   try {
-    const allAssets = await db
-      .select()
-      .from(assets)
-      .where(eq(assets.userId, user.id))
-      .orderBy(desc(assets.createdAt));
+    const rows = await db
+      .select({
+        id: projectAssets.id,
+        mediaFileId: projectAssets.mediaFileId,
+        projectId: projectAssets.projectId,
+        filename: projectAssets.filename,
+        localPath: projectAssets.localPath,
+        originDeviceId: projectAssets.originDeviceId,
+        videoOssKey: projectAssets.videoOssKey,
+        backupStatus: projectAssets.backupStatus,
+        createdAt: projectAssets.createdAt,
+        // from media_files
+        fileSize: mediaFiles.fileSize,
+        duration: mediaFiles.duration,
+        status: mediaFiles.status,
+        asrStatus: mediaFiles.asrStatus,
+        summary: mediaFiles.summary,
+        audioOssKey: mediaFiles.audioOssKey,
+        thumbnailOssKey: mediaFiles.thumbnailOssKey,
+      })
+      .from(projectAssets)
+      .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+      .where(and(eq(projectAssets.projectId, projectId), eq(projectAssets.userId, user.id)))
+      .orderBy(desc(projectAssets.createdAt));
 
-    // 本地优先：仅签发音频/缩略图（始终上云）和已云备份的视频对象 key。
-    // 视频未云备份时，videoOssKey 为 null，前端通过 useAssetUri(assetId) 走本地协议解析。
-    const mappedAssets = allAssets.map(asset => ({
-      ...asset,
-      videoOssUrl: asset.videoOssKey ? signAssetViewUrl(asset.videoOssKey) : null,
-      audioOssUrl: signAssetViewUrl(asset.audioOssUrl),
-      thumbnailUrl: signAssetViewUrl(asset.thumbnailUrl),
+    const mapped = rows.map(row => ({
+      ...row,
+      videoOssUrl: row.videoOssKey ? signAssetViewUrl(row.videoOssKey) : null,
+      audioOssUrl: row.audioOssKey ? signAssetViewUrl(row.audioOssKey) : null,
+      thumbnailUrl: row.thumbnailOssKey ? signAssetViewUrl(row.thumbnailOssKey) : null,
     }));
 
-    return c.json(mappedAssets);
+    return c.json(mapped);
   } catch (error) {
-    console.error('❌ 获取资产列表失败:', error);
+    console.error('❌ 获取项目资产列表失败:', error);
     return c.json({ error: 'Database Error' }, 500);
   }
 });
 
-// [Local-First] 客户端在 FFmpeg 提取/上传开始之前预先创建资产行，
-// 以便在签发 OSS 上传 token 时把 assetId 绑入 HMAC，杜绝跨用户回填。
+// POST /api/assets — pre-register + dedup by fileHash
+// Returns { assetId, mediaFileId, alreadyProcessed }
 app.post("/", async (c) => {
   const user = c.get('user');
   try {
     const body = await c.req.json();
-    const {
-      id,
-      filename,
-      localPath,
-      originDeviceId,
-      fileSize,
-      duration,
-      checksum,
-      asrStatus,
-    } = body || {};
+    const { projectId, fileHash, filename, localPath, originDeviceId, fileSize, duration, asrStatus } = body || {};
 
-    if (!filename || !localPath || !originDeviceId || typeof fileSize !== 'number') {
-      return c.json({ error: 'filename, localPath, originDeviceId, fileSize required' }, 400);
+    if (!projectId || !fileHash || !filename || !localPath || !originDeviceId || typeof fileSize !== 'number') {
+      return c.json({ error: 'projectId, fileHash, filename, localPath, originDeviceId, fileSize required' }, 400);
     }
 
     const allowedAsr = new Set(['pending', 'skipped']);
     const initialAsrStatus = allowedAsr.has(asrStatus) ? asrStatus : 'pending';
 
-    const assetId = (typeof id === 'string' && id.length > 0) ? id : crypto.randomUUID();
+    // 1. Dedup check: same user + same file hash
+    const [existing] = await db
+      .select()
+      .from(mediaFiles)
+      .where(and(eq(mediaFiles.userId, user.id), eq(mediaFiles.fileHash, fileHash)))
+      .limit(1);
 
-    await db.insert(assets).values({
-      id: assetId,
+    let mediaFileId: string;
+    let alreadyProcessed = false;
+
+    if (existing) {
+      mediaFileId = existing.id;
+      alreadyProcessed = existing.status === 'ready' && existing.asrStatus === 'completed';
+    } else {
+      // New file: create media_files row
+      mediaFileId = crypto.randomUUID();
+      try {
+        await db.insert(mediaFiles).values({
+          id: mediaFileId,
+          userId: user.id,
+          fileHash,
+          fileSize,
+          duration: duration ?? null,
+          status: 'processing',
+          asrStatus: initialAsrStatus,
+        });
+      } catch (e: any) {
+        const msg = String(e?.code || e?.message || '');
+        if (msg.includes('ER_DUP_ENTRY') || msg.includes('Duplicate')) {
+          // Lost the race — another concurrent upload won; re-select
+          const [winner] = await db
+            .select()
+            .from(mediaFiles)
+            .where(and(eq(mediaFiles.userId, user.id), eq(mediaFiles.fileHash, fileHash)))
+            .limit(1);
+          if (!winner) throw e;
+          mediaFileId = winner.id;
+          alreadyProcessed = winner.status === 'ready' && winner.asrStatus === 'completed';
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    // 2. Create project_assets row (always, even for dedup)
+    const projectAssetId = crypto.randomUUID();
+    await db.insert(projectAssets).values({
+      id: projectAssetId,
+      projectId,
       userId: user.id,
+      mediaFileId,
       filename,
       localPath,
       originDeviceId,
-      fileSize,
-      duration: duration ?? null,
-      checksum: checksum ?? null,
-      status: 'processing',
-      asrStatus: initialAsrStatus,
       backupStatus: 'local_only',
     });
 
-    return c.json({ success: true, assetId });
+    return c.json({ assetId: projectAssetId, mediaFileId, alreadyProcessed });
   } catch (error) {
     console.error('❌ 资产预登记失败:', error);
     return c.json({ error: 'Database Insert Error' }, 500);
   }
 });
 
-// 重新定位本地原片（资产迁移到新机器或文件被移动时使用）
+// POST /api/assets/:id/relink — update local path on project_assets
 app.post('/:id/relink', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
@@ -94,9 +148,9 @@ app.post('/:id/relink', async (c) => {
   }
   try {
     await db
-      .update(assets)
+      .update(projectAssets)
       .set({ localPath, originDeviceId })
-      .where(and(eq(assets.id, id), eq(assets.userId, user.id)));
+      .where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
     return c.json({ success: true });
   } catch (error) {
     console.error('❌ relink 失败:', error);
@@ -104,15 +158,40 @@ app.post('/:id/relink', async (c) => {
   }
 });
 
+// DELETE /api/assets/:id — delete project_asset; clean up media_file if last reference for this user
 app.delete("/:id", async (c) => {
   const user = c.get('user');
   try {
     const id = c.req.param("id");
-    await db.delete(assets).where(and(eq(assets.id, id), eq(assets.userId, user.id)));
 
-    const { QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
-    deleteVectorsByAssetId(id).catch(e => console.error(`❌ [Qdrant] 清理资产 ${id} 的 chunks 向量失败:`, e));
-    deleteVectorsByAssetId(id, QDRANT_SUMMARY_COLLECTION).catch(e => console.error(`❌ [Qdrant] 清理资产 ${id} 的 summary 向量失败:`, e));
+    // Get the mediaFileId before deleting
+    const [pa] = await db
+      .select({ mediaFileId: projectAssets.mediaFileId })
+      .from(projectAssets)
+      .where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)))
+      .limit(1);
+
+    if (!pa) {
+      return c.json({ error: 'Asset not found' }, 404);
+    }
+
+    await db.delete(projectAssets).where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
+
+    // Check if any other project_assets reference this media_file for this user
+    const remaining = await db
+      .select({ id: projectAssets.id })
+      .from(projectAssets)
+      .where(and(eq(projectAssets.mediaFileId, pa.mediaFileId), eq(projectAssets.userId, user.id)))
+      .limit(1);
+
+    if (remaining.length === 0) {
+      // Last reference — delete media_file (cascades asset_chunks) and clean Qdrant
+      await db.delete(mediaFiles).where(eq(mediaFiles.id, pa.mediaFileId));
+      deleteVectorsByAssetId(pa.mediaFileId).catch(e =>
+        console.error(`❌ [Qdrant] 清理 ${pa.mediaFileId} chunks 向量失败:`, e));
+      deleteVectorsByAssetId(pa.mediaFileId, QDRANT_SUMMARY_COLLECTION).catch(e =>
+        console.error(`❌ [Qdrant] 清理 ${pa.mediaFileId} summary 向量失败:`, e));
+    }
 
     return c.json({ success: true });
   } catch (error) {

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { assets, assetChunks } from "@clipmind/db";
+import { mediaFiles, assetChunks } from "@clipmind/db";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { processAssetPostASR } from "../logic/asset-processor";
@@ -22,39 +22,34 @@ app.post("/", async (c) => {
       return new Response(JSON.stringify({ error: 'Missing TaskId' }), { status: 400 });
     }
 
-    // 1. 提取 TaskId 并在 assets 表中反查 assetId
-    const assetRecord = await db.select().from(assets).where(eq(assets.asrTaskId, taskId)).limit(1);
-    if (assetRecord.length === 0) {
+    // 1. 反查 media_files 中的 asrTaskId
+    const [mfRecord] = await db.select({ id: mediaFiles.id }).from(mediaFiles).where(eq(mediaFiles.asrTaskId, taskId)).limit(1);
+    if (!mfRecord) {
       console.error(`❌ Webhook 找不到对应的 TaskId: ${taskId}`);
-      // 找不到任务属于幽灵回调，直接返回 200 防止阿里云不断重试风暴
       return new Response(JSON.stringify({ success: true, msg: "Task ignored" }), { status: 200 });
     }
 
-    const assetId = assetRecord[0].id;
+    const mediaFileId = mfRecord.id;
 
     if (statusCode === 21050000) {
-      // 2. 状态扭转为成功
-      await db.update(assets).set({ asrStatus: 'completed' }).where(eq(assets.id, assetId));
+      await db.update(mediaFiles).set({ asrStatus: 'completed' }).where(eq(mediaFiles.id, mediaFileId));
 
-      // 3. 毫秒级时间轴与切片台词批量落盘
-          if (result && result.Sentences && result.Sentences.length > 0) {
-            const chunksToInsert = result.Sentences.map((sentence: any) => ({
-              id: crypto.randomUUID(),
-              assetId: assetId,
-              startTime: sentence.BeginTime,
-              endTime: sentence.EndTime,
-              transcriptText: sentence.Text
-            }));
+      if (result && result.Sentences && result.Sentences.length > 0) {
+        const chunksToInsert = result.Sentences.map((sentence: any) => ({
+          id: crypto.randomUUID(),
+          mediaFileId,
+          startTime: sentence.BeginTime,
+          endTime: sentence.EndTime,
+          transcriptText: sentence.Text
+        }));
 
-            await db.insert(assetChunks).values(chunksToInsert);
-            console.log(`✅ ASR 切片落盘成功：资产 ${assetId}，共生成 ${chunksToInsert.length} 条 RAG 索引片段。`);
+        await db.insert(assetChunks).values(chunksToInsert);
+        console.log(`✅ ASR 切片落盘成功：媒体文件 ${mediaFileId}，共生成 ${chunksToInsert.length} 条 RAG 索引片段。`);
 
-            // 移交中枢处理管线 (向量化片段 + LLM 总结生成 + 向量化总结 + DB 终态落盘)
-            processAssetPostASR(assetId, chunksToInsert).catch(console.error);
-          }
+        processAssetPostASR(mediaFileId, chunksToInsert).catch(console.error);
+      }
     } else {
-      // 失败状态流转
-      await db.update(assets).set({ status: 'error', asrStatus: 'failed' }).where(eq(assets.id, assetId));
+      await db.update(mediaFiles).set({ status: 'error', asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
       console.error(`❌ ASR 任务底层失败: ${taskId}, 状态码: ${statusCode}`);
     }
 

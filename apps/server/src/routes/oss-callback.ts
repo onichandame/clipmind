@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { assets, webhookNonces } from "@clipmind/db";
+import { mediaFiles, projectAssets, webhookNonces } from "@clipmind/db";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db";
 import { verifyWebhookPayload } from "../utils/auth";
@@ -48,13 +48,15 @@ app.post("/", async (c) => {
       throw e;
     }
 
+    // assetId meaning differs by kind:
+    //   audio/thumbnail → media_files.id
+    //   video-backup    → project_assets.id
     if (kind === 'audio') {
       await db
-        .update(assets)
-        .set({ audioOssUrl: objectKey, asrStatus: 'pending' })
-        .where(and(eq(assets.id, assetId), eq(assets.userId, userId)));
+        .update(mediaFiles)
+        .set({ audioOssKey: objectKey, asrStatus: 'pending' })
+        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, userId)));
 
-      // Fire ASR asynchronously — audio always uploads, so this is the only path to transcripts.
       import('../utils/aliyun-asr').then(({ submitAliyunAsrTask }) => {
         submitAliyunAsrTask(assetId, objectKey).catch(err => {
           console.error("[OSS-Callback] submitAliyunAsrTask failed:", err);
@@ -64,14 +66,14 @@ app.post("/", async (c) => {
       });
     } else if (kind === 'thumbnail') {
       await db
-        .update(assets)
-        .set({ thumbnailUrl: objectKey, status: 'ready' })
-        .where(and(eq(assets.id, assetId), eq(assets.userId, userId)));
+        .update(mediaFiles)
+        .set({ thumbnailOssKey: objectKey, status: 'ready' })
+        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, userId)));
     } else if (kind === 'video-backup') {
       await db
-        .update(assets)
+        .update(projectAssets)
         .set({ videoOssKey: objectKey, backupStatus: 'backed_up' })
-        .where(and(eq(assets.id, assetId), eq(assets.userId, userId)));
+        .where(and(eq(projectAssets.id, assetId), eq(projectAssets.userId, userId)));
     }
 
     return c.json({ success: true });

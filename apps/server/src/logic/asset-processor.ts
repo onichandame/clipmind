@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { assets } from "@clipmind/db";
+import { mediaFiles } from "@clipmind/db";
 import { createAIModel } from "../utils/ai";
 import { generateEmbeddings } from "../utils/embeddings";
 import { upsertVectors, QDRANT_CHUNKS_COLLECTION, QDRANT_SUMMARY_COLLECTION } from "../utils/qdrant";
@@ -9,9 +9,10 @@ import { upsertVectors, QDRANT_CHUNKS_COLLECTION, QDRANT_SUMMARY_COLLECTION } fr
 /**
  * 资产后处理中枢：处理 ASR 切片，生成 LLM 总结，并分别推入 Qdrant。
  */
-export async function processAssetPostASR(assetId: string, chunks: any[]) {
+export async function processAssetPostASR(mediaFileId: string, chunks: any[]) {
+  const assetId = mediaFileId; // Qdrant payload field name kept as 'assetId' for compatibility
   try {
-    console.log(`[Processor] 🕒 ${new Date().toISOString()} - 资产 ${assetId} 进入中枢处理管线...`);
+    console.log(`[Processor] 🕒 ${new Date().toISOString()} - 媒体文件 ${mediaFileId} 进入中枢处理管线...`);
     
     // ============================================
     // 阶段 1: 建立微观片段的向量索引 (Chunks)
@@ -71,15 +72,15 @@ export async function processAssetPostASR(assetId: string, chunks: any[]) {
     // ============================================
     // 阶段 4: DB 流转终态落盘
     // ============================================
-    await db.update(assets).set({ 
+    await db.update(mediaFiles).set({
       status: 'ready',
-      summary: summary 
-    }).where(eq(assets.id, assetId));
-    
-    console.log(`✅ [Processor] 资产 ${assetId} 全链路处理完毕，状态扭转为 ready。`);
-    
+      summary: summary
+    }).where(eq(mediaFiles.id, mediaFileId));
+
+    console.log(`✅ [Processor] 媒体文件 ${mediaFileId} 全链路处理完毕，状态扭转为 ready。`);
+
   } catch (error) {
-    await db.update(assets).set({ status: 'error' }).where(eq(assets.id, assetId));
+    await db.update(mediaFiles).set({ status: 'error' }).where(eq(mediaFiles.id, mediaFileId));
     console.error(`❌ [Processor] Task failed for asset ${assetId}:`, error);
   }
 }

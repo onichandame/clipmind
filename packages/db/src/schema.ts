@@ -35,47 +35,72 @@ export const sessions = mysqlTable('sessions', {
 }));
 
 // ==========================================
-// 模块 A：全局资产库 (The Asset Data Layer)
+// 模块 A：资产处理层 (The Asset Data Layer)
+//
+// 两层分离设计：
+//   media_files  — 以文件哈希去重的底层处理单元（ASR/摘要/向量归属于此）
+//   project_assets — 每个项目独立的资产引用（UI/用户看到的 assetId 来自此表）
 // ==========================================
 
-// NEW: 视频源文件记录
-export const assets = mysqlTable('assets', {
+// 底层：去重处理单元。同一用户上传相同文件到不同项目时，此表只有一行。
+export const mediaFiles = mysqlTable('media_files', {
   id: varchar('id', { length: 36 }).primaryKey(),
   userId: varchar('user_id', { length: 36 })
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
-  filename: varchar('filename', { length: 255 }).notNull(),
-  // 本地优先：原片默认留在导入设备上，不再强制上云
-  localPath: varchar('local_path', { length: 1024 }), // 导入设备上的绝对路径
-  originDeviceId: varchar('origin_device_id', { length: 64 }), // 导入设备稳定 UUID
-  videoOssKey: varchar('video_oss_key', { length: 1024 }), // 仅在用户开启云备份时填充
-  audioOssUrl: varchar('audio_oss_url', { length: 1024 }), // 音频强制上云用于 ASR
-  thumbnailUrl: varchar('thumbnail_url', { length: 1024 }), // 缩略图强制上云用于跨设备
+  fileHash: varchar('file_hash', { length: 64 }).notNull(), // SHA-256 hex of original video
+  audioOssKey: varchar('audio_oss_key', { length: 1024 }), // 音频强制上云用于 ASR
+  thumbnailOssKey: varchar('thumbnail_oss_key', { length: 1024 }), // 缩略图强制上云用于跨设备
   fileSize: int('file_size').notNull(),
   duration: int('duration'),
   status: varchar('status', { length: 20 }).default('processing'), // processing | ready | error
   asrTaskId: varchar('asr_task_id', { length: 128 }),
   asrStatus: varchar('asr_status', { length: 20 }).default('pending'), // pending | processing | completed | failed | skipped
-  // 云备份生命周期：local_only | queued | uploading | backed_up | stale | failed
-  backupStatus: varchar('backup_status', { length: 20 }).default('local_only').notNull(),
   summary: text('summary'),
-  checksum: varchar('checksum', { length: 64 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
-  userIdx: index('idx_assets_user').on(t.userId),
+  userIdx: index('idx_media_files_user').on(t.userId),
+  // 同一用户同一文件只处理一次
+  userHashUnique: index('idx_media_files_user_hash').on(t.userId, t.fileHash),
 }));
 
-// NEW: 视频切片记录 (ASR 结果)
+// 项目层：每个项目有独立的资产列表，多个项目可指向同一 media_file。
+export const projectAssets = mysqlTable('project_assets', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  projectId: varchar('project_id', { length: 36 })
+    .notNull()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  userId: varchar('user_id', { length: 36 })
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  mediaFileId: varchar('media_file_id', { length: 36 })
+    .notNull()
+    .references(() => mediaFiles.id, { onDelete: 'cascade' }),
+  filename: varchar('filename', { length: 255 }).notNull(),
+  // 本地优先：原片默认留在导入设备上
+  localPath: varchar('local_path', { length: 1024 }),
+  originDeviceId: varchar('origin_device_id', { length: 64 }),
+  videoOssKey: varchar('video_oss_key', { length: 1024 }), // 仅在用户开启云备份时填充
+  // 云备份生命周期：local_only | queued | uploading | backed_up | stale | failed
+  backupStatus: varchar('backup_status', { length: 20 }).default('local_only').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  projectIdx: index('idx_project_assets_project').on(t.projectId),
+  userIdx: index('idx_project_assets_user').on(t.userId),
+  mediaFileIdx: index('idx_project_assets_media_file').on(t.mediaFileId),
+}));
+
+// ASR 切片记录，归属底层 media_file（与项目无关）
 export const assetChunks = mysqlTable('asset_chunks', {
   id: varchar('id', { length: 36 }).primaryKey(),
-  assetId: varchar('asset_id', { length: 36 })
+  mediaFileId: varchar('media_file_id', { length: 36 })
     .notNull()
-    .references(() => assets.id, { onDelete: 'cascade' }),
+    .references(() => mediaFiles.id, { onDelete: 'cascade' }),
   startTime: int('start_time').notNull(),
   endTime: int('end_time').notNull(),
   transcriptText: text('transcript_text').notNull(),
 }, (t) => ({
-  assetIdx: index('idx_asset_chunks_asset').on(t.assetId),
+  mediaFileIdx: index('idx_asset_chunks_media_file').on(t.mediaFileId),
 }));
 
 // ==========================================

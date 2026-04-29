@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../db';
-import { projects, projectOutlines, editingPlans, assets, hotspots } from '@clipmind/db/schema';
+import { projects, projectOutlines, editingPlans, mediaFiles, projectAssets, hotspots } from '@clipmind/db/schema';
 import { desc, eq, inArray, and, sql } from 'drizzle-orm';
 import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
@@ -245,22 +245,25 @@ app.get('/:id', async (c) => {
         // 否则前端通过 useAssetUri(assetId) 走本地 asset:// 协议解析。
         if (clip.assetId) {
           try {
-            const [assetRecord] = await db
+            const [paRecord] = await db
               .select({
-                videoOssKey: assets.videoOssKey,
-                filename: assets.filename,
-                backupStatus: assets.backupStatus,
-                originDeviceId: assets.originDeviceId,
+                videoOssKey: projectAssets.videoOssKey,
+                filename: projectAssets.filename,
+                backupStatus: projectAssets.backupStatus,
+                originDeviceId: projectAssets.originDeviceId,
+                thumbnailOssKey: mediaFiles.thumbnailOssKey,
               })
-              .from(assets)
-              .where(and(eq(assets.id, clip.assetId), eq(assets.userId, user.id)));
+              .from(projectAssets)
+              .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+              .where(and(eq(projectAssets.id, clip.assetId), eq(projectAssets.userId, user.id)));
 
-            if (assetRecord) {
-              clip.filename = assetRecord.filename;
-              clip.backupStatus = assetRecord.backupStatus;
-              clip.originDeviceId = assetRecord.originDeviceId;
-              if (assetRecord.videoOssKey) {
-                clip.videoUrl = signAssetDownloadUrl(assetRecord.videoOssKey, assetRecord.filename);
+            if (paRecord) {
+              clip.filename = paRecord.filename;
+              clip.backupStatus = paRecord.backupStatus;
+              clip.originDeviceId = paRecord.originDeviceId;
+              clip.thumbnailUrl = signAssetViewUrl(paRecord.thumbnailOssKey);
+              if (paRecord.videoOssKey) {
+                clip.videoUrl = signAssetDownloadUrl(paRecord.videoOssKey, paRecord.filename);
               }
             }
           } catch (e) {
@@ -280,26 +283,27 @@ app.get('/:id', async (c) => {
           .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
         if (assetIds.length === 0) continue;
 
-        const assetRows = await db
+        const paRows = await db
           .select({
-            id: assets.id,
-            filename: assets.filename,
-            videoOssKey: assets.videoOssKey,
-            thumbnailUrl: assets.thumbnailUrl,
-            backupStatus: assets.backupStatus,
-            originDeviceId: assets.originDeviceId,
+            id: projectAssets.id,
+            filename: projectAssets.filename,
+            videoOssKey: projectAssets.videoOssKey,
+            backupStatus: projectAssets.backupStatus,
+            originDeviceId: projectAssets.originDeviceId,
+            thumbnailOssKey: mediaFiles.thumbnailOssKey,
           })
-          .from(assets)
-          .where(and(inArray(assets.id, assetIds), eq(assets.userId, user.id)));
+          .from(projectAssets)
+          .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+          .where(and(inArray(projectAssets.id, assetIds), eq(projectAssets.userId, user.id)));
 
-        const assetMap = new Map(assetRows.map((a: any) => [a.id, a]));
+        const assetMap = new Map(paRows.map((a: any) => [a.id, a]));
 
         for (const clip of plan.clips) {
           if (!clip.assetId) continue;
           const asset = assetMap.get(clip.assetId);
           if (!asset) continue;
           clip.fileName = asset.filename;
-          clip.thumbnailUrl = signAssetViewUrl(asset.thumbnailUrl);
+          clip.thumbnailUrl = signAssetViewUrl(asset.thumbnailOssKey);
           clip.backupStatus = asset.backupStatus;
           clip.originDeviceId = asset.originDeviceId;
           clip.videoUrl = asset.videoOssKey ? signAssetDownloadUrl(asset.videoOssKey, asset.filename) : null;

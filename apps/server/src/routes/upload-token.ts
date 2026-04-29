@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db';
-import { assets } from '@clipmind/db/schema';
+import { mediaFiles, projectAssets } from '@clipmind/db/schema';
 import { signUploadUrl } from '../utils/oss';
 import { signWebhookPayload, newNonce } from '../utils/auth';
 import { requireAuth } from '../middleware/auth';
@@ -41,12 +41,21 @@ app.post('/', async (c) => {
   }
   const { kind, assetId, filename } = parsed.data;
 
-  // 防越权：upload-token 必须挂在已经预登记给当前用户的资产上
-  const [owned] = await db
-    .select({ id: assets.id })
-    .from(assets)
-    .where(and(eq(assets.id, assetId), eq(assets.userId, user.id)))
-    .limit(1);
+  // 防越权：按 kind 分别在 media_files（audio/thumbnail）或 project_assets（video-backup）中核验归属
+  let owned: { id: string } | undefined;
+  if (kind === 'video-backup') {
+    [owned] = await db
+      .select({ id: projectAssets.id })
+      .from(projectAssets)
+      .where(and(eq(projectAssets.id, assetId), eq(projectAssets.userId, user.id)))
+      .limit(1);
+  } else {
+    [owned] = await db
+      .select({ id: mediaFiles.id })
+      .from(mediaFiles)
+      .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, user.id)))
+      .limit(1);
+  }
   if (!owned) {
     return c.json({ error: 'Asset not found' }, 404);
   }
