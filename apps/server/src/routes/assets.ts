@@ -164,33 +164,43 @@ app.delete("/:id", async (c) => {
   try {
     const id = c.req.param("id");
 
-    // Get the mediaFileId before deleting
-    const [pa] = await db
-      .select({ mediaFileId: projectAssets.mediaFileId })
-      .from(projectAssets)
-      .where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)))
-      .limit(1);
+    // MySQL state changes (project_assets row, possibly media_files row) run in
+    // one transaction so we never end up with project_assets gone but media_files
+    // dangling. Qdrant cleanup is fire-and-forget after commit — cross-system
+    // atomicity isn't possible; cron sweeps OSS orphans and is the safety net.
+    const result = await db.transaction(async (tx) => {
+      const [pa] = await tx
+        .select({ mediaFileId: projectAssets.mediaFileId })
+        .from(projectAssets)
+        .where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)))
+        .limit(1);
 
-    if (!pa) {
+      if (!pa) return { found: false as const };
+
+      await tx.delete(projectAssets).where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
+
+      const remaining = await tx
+        .select({ id: projectAssets.id })
+        .from(projectAssets)
+        .where(and(eq(projectAssets.mediaFileId, pa.mediaFileId), eq(projectAssets.userId, user.id)))
+        .limit(1);
+
+      const isLastReference = remaining.length === 0;
+      if (isLastReference) {
+        await tx.delete(mediaFiles).where(eq(mediaFiles.id, pa.mediaFileId));
+      }
+      return { found: true as const, mediaFileId: pa.mediaFileId, isLastReference };
+    });
+
+    if (!result.found) {
       return c.json({ error: 'Asset not found' }, 404);
     }
 
-    await db.delete(projectAssets).where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
-
-    // Check if any other project_assets reference this media_file for this user
-    const remaining = await db
-      .select({ id: projectAssets.id })
-      .from(projectAssets)
-      .where(and(eq(projectAssets.mediaFileId, pa.mediaFileId), eq(projectAssets.userId, user.id)))
-      .limit(1);
-
-    if (remaining.length === 0) {
-      // Last reference — delete media_file (cascades asset_chunks) and clean Qdrant
-      await db.delete(mediaFiles).where(eq(mediaFiles.id, pa.mediaFileId));
-      deleteVectorsByAssetId(pa.mediaFileId).catch(e =>
-        console.error(`❌ [Qdrant] 清理 ${pa.mediaFileId} chunks 向量失败:`, e));
-      deleteVectorsByAssetId(pa.mediaFileId, QDRANT_SUMMARY_COLLECTION).catch(e =>
-        console.error(`❌ [Qdrant] 清理 ${pa.mediaFileId} summary 向量失败:`, e));
+    if (result.isLastReference) {
+      deleteVectorsByAssetId(result.mediaFileId).catch(e =>
+        console.error(`❌ [Qdrant] 清理 ${result.mediaFileId} chunks 向量失败:`, e));
+      deleteVectorsByAssetId(result.mediaFileId, QDRANT_SUMMARY_COLLECTION).catch(e =>
+        console.error(`❌ [Qdrant] 清理 ${result.mediaFileId} summary 向量失败:`, e));
     }
 
     return c.json({ success: true });
