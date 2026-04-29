@@ -3,7 +3,7 @@ import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, 
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
-import { inArray, eq, and } from "drizzle-orm";
+import { inArray, eq, and, sql } from "drizzle-orm";
 import { db } from "../db";
 import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
@@ -62,6 +62,9 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n\n`;
   dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。此规范仅适用于大纲生成，不影响剪辑方案生成。\n\n`;
   dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
+  if (!currentOutline) {
+    dynamicSystemPrompt += `**【无大纲先确认】**: 当前项目还没有任何【策划大纲】。在调用 \`generateEditingPlan\` 之前，你必须先用一段简短的中文对话向用户说明"还没有策划大纲，是否仍要直接生成剪辑方案？"，明确等待用户确认。**禁止在用户尚未确认的情况下直接调用 generateEditingPlan**。如果你判断更合适的下一步是先调用 \`updateOutline\` 写一份大纲，可以一并建议；最终的决定权交给用户。\n\n`;
+  }
   dynamicSystemPrompt += `**【素材缺失/相关性不足保护规则】**: 当用户要求基于素材生成剪辑方案时，必须严格执行以下检查：\n`;
   dynamicSystemPrompt += `  - 若 \`search_clips\` 返回结果为空，立即停止，告知用户缺少相关切片，等待用户明确指示后才能继续；\n`;
   dynamicSystemPrompt += `  - 若搜索到的切片与目标主题明显无关（如用户要生成"火星探索"方案但切片内容全是"美食"），同样必须停止，向用户说明当前素材库中找不到相关内容，询问用户是否仍要继续（可使用 broll 占位）或上传相关素材；\n`;
@@ -255,13 +258,19 @@ app.post("/", async (c) => {
               };
             });
 
+            // New plan goes on top: displayOrder = current max + 1.
+            const [{ maxOrder } = { maxOrder: 0 }] = await db
+              .select({ maxOrder: sql<number>`COALESCE(MAX(${editingPlans.displayOrder}), 0)` })
+              .from(editingPlans)
+              .where(eq(editingPlans.projectId, projectId));
             const insertPayload = {
               id: crypto.randomUUID(),
               projectId: projectId,
               title: args.title,
               platform: args.platform,
               targetDuration: args.targetDuration,
-              clips: enrichedClips
+              clips: enrichedClips,
+              displayOrder: Number(maxOrder) + 1,
             };
             await db.insert(editingPlans).values(insertPayload);
 

@@ -164,7 +164,7 @@ app.get('/:id', async (c) => {
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
-    const planRes = await db.select().from(editingPlans).where(eq(editingPlans.projectId, id)).orderBy(desc(editingPlans.createdAt));
+    const planRes = await db.select().from(editingPlans).where(eq(editingPlans.projectId, id)).orderBy(desc(editingPlans.displayOrder), desc(editingPlans.createdAt));
 
     // [Arch] 读写分离重构 (读链路)：将底层 CoreMessage 动态投影为前端 UIMessage
     const rawMessages = projectRes[0].uiMessages || [];
@@ -472,6 +472,53 @@ app.post('/from-hotspot', async (c) => {
   });
 
   return c.json({ success: true, id: newId });
+});
+
+// DELETE /api/projects/:id/plans/:planId — remove an editing plan from a project
+app.delete('/:id/plans/:planId', async (c) => {
+  const user = c.get('user');
+  const projectId = c.req.param('id');
+  const planId = c.req.param('planId');
+  try {
+    // Verify project ownership before touching the plan.
+    const [proj] = await db.select({ id: projects.id }).from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.userId, user.id))).limit(1);
+    if (!proj) return c.json({ error: 'Project not found' }, 404);
+    await db.delete(editingPlans).where(and(eq(editingPlans.id, planId), eq(editingPlans.projectId, projectId)));
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('❌ 删除剪辑方案失败:', error);
+    return c.json({ error: 'Database error' }, 500);
+  }
+});
+
+// PATCH /api/projects/:id/plans/reorder — body: { planIds: string[] } (top-to-bottom order)
+app.patch('/:id/plans/reorder', async (c) => {
+  const user = c.get('user');
+  const projectId = c.req.param('id');
+  const body = await c.req.json().catch(() => null);
+  if (!body || !Array.isArray(body.planIds)) return c.json({ error: 'planIds array required' }, 400);
+  const planIds = body.planIds as string[];
+  try {
+    const [proj] = await db.select({ id: projects.id }).from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.userId, user.id))).limit(1);
+    if (!proj) return c.json({ error: 'Project not found' }, 404);
+
+    // Top of the user's list gets the highest displayOrder so DESC sort puts it first.
+    // Use len-i so values stay positive and stable; new plans inserted later
+    // (with MAX+1) naturally appear above any existing user-ordered list.
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < planIds.length; i++) {
+        await tx.update(editingPlans)
+          .set({ displayOrder: planIds.length - i })
+          .where(and(eq(editingPlans.id, planIds[i]), eq(editingPlans.projectId, projectId)));
+      }
+    });
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('❌ 重排剪辑方案失败:', error);
+    return c.json({ error: 'Database error' }, 500);
+  }
 });
 
 export default app;

@@ -146,6 +146,9 @@ export const editingPlans = mysqlTable('editing_plans', {
   platform: varchar('platform', { length: 100 }),
   targetDuration: int('target_duration'),
   clips: json('clips'),
+  // Higher = earlier in the list. New plans get MAX+1 so they appear at the top;
+  // user reorder writes monotonically descending values.
+  displayOrder: int('display_order').notNull().default(0),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

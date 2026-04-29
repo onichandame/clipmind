@@ -29,6 +29,13 @@
       "when": 1777773600000,
       "tag": "0003_per_project_assets",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1777867200000,
+      "tag": "0004_editing_plans_display_order",
+      "breakpoints": true
     }
   ]
 }
