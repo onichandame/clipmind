@@ -32,20 +32,17 @@ app.post("/", async (c) => {
 
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
   let dynamicSystemPrompt = SYSTEM_PROMPT;
-  const isFreeChat = currProject.workflowMode === 'freechat';
 
   // 注入工作流模式上下文，引导 AI 针对当前创作模式给出合适的响应
   if (currProject.workflowMode === 'material') {
     dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${MATERIAL_MODE_PROMPT_CONTEXT}\n\n`;
   } else if (currProject.workflowMode === 'idea') {
     dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${IDEA_MODE_PROMPT_CONTEXT}\n\n`;
-  } else if (isFreeChat) {
+  } else if (currProject.workflowMode === 'freechat') {
     dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${FREECHAT_PROMPT_CONTEXT}\n\n`;
   }
 
-  if (!isFreeChat) {
-    dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
-  }
+  dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
 
   if (serverConfig.SEARCHAPI_KEY) {
     dynamicSystemPrompt += `**【网络检索能力】**: 你拥有 \`search_web\` 工具，可实时搜索最新信息。`;
@@ -55,8 +52,7 @@ app.post("/", async (c) => {
     dynamicSystemPrompt += `当用户询问当下热点、事实核查、实时资讯等需要互联网知识的问题时，你必须主动调用这些工具，而非依赖训练数据。\n\n`;
   }
 
-  // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions) — 只在结构化工作流中生效
-  if (!isFreeChat) {
+  // [Arch] 意图收敛军规 (Prevent Tool-Calling Race Conditions) — 适用于所有模式
   dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
   dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
   dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
@@ -83,7 +79,6 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `2. 若要使用某段源素材，把 search_clips 返回结果中对应切片的 id 字段原样填到 clipId。后端会据此自动补全 assetId、startTime、endTime 及片段类型，你【不需要也禁止】重复输出这些字段。\n`;
   dynamicSystemPrompt += `3. 对于不依赖具体源素材的片段（空镜、纯旁白、转场、待补录镜头），省略 clipId 即可，后端会自动识别为 broll。\n`;
   dynamicSystemPrompt += `4. 禁止自造 clipId —— clipId 必须来自 search_clips 的返回结果。\n\n`;
-  } // end of !isFreeChat structured-prompt block
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -170,9 +165,7 @@ app.post("/", async (c) => {
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
   const finalSystemPrompt = dynamicSystemPrompt + `\n\n【系统高优先级指令】：在执行完任何工具（Tool）后，你绝对不能静默结束对话。你必须在收到工具结果后，追加一段面向用户的自然语言（Text）说明，告知用户工具的执行结果或下一步建议！`;
-  const stopConditions = isFreeChat
-    ? [stepCountIs(MAX_STEPS)]
-    : [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')];
+  const stopConditions = [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')];
   const result = streamText({
     model, system: finalSystemPrompt, messages: safeMessages,
     maxRetries: 3,
@@ -190,7 +183,6 @@ app.post("/", async (c) => {
     },
 
     tools: {
-      ...(isFreeChat ? {} : {
       generateEditingPlan: tool({
         description: "基于素材检索结果，生成结构化的剪辑方案（Editing Plan）并持久化到数据库。禁止在对话中输出大段方案，必须调用此工具。",
         inputSchema: z.object({
@@ -308,9 +300,7 @@ app.post("/", async (c) => {
           }
         }
       }),
-      }),
       // [HITL Widget] 无副作用工具：仅向前端发出"请展示素材选择/上传 UI"的请求。
-      // 在所有模式（含 freechat）开放——是用户进入素材工作流的入口。
       request_asset_import: tool({
         description: "当用户表达【需要导入/上传/挑选/查看自己的素材库】意图时调用。例如：用户说\"我想用我之前拍的视频\"、\"怎么上传素材\"、\"看看我的素材库里都有什么\"，或在素材驱动工作流里尚未指明素材线索时。调用后，前端会在 **当前 tool-call 的位置** 渲染一个【素材库轮播 + 上传按钮】卡片，让用户直接挑选或上传。**注意**：此工具只是发出 UI 请求，不做任何数据写入。**输出顺序**：先用一句简短的中文文本铺垫（例如\"好的，帮你打开素材库\"），再调用此工具；**不要在调用之后再追加任何文本**——卡片渲染在工具位置，调用后的文字会出现在卡片下方，使用\"下方\"/\"上方\"这类空间措辞会与实际位置不符。",
         inputSchema: z.object({
