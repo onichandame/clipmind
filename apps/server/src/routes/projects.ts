@@ -91,6 +91,24 @@ app.post('/', async (c) => {
         role: 'assistant',
         content: '随便聊吧。我可以帮你检索素材、查询资讯，或者只是给你建议。',
       });
+    } else if (workflowMode === 'material') {
+      // [HITL] 素材驱动模式：greeting 后内嵌素材库轮播 + 上传按钮 widget。
+      // 用 AI SDK 标准 tool-* part 形状伪造一次"工具已完成调用"，前端 widgetRegistry
+      // 会按 `tool-request_asset_import` 名字渲染 AssetPickerWidget。
+      initialMessages.push({
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        parts: [
+          { type: 'text', text: INITIAL_GREETING },
+          {
+            type: 'tool-request_asset_import',
+            toolCallId: `seed-${crypto.randomUUID()}`,
+            state: 'output-available',
+            input: { reason: 'workflow-init' },
+            output: { ok: true, reason: 'workflow-init' },
+          },
+        ],
+      });
     } else {
       initialMessages.push({ role: 'assistant', content: INITIAL_GREETING });
     }
@@ -145,6 +163,18 @@ app.get('/:id', async (c) => {
 
     if (Array.isArray(rawMessages)) {
       for (const msg of rawMessages) {
+        // [Passthrough] 消息若已是 UIMessage 形状（带 parts 数组），直接保留。
+        // 用于：(a) 项目创建时 seed 的带 HITL widget 部件的助手消息；
+        //       (b) 任何已经是前端规范 parts 形状的入库记录。
+        if (Array.isArray(msg.parts) && msg.parts.length > 0 && !Array.isArray(msg.content)) {
+          initialMessages.push({
+            id: msg.id || crypto.randomUUID(),
+            role: msg.role,
+            content: typeof msg.content === 'string' ? msg.content : '',
+            parts: msg.parts,
+          });
+          continue;
+        }
         if (msg.role === 'user' || msg.role === 'system') {
           initialMessages.push({
             id: msg.id || crypto.randomUUID(),
@@ -165,14 +195,12 @@ app.get('/:id', async (c) => {
                 textContent += part.text;
                 parts.push(part);
               } else if (part.type === "tool-call") {
+                // v6 typed tool part shape — name encoded in `type`.
                 parts.push({
-                  type: "tool-invocation",
-                  toolInvocation: {
-                    state: "call",
-                    toolCallId: part.toolCallId,
-                    toolName: part.toolName,
-                    args: part.args
-                  }
+                  type: `tool-${part.toolName}`,
+                  toolCallId: part.toolCallId,
+                  state: 'input-available',
+                  input: part.args,
                 });
               }
             }
@@ -187,13 +215,13 @@ app.get('/:id', async (c) => {
           for (const toolResult of msg.content) {
             if (toolResult.type === "tool-result") {
               const targetAssistant = initialMessages.find(m =>
-                m.parts?.some((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId)
+                m.parts?.some((p: any) => typeof p.type === 'string' && p.type.startsWith('tool-') && p.toolCallId === toolResult.toolCallId)
               );
               if (targetAssistant && targetAssistant.parts) {
-                const targetPart = targetAssistant.parts.find((p: any) => p.type === "tool-invocation" && p.toolInvocation?.toolCallId === toolResult.toolCallId);
+                const targetPart = targetAssistant.parts.find((p: any) => typeof p.type === 'string' && p.type.startsWith('tool-') && p.toolCallId === toolResult.toolCallId);
                 if (targetPart) {
-                  targetPart.toolInvocation.state = "result";
-                  targetPart.toolInvocation.result = toolResult.result;
+                  targetPart.state = 'output-available';
+                  targetPart.output = toolResult.result;
                 }
               }
             }

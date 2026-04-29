@@ -128,14 +128,25 @@ app.post("/", async (c) => {
   const rawHistory: any[] = (currProject.uiMessages as any[]) || [];
 
   // 清洗防线：确保从数据库读出的历史记录严格符合 CoreMessage，防止被早期脏数据污染
+  // 同时支持 UIMessage parts 形状（含 HITL widget 的 tool-* 部件）：抽取 text 部分送模型，
+  // tool-* widget 部件对模型不可见（无副作用，不需要回灌历史）。
   const coreHistory = rawHistory.map((msg: any) => {
     if (msg.role === 'tool') return msg;
-    return {
-      role: msg.role,
-      content: typeof msg.content === 'string'
+    let content: any = '';
+    if (typeof msg.content === 'string') {
+      content = msg.content;
+    } else if (Array.isArray(msg.content)) {
+      content = msg.content.some((c: any) => c.type === 'tool-call')
         ? msg.content
-        : (Array.isArray(msg.content) ? (msg.content.some((c: any) => c.type === 'tool-call') ? msg.content : msg.content.map((c: any) => c.text || '').join('\n')) : '')
-    };
+        : msg.content.map((c: any) => c.text || '').join('\n');
+    } else if (Array.isArray(msg.parts)) {
+      // UIMessage parts → 抽取所有 text 部件拼接；tool-* widget 部件不送模型。
+      content = msg.parts
+        .filter((p: any) => p.type === 'text' && typeof p.text === 'string')
+        .map((p: any) => p.text)
+        .join('\n');
+    }
+    return { role: msg.role, content };
   });
 
   const lastUserMsg = messages[messages.length - 1];
@@ -290,6 +301,18 @@ app.post("/", async (c) => {
         }
       }),
       }),
+      // [HITL Widget] 无副作用工具：仅向前端发出"请展示素材选择/上传 UI"的请求。
+      // 在所有模式（含 freechat）开放——是用户进入素材工作流的入口。
+      request_asset_import: tool({
+        description: "当用户表达【需要导入/上传/挑选/查看自己的素材库】意图时调用。例如：用户说\"我想用我之前拍的视频\"、\"怎么上传素材\"、\"看看我的素材库里都有什么\"，或在素材驱动工作流里尚未指明素材线索时。调用后，前端会在你这条消息下方渲染一个【素材库轮播 + 上传按钮】卡片，让用户直接挑选或上传。**注意**：此工具只是发出 UI 请求，不做任何数据写入；调用后请用一句简短的中文文本提示用户在下方卡片中操作。",
+        inputSchema: z.object({
+          reason: z.enum(['workflow-init', 'user-intent', 'no-assets-found']).describe('触发原因：workflow-init=工作流启动、user-intent=用户主动表达、no-assets-found=检索为空建议补素材'),
+        }).strict(),
+        execute: async ({ reason }) => {
+          return { ok: true, reason };
+        },
+      }),
+
       search_assets: tool({
         description: "【宏观检索】基于用户意图，在大盘视频库中进行鸟瞰式检索。返回的是视频素材的全局ID(assetId)和宏观总结(Summary)。当需要寻找特定主题或题材的视频时，必须优先调用此工具以防Token爆炸。",
         inputSchema: z.object({
@@ -444,9 +467,12 @@ app.post("/", async (c) => {
     },
     onFinish: async ({ response }) => {
       try {
+        // [Arch] 持久化原则：保留 rawHistory 的原始形状（含 UIMessage parts，例如 HITL widget 的
+        // tool-* 部件），不要使用 coreHistory（那是为送模型而做的清洗版本，会丢失 parts）。
+        // 否则首轮对话后，seed 消息中的 widget 部件就会从 DB 中消失。
         const updatedMessages = isUserAlreadyLast
-          ? [...coreHistory, ...response.messages]
-          : [...coreHistory, ...userCoreMessages, ...response.messages];
+          ? [...rawHistory, ...response.messages]
+          : [...rawHistory, ...userCoreMessages, ...response.messages];
         await db.update(projects)
           .set({ uiMessages: updatedMessages })
           .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)));
