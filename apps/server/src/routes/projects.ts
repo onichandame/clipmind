@@ -92,14 +92,14 @@ app.post('/', async (c) => {
         content: '随便聊吧。我可以帮你检索素材、查询资讯，或者只是给你建议。',
       });
     } else if (workflowMode === 'material') {
-      // [HITL] 素材驱动模式：greeting 后内嵌素材库轮播 + 上传按钮 widget。
+      // [HITL] 素材驱动模式：followup 文案后内嵌素材库轮播 + 上传按钮 widget。
       // 用 AI SDK 标准 tool-* part 形状伪造一次"工具已完成调用"，前端 widgetRegistry
       // 会按 `tool-request_asset_import` 名字渲染 AssetPickerWidget。
       initialMessages.push({
         id: crypto.randomUUID(),
         role: 'assistant',
         parts: [
-          { type: 'text', text: INITIAL_GREETING },
+          { type: 'text', text: MATERIAL_MODE_FOLLOWUP },
           {
             type: 'tool-request_asset_import',
             toolCallId: `seed-${crypto.randomUUID()}`,
@@ -109,6 +109,8 @@ app.post('/', async (c) => {
           },
         ],
       });
+    } else if (workflowMode === 'idea') {
+      initialMessages.push({ role: 'assistant', content: IDEA_MODE_FOLLOWUP });
     } else {
       initialMessages.push({ role: 'assistant', content: INITIAL_GREETING });
     }
