@@ -117,10 +117,17 @@ app.post('/', async (c) => {
 
     const newId = crypto.randomUUID();
 
+    const defaultTitleByMode: Record<string, string> = {
+      material: '未命名素材项目',
+      idea: '未命名灵感项目',
+      freechat: '未命名对话',
+    };
+    const fallbackTitle = workflowMode ? defaultTitleByMode[workflowMode] : '未命名大纲';
+
     await db.insert(projects).values({
       id: newId,
       userId: user.id,
-      title: body?.title?.trim() || (seedMessage ? seedMessage.slice(0, 40) : '未命名大纲'),
+      title: body?.title?.trim() || (seedMessage ? seedMessage.slice(0, 40) : fallbackTitle),
       workflowMode,
       uiMessages: initialMessages,
     });
