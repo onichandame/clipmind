@@ -117,6 +117,12 @@ BEGIN
     SELECT COUNT(*) INTO v_count FROM information_schema.TABLE_CONSTRAINTS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'asset_chunks' AND CONSTRAINT_NAME = 'asset_chunks_media_file_id_media_files_id_fk';
     IF v_count = 0 THEN
+        -- Pre-existing chunks reference the dropped `assets` table and were left
+        -- with empty `media_file_id` after ADD COLUMN. They're orphaned; clear
+        -- them before the FK is enforced so the FK creation can succeed. The
+        -- corresponding Qdrant vectors are dead under the new schema anyway —
+        -- users will need to re-import media files.
+        TRUNCATE TABLE `asset_chunks`;
         ALTER TABLE `asset_chunks` ADD CONSTRAINT `asset_chunks_media_file_id_media_files_id_fk` FOREIGN KEY (`media_file_id`) REFERENCES `media_files`(`id`) ON DELETE cascade;
     END IF;
 
