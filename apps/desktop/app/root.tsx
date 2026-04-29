@@ -7,8 +7,16 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLocation,
+  useNavigate,
 } from "react-router";
 
+import { useEffect, useRef, useState } from "react";
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, type PanelImperativeHandle } from "react-resizable-panels";
+import { GlobalSidebar } from "./components/GlobalSidebar";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { fetchMe, getToken, type AuthUser, getCachedUser } from "./lib/auth";
+import { useGlobalAssetImportListeners } from "./lib/asset-import";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -28,25 +36,128 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-import { useEffect } from "react";
-import { GlobalSidebar } from "./components/GlobalSidebar";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-
-// [架构师决断]: Tauri SPA 环境下安全的全局单例，规避 React 树卸载导致的缓存丢失
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false, // 桌面端无需频繁 refetch
+      refetchOnWindowFocus: false,
       retry: 1,
     },
   },
 });
 
-export default function App() {
-  // [架构师决断]: 初始挂载时同步应用主题至 HTML 根节点。
-  // (后续在具体的如 Header 或 Settings 组件中，直接修改 localStorage 并 toggle document.documentElement.classList 即可)
+const PUBLIC_ROUTES = new Set(['/login', '/signup']);
+
+function AuthGate({ children }: { children: React.ReactNode }) {
+  // Wire Tauri asset-import progress events at the app root so any entry
+  // point (chat widget, library page, future ones) sees the same store state.
+  useGlobalAssetImportListeners();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isPublic = PUBLIC_ROUTES.has(location.pathname);
+  // SSR-safe init: never read localStorage in the useState initializer or the render path.
+  // `mounted` flips true on first effect tick — the static prerender and the very first
+  // client paint both render the loading branch, so hydration matches.
+  const [mounted, setMounted] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [resolved, setResolved] = useState<boolean>(false);
+  const sidebarRef = useRef<PanelImperativeHandle | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarTransitioning, setSidebarTransitioning] = useState(false);
+
+  const collapseSidebar = () => {
+    setSidebarTransitioning(true);
+    sidebarRef.current?.collapse();
+    window.setTimeout(() => setSidebarTransitioning(false), 250);
+  };
+  const expandSidebar = () => {
+    setSidebarTransitioning(true);
+    sidebarRef.current?.expand();
+    window.setTimeout(() => setSidebarTransitioning(false), 250);
+  };
+
   useEffect(() => {
-    const isDark = localStorage.getItem("theme") === "dark"; // [架构师决断]: 默认偏好亮色
+    setMounted(true);
+    const cached = getCachedUser();
+    if (cached) {
+      setUser(cached);
+      setResolved(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    let cancelled = false;
+    const token = getToken();
+    if (isPublic) {
+      if (token) {
+        fetchMe().then(u => {
+          if (!cancelled && u) navigate('/', { replace: true });
+        });
+      }
+      return;
+    }
+    if (!token) {
+      navigate('/login', { replace: true });
+      return;
+    }
+    fetchMe().then(u => {
+      if (cancelled) return;
+      if (!u) {
+        navigate('/login', { replace: true });
+      } else {
+        setUser(u);
+        setResolved(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [mounted, isPublic, location.pathname]);
+
+  if (isPublic) {
+    return <>{children}</>;
+  }
+  if (!mounted || !resolved || !user) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-indigo-50/40 dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 text-sm">
+        正在加载…
+      </div>
+    );
+  }
+  return (
+    <div className="h-screen w-screen overflow-hidden bg-indigo-50/40 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 font-sans tracking-wide transition-colors duration-200">
+      <PanelGroup
+        direction="horizontal"
+        id="clipmind-shell"
+        className={sidebarTransitioning ? "shell-sidebar-transitioning" : ""}
+      >
+        <Panel
+          panelRef={sidebarRef}
+          defaultSize="240px"
+          minSize="200px"
+          maxSize="380px"
+          collapsible
+          collapsedSize="56px"
+          onResize={(size) => setSidebarCollapsed(size.inPixels < 100)}
+        >
+          <GlobalSidebar
+            collapsed={sidebarCollapsed}
+            onCollapse={collapseSidebar}
+            onExpand={expandSidebar}
+          />
+        </Panel>
+        <PanelResizeHandle className="w-px bg-zinc-200 dark:bg-zinc-800/60 hover:bg-indigo-400 dark:hover:bg-indigo-500 transition-colors" />
+        <Panel minSize="50%">
+          <div className="h-full w-full relative overflow-y-auto">
+            {children}
+          </div>
+        </Panel>
+      </PanelGroup>
+    </div>
+  );
+}
+
+export default function App() {
+  useEffect(() => {
+    const isDark = localStorage.getItem("theme") === "dark";
     if (isDark) {
       document.documentElement.classList.add("dark");
     } else {
@@ -56,12 +167,9 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex h-screen w-screen overflow-hidden bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 font-sans tracking-wide transition-colors duration-200">
-        <GlobalSidebar />
-        <div className="flex-1 min-w-0 h-full relative overflow-y-auto">
-          <Outlet />
-        </div>
-      </div>
+      <AuthGate>
+        <Outlet />
+      </AuthGate>
     </QueryClientProvider>
   );
 }

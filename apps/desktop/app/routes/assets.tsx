@@ -1,21 +1,26 @@
 import { env } from '../env';
+import { authFetch } from '../lib/auth';
 import { Button } from "../components/Button";
 import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
 import { AssetDetailModal } from "../components/AssetDetailModal";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRevalidator, useLoaderData } from "react-router";
-import { Film, CheckCircle2, Clock, AlertCircle, Activity, UploadCloud, Trash2, X } from "lucide-react";
-import { open } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { Film, CheckCircle2, AlertCircle, Activity, UploadCloud, Trash2, X } from "lucide-react";
+import { selectAndImportAssets } from '../lib/asset-import';
 
 // 资产数据的 TypeScript 定义，需与后端 Drizzle Schema 对应
 export interface Asset {
   id: string;
   filename: string;
-  objectKey: string;
-  ossUrl?: string;
-  thumbnailUrl?: string;
+  // 本地优先字段
+  localPath?: string | null;
+  originDeviceId?: string | null;
+  backupStatus?: 'local_only' | 'queued' | 'uploading' | 'backed_up' | 'stale' | 'failed' | null;
+  // 元数据轨道（始终上云）
+  audioOssUrl?: string | null;
+  thumbnailUrl?: string | null;
+  // 云备份签名 URL（仅 backupStatus=backed_up 时有值）
+  videoOssUrl?: string | null;
   fileSize: number;
   duration: number;
   status: 'ready' | 'processing' | 'error';
@@ -33,12 +38,12 @@ function formatDuration(seconds?: number) {
 
 // React Router v7 客户端加载器：负责从 Hono 后端获取真实资产列表
 export async function clientLoader() {
-  const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets`);
+  const res = await authFetch(`${env.VITE_API_BASE_URL}/api/assets`);
   if (!res.ok) return [];
   return res.json() as Promise<Asset[]>;
 }
 
-import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanvasStore';
+import { useCanvasStore } from '../store/useCanvasStore';
 
 // 出错卡片下方的操作指引：识别 macOS 专属失败，直接给用户可复制的绕过命令
 function ErrorHint({ message }: { message?: string }) {
@@ -106,75 +111,8 @@ export default function AssetsLibrary() {
   const revalidator = useRevalidator();
 
   const jobs = useCanvasStore(s => s.uploadJobs);
-  const setJobs = useCanvasStore(s => s.setUploadJobs);
-  const updateJob = useCanvasStore(s => s.updateUploadJob);
   const clearCompletedJobs = useCanvasStore(s => s.clearCompletedUploadJobs);
-
-  const handleSelectFiles = async () => {
-    // 兼容大写后缀名 (如相机直接导出的 .MOV / .MP4)
-    const selected = await open({ multiple: true, filters: [{ name: 'Videos', extensions: ['mp4', 'mov', 'MP4', 'MOV'] }] });
-    if (!selected) return;
-    const paths = Array.isArray(selected) ? selected : [selected];
-
-    const newJobs = paths.map(p => ({
-      id: crypto.randomUUID(),
-      filename: p.split(/[\\/]/).pop() || 'video.mp4',
-      sourcePath: p,
-      status: 'queued' as JobStatus,
-      progress: 0
-    }));
-
-    setJobs(prev => [...prev, ...newJobs]);
-    newJobs.forEach(processJob); // 发射！独立进入状态机，互不阻塞
-  };
-
-  // 注入进度监听，拦截 Rust 底层的节流事件
-  useEffect(() => {
-    let unlistenUpload: () => void;
-    let unlistenFFmpeg: () => void;
-    let unlistenError: () => void;
-
-    import('@tauri-apps/api/event').then(({ listen }) => {
-      // 监听上传进度
-      listen<{ id: string, progress: number }>('upload-progress', (event) => {
-        const isComplete = event.payload.progress >= 100;
-        if (isComplete) {
-          revalidator.revalidate(); // 触发页面数据重新拉取
-        }
-        setJobs(current => current.map(j => {
-          if (j.id !== event.payload.id) return j;
-          // 收到进度事件即视为进入上传阶段；若已 ready/error 则不降级
-          let nextStatus: JobStatus = j.status;
-          if (isComplete) {
-            nextStatus = 'ready';
-          } else if (j.status === 'compressing' || j.status === 'queued') {
-            nextStatus = 'uploading';
-          }
-          return { ...j, progress: event.payload.progress, status: nextStatus };
-        }));
-      }).then(fn => unlistenUpload = fn);
-
-      // 监听压缩进度并在控制台打印
-      listen<{ log: string }>('ffmpeg-progress', (event) => {
-        console.log("[前端 FFmpeg 进度捕获]:", event.payload.log);
-        // 视觉补偿：由于 FFmpeg 日志难以精准转化为百分比且未绑定 ID，我们为处于 compressing 的任务统一增加伪进度
-        setJobs(current => current.map(j =>
-          (j.status === 'compressing' && j.progress < 90) ? { ...j, progress: j.progress + 2 } : j
-        ));
-      }).then(fn => unlistenFFmpeg = fn);
-
-      // 监听后台上传阶段的失败（tokio::spawn 阶段，前台 invoke 已 Ok 返回，只能走事件回流）
-      listen<{ id: string, message: string }>('upload-error', (event) => {
-        updateJob(event.payload.id, { status: 'error', errorMessage: event.payload.message });
-      }).then(fn => unlistenError = fn);
-    });
-
-    return () => {
-      if (unlistenUpload) unlistenUpload();
-      if (unlistenFFmpeg) unlistenFFmpeg();
-      if (unlistenError) unlistenError();
-    };
-  }, []);
+  const handleSelectFiles = () => selectAndImportAssets();
 
   const [deletingAsset, setDeletingAsset] = useState<{ id: string, filename: string } | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
@@ -187,7 +125,7 @@ export default function AssetsLibrary() {
   const confirmDelete = async () => {
     if (!deletingAsset) return;
     try {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/assets/${deletingAsset.id}`, { method: 'DELETE' });
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/assets/${deletingAsset.id}`, { method: 'DELETE' });
       if (res.ok) {
         revalidator.revalidate(); // 乐观重新拉取数据
       } else {
@@ -197,32 +135,6 @@ export default function AssetsLibrary() {
       console.error('删除请求出错:', error);
     } finally {
       setDeletingAsset(null);
-    }
-  };
-
-  const processJob = async (job: UploadJob) => {
-    try {
-      updateJob(job.id, { status: 'compressing', progress: 0 });
-
-      // 架构大统一：交由 Rust 层全权接管预处理、节流阀、并发隔离与零拷贝上传
-      // 预处理完成后 invoke 会立即返回，随后 Rust 在后台 tokio::spawn 并发推流。
-      await invoke('process_video_asset', {
-        jobId: job.id,
-        filename: job.filename,
-        localPath: job.sourcePath,
-        serverUrl: env.VITE_API_BASE_URL
-      });
-
-      // 预处理完成（锁已释放），Rust 进入脱壳后台上传
-      updateJob(job.id, { status: 'uploading', progress: 0 });
-      console.log(`[Pipeline] 预处理完成，已移交 Rust 后台并发推流: ${job.filename}`);
-
-      // 注意：UI 最终状态的完成 (ready) 和重新拉取 (revalidate) 
-      // 会由组件外部监听 'upload-progress' 达 100% 时的事件统一处理。
-    } catch (error: any) {
-      const msg = typeof error === 'string' ? error : (error?.message ?? String(error));
-      updateJob(job.id, { status: 'error', errorMessage: msg });
-      console.error("处理管道异常中断:", msg);
     }
   };
 
