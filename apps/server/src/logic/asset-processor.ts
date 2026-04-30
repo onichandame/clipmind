@@ -24,7 +24,9 @@ export async function processAssetPostASR(mediaFileId: string, chunks: any[]) {
       id: chunk.id,
       vector: chunkVectors[i],
       payload: {
-        assetId: chunk.assetId,
+        // Per-project assets refactor renamed the column on chunks to mediaFileId.
+        // The Qdrant payload field is still called assetId for filter-shape stability.
+        assetId: chunk.mediaFileId,
         startTime: chunk.startTime,
         endTime: chunk.endTime,
         text: chunk.transcriptText

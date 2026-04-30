@@ -36,6 +36,13 @@
       "when": 1777867200000,
       "tag": "0004_editing_plans_display_order",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1777953600000,
+      "tag": "0005_purge_assets",
+      "breakpoints": true
     }
   ]
 }
