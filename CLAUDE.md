@@ -139,6 +139,10 @@ Before editing any file that imports from `'ai'` or `'@ai-sdk/*'`, read the loca
 
 Key gotchas captured there: `isStepCount` (not `stepCountIs`), typed tool parts (`tool-{name}` not `tool-invocation`), and `inputSchema` (not `parameters`).
 
+## Feature Handoffs
+
+- `docs/long-term-memory.md` — per-user `users.memory_md` markdown blob injected into chat system prompt; `update_user_memory` tool + nightly compaction cron + silent toast UX. **Read this before touching any of: `users` schema, `chat.ts` system prompt assembly, the memory cron, or the silent-tool render path. Also documents a Drizzle journal `when`-ordering gotcha that silently skips migrations.**
+
 ## Key Files
 
 | File | Purpose |
