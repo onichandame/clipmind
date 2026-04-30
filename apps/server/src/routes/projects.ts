@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../db';
-import { projects, projectOutlines, editingPlans, mediaFiles, projectAssets, hotspots } from '@clipmind/db/schema';
+import { projects, projectOutlines, editingPlans, mediaFiles, projectAssets } from '@clipmind/db/schema';
 import { desc, eq, inArray, and, sql } from 'drizzle-orm';
 import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
@@ -430,48 +430,6 @@ app.patch('/:id', async (c) => {
     console.error('Failed to patch project:', error);
     return c.json({ error: 'Failed to update project' }, 500);
   }
-});
-
-const SOURCE_LABEL: Record<string, string> = {
-  xiaohongshu: '小红书',
-  wechat: '微信公众号/视频号',
-  douyin: '抖音',
-  bilibili: 'B站',
-  mixed: '多平台',
-};
-
-app.post('/from-hotspot', async (c) => {
-  const user = c.get('user');
-  const body = await c.req.json().catch(() => null);
-  if (!body?.hotspotId) return c.json({ error: 'hotspotId required' }, 400);
-
-  const [hotspot] = await db.select().from(hotspots)
-    .where(eq(hotspots.id, body.hotspotId))
-    .limit(1);
-
-  if (!hotspot || !hotspot.isActive) return c.json({ error: 'Hotspot not found' }, 404);
-
-  const sourceLabel = SOURCE_LABEL[hotspot.source] ?? hotspot.source;
-  const seedMessage = `我想基于下面这个热点做一个短视频，帮我规划一下。
-
-【热点标题】${hotspot.title}
-【分类】${hotspot.category}
-【来源】${sourceLabel}
-【热度】${hotspot.heatMetric}
-【背景描述】${hotspot.description}
-
-请基于以上信息，帮我生成一个拍摄大纲。`;
-
-  const newId = crypto.randomUUID();
-  await db.insert(projects).values({
-    id: newId,
-    userId: user.id,
-    title: hotspot.title,
-    workflowMode: 'idea',
-    uiMessages: [{ id: crypto.randomUUID(), role: 'user', content: seedMessage }],
-  });
-
-  return c.json({ success: true, id: newId });
 });
 
 // DELETE /api/projects/:id/plans/:planId — remove an editing plan from a project

@@ -29,7 +29,7 @@ app.route('/api/auth', authRoute);
 // 挂载独立业务路由
 app.route('/api/projects', projectsRoute);
 import assetsRoute from './routes/assets';
-import hotspotsRoute from './routes/hotspots';
+import hotspotsAdminRoute from './routes/hotspots-admin';
 import { startDanglingOssCleanupJob } from './jobs/cleanup-dangling-oss';
 import { startHotspotsPipeline } from './jobs/hotspots-pipeline';
 
@@ -38,7 +38,7 @@ app.route('/api/oss-callback', ossCallbackRoute);
 app.route('/api/asr-callback', asrCallbackRoute);
 app.route('/api/upload-token', uploadTokenRoute);
 app.route('/api/assets', assetsRoute);
-app.route('/api/hotspots', hotspotsRoute);
+app.route('/api/hotspots-admin', hotspotsAdminRoute);
 
 const startServer = async () => {
   try {

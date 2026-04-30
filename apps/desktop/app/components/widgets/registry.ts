@@ -17,6 +17,7 @@
 import type { ComponentType } from 'react';
 import { AssetPickerWidget } from './AssetPickerWidget';
 import { AskUserQuestionWidget } from './AskUserQuestionWidget';
+import { HotspotsCarouselWidget } from './HotspotsCarouselWidget';
 
 export interface WidgetProps {
   part: any;        // the typed tool part: { type, toolCallId, state, input, output }
@@ -30,9 +31,11 @@ export interface WidgetProps {
 export const WIDGET_TOOL_NAMES = new Set<string>([
   'tool-request_asset_import',
   'tool-ask_user_question',
+  'tool-show_hotspots',
 ]);
 
 export const widgetRegistry: Record<string, ComponentType<WidgetProps>> = {
   'tool-request_asset_import': AssetPickerWidget,
   'tool-ask_user_question': AskUserQuestionWidget,
+  'tool-show_hotspots': HotspotsCarouselWidget,
 };

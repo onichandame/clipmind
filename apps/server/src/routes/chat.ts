@@ -1,9 +1,9 @@
 import { Hono } from "hono";
-import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, projects } from "@clipmind/db";
+import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, projects, hotspots } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
-import { inArray, eq, and, sql } from "drizzle-orm";
+import { inArray, eq, and, sql, desc } from "drizzle-orm";
 import { db } from "../db";
 import { generateEmbeddings } from "../utils/embeddings";
 import { searchVectors } from "../utils/qdrant";
@@ -60,8 +60,9 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n`;
   dynamicSystemPrompt += `- 【精挑（人工操作）】: 精挑是纯人工操作，**AI 不得替用户执行精挑**。当用户对某个素材满意、或询问如何精挑时，你应明确告知：请在右侧素材面板中点击素材上的"精挑"按钮进行手动精挑。你的职责是推荐与描述，最终的精挑决策权归用户。\n`;
   dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n`;
-  dynamicSystemPrompt += `- 【频道 D: HITL 反问】: 仅包含 \`ask_user_question\`。它不与其他频道互斥，但单步内不得与任何其他工具并发调用。调用后必须停步等待用户回答。\n\n`;
+  dynamicSystemPrompt += `- 【频道 D: HITL 反问 / 灵感卡片】: 仅包含 \`ask_user_question\` 与 \`show_hotspots\`。它们不与其他频道互斥，但单步内不得与任何其他工具并发调用。调用后必须停步等待用户回答 / 点击。\n\n`;
   dynamicSystemPrompt += `**【反问规范】**: 只要你的下一步是向用户提问且答案可以枚举（包括 yes/no、是否继续、是否确认这类确认型问题），都必须调用 \`ask_user_question\`，禁止把问题用纯文本抛出来等用户敲字。同一思考里若有多个独立分叉，把它们一起塞进 \`questions\` 数组里一次问完（最多 5 个），避免连续多轮反问。每个问题的 \`options\` 不要写"其他/自定义"——前端会自动追加一个开放式输入框选项。调用后必须立即停步，由用户点击提交触发下一轮。**唯一例外**：纯开放式问题（如"你想加什么字幕文案？"）无法预设选项时才用纯文本提问。\n\n`;
+  dynamicSystemPrompt += `**【灵感发散规范】**: 当用户在【灵感 / 自由对话】项目里表达"想看看热点 / 帮我找方向 / 最近留学圈在聊什么 / 我没什么思路 / 给点选题"这类发散意图时，必须调用 \`show_hotspots\` 而不是自己凭空生成话题清单。前端会渲染留学行业热点 carousel，用户点击某条会作为创作种子塞回对话。调用后停步。**禁用场景**：用户已经有明确选题、用户在做素材操作、剪辑方案推进流程中——此时不要调用 \`show_hotspots\`。\n\n`;
   dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。此规范仅适用于大纲生成，不影响剪辑方案生成。\n\n`;
   dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
   if (!currentOutline) {
@@ -170,7 +171,7 @@ app.post("/", async (c) => {
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
   const finalSystemPrompt = dynamicSystemPrompt + `\n\n【系统高优先级指令】：在执行完任何工具（Tool）后，你绝对不能静默结束对话。你必须在收到工具结果后，追加一段面向用户的自然语言（Text）说明，告知用户工具的执行结果或下一步建议！`;
-  const stopConditions = [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan'), hasToolCall('ask_user_question')];
+  const stopConditions = [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan'), hasToolCall('ask_user_question'), hasToolCall('show_hotspots')];
   const result = streamText({
     model, system: finalSystemPrompt, messages: safeMessages,
     maxRetries: 3,
@@ -332,6 +333,40 @@ app.post("/", async (c) => {
           })).min(1).max(5),
         }).strict(),
         execute: async (input) => ({ ok: true, ...input }),
+      }),
+      // [HITL Widget] 灵感发散工具：从【留学行业热点】库取若干条高分热点回灌，前端渲染为横向 carousel；
+      // 用户点击某条会把它作为创作种子塞进当前对话，触发下一轮 LLM 回复。
+      show_hotspots: tool({
+        description:
+          "当用户表达【灵感发散】意图（'今天有什么热点'、'帮我想想方向'、'最近留学圈在聊什么'、'给点选题'、'我没什么思路'等）时调用本工具。" +
+          "工具会从近期采集的【留学行业】热点中取出高分条目，前端渲染成横向 carousel 卡片；用户点击某条会自动把该热点作为创作种子塞进对话。" +
+          "**禁用场景**：用户已经有明确选题；用户在做素材操作；任何剪辑方案 / 大纲推进流程中。此时不要调用本工具。" +
+          "**输出顺序**：可以先用一句话简短铺垫（'好的，看看最近留学圈的热门话题'），随后调用本工具；不要在调用之后再追加任何文本——卡片自身已展示内容。" +
+          "**调用后必须停步**，等用户点击 carousel。",
+        inputSchema: z.object({
+          reason: z.string().min(1).describe('一句话说明你这一步为什么调用本工具，便于自我对齐意图'),
+        }).strict(),
+        execute: async () => {
+          try {
+            const items = await db
+              .select({
+                id: hotspots.id,
+                category: hotspots.category,
+                title: hotspots.title,
+                description: hotspots.description,
+                source: hotspots.source,
+                heatMetric: hotspots.heatMetric,
+              })
+              .from(hotspots)
+              .where(eq(hotspots.isActive, true))
+              .orderBy(desc(hotspots.heatScore))
+              .limit(12);
+            return { hotspots: items };
+          } catch (error) {
+            console.error('❌ show_hotspots 取数失败:', error);
+            return { hotspots: [] };
+          }
+        },
       }),
       // [HITL Widget] 无副作用工具：仅向前端发出"请展示素材选择/上传 UI"的请求。
       request_asset_import: tool({

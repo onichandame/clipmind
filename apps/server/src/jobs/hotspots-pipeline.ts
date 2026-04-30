@@ -20,6 +20,8 @@ const ALLOWED_DOMAINS = [
   'dy.163.com',
   'bilibili.com',
   'b23.tv',
+  // 留学垂直社区（curl 验证可达 + 非 JS 墙）
+  '1point3acres.com',
 ];
 
 function classifyDomain(url: string): 'xiaohongshu' | 'wechat' | 'douyin' | 'bilibili' | 'mixed' {
@@ -43,22 +45,24 @@ function getSeedQueries(): string[] {
   const now = new Date();
   const month = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月`;
   return [
-    // 小红书 (5 条)
-    `site:xiaohongshu.com 本周热门话题`,
-    `小红书 ${month} 爆款笔记`,
-    `小红书 热榜 趋势`,
-    `小红书 ${month} 高赞话题`,
-    `小红书 这周爆火`,
-    // 微信 (4 条)
-    `site:mp.weixin.qq.com 10万+ ${month}`,
-    `微信公众号 本周爆款`,
-    `视频号 热门话题`,
-    `微信 爆文 ${month}`,
-    // 抖音 (2 条)
-    `抖音 本周热榜`,
-    `抖音 挑战赛 ${month}`,
-    // B站 (1 条)
-    `bilibili 本周排行榜 ${month}`,
+    // 申请季 / 选校（3 条）
+    `小红书 留学申请 ${month} 经验贴`,
+    `site:xiaohongshu.com 美研选校 25fall OR 26fall`,
+    `小红书 英国留学 申请 高赞`,
+    // 备考 / 文书（2 条）
+    `小红书 雅思 OR 托福 备考 ${month} 高赞`,
+    `site:mp.weixin.qq.com 留学文书 OR SOP ${month}`,
+    // 海外生活 / 求职（3 条）
+    `小红书 留学生 海外生活 ${month}`,
+    `site:1point3acres.com 留学 OR 求职 OR OPT 热帖`,
+    `bilibili 留学 vlog 热门 ${month}`,
+    // 政策 / 签证（1 条）
+    `留学签证 OR F-1 OR 工签 政策变动 ${month} site:xiaohongshu.com OR site:mp.weixin.qq.com`,
+    // 留学避坑 / 中介（1 条）
+    `小红书 留学避坑 OR 留学中介 真实经历`,
+    // 跨平台讨论 / 博主（2 条）
+    `小红书 留学博主 ${month} 高赞话题`,
+    `bilibili 留学 ${month} 排行榜`,
   ];
 }
 
@@ -139,8 +143,9 @@ const HotspotItemSchema = z.object({
   rationale: z.string().max(200).optional(),
 });
 
+// 下限放宽到 3：留学场景下原始语料相关性较低，强制 ≥5 会让 LLM 凑数；宁愿少给也不能塞水货。
 const PipelineOutputSchema = z.object({
-  hotspots: z.array(HotspotItemSchema).min(5).max(serverConfig.HOTSPOTS_MAX_ITEMS),
+  hotspots: z.array(HotspotItemSchema).min(3).max(serverConfig.HOTSPOTS_MAX_ITEMS),
 });
 
 let isRunning = false;
