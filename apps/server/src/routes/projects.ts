@@ -245,15 +245,13 @@ app.get('/:id', async (c) => {
                 textContent += part.text;
                 parts.push(part);
               } else if (part.type === "tool-call") {
-                // v6 typed tool part shape — name encoded in `type`.
-                // AI SDK v6 ModelMessage tool-call uses `input`; v5 used `args`.
-                // Keep the `args` fallback so historical rows persisted under v5
-                // (or ones we ourselves seeded with `args:`) still hydrate.
+                // v6 typed tool part shape — tool name encoded in `type`,
+                // tool args carried on `input` (v5's `args` is gone).
                 parts.push({
                   type: `tool-${part.toolName}`,
                   toolCallId: part.toolCallId,
                   state: 'input-available',
-                  input: part.input ?? part.args,
+                  input: part.input,
                 });
               }
             }
@@ -274,8 +272,8 @@ app.get('/:id', async (c) => {
                 const targetPart = targetAssistant.parts.find((p: any) => typeof p.type === 'string' && p.type.startsWith('tool-') && p.toolCallId === toolResult.toolCallId);
                 if (targetPart) {
                   targetPart.state = 'output-available';
-                  // AI SDK v6 ToolResultPart uses `output`; v5 used `result`.
-                  targetPart.output = toolResult.output ?? toolResult.result;
+                  // v6 ToolResultPart carries the result on `output` (v5's `result` is gone).
+                  targetPart.output = toolResult.output;
                 }
               }
             }
