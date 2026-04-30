@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { WorkspaceLayout } from "../components/WorkspaceLayout";
 import { Loader2 } from "lucide-react";
 import { env } from '../env';
+import { authFetch } from '../lib/auth';
 import { useEffect } from "react";
 import { useCanvasStore } from "../store/useCanvasStore";
 
@@ -14,7 +15,7 @@ export default function ProjectWorkspace() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['project', projectId],
     queryFn: async () => {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`);
       if (!res.ok) throw new Error('Failed to load project details');
       return res.json();
     },

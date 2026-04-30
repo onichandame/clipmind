@@ -246,7 +246,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                 {message?.parts?.filter((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type)).map((widgetPart: any, idx: number) => {
                   const Widget = widgetRegistry[widgetPart.type];
                   if (!Widget) return null;
-                  return <Widget key={`widget-${idx}`} part={widgetPart} projectId={projectId} />;
+                  return <Widget key={`widget-${idx}`} part={widgetPart} projectId={projectId} onSubmit={(msg) => sendMessage({ text: msg }, { body: { projectId, currentOutline: outlineContent, isDirty } })} />;
                 })}
 
                 {/* Tool Invocations 状态渲染 — 仅在当前轮流式期间可见。Widget 工具不在此处渲染。 */}

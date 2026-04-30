@@ -22,7 +22,7 @@ import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanv
 
 const VIDEO_EXTS = ['mp4', 'mov', 'MP4', 'MOV'];
 
-export async function selectAndImportAssets(): Promise<void> {
+export async function selectAndImportAssets(projectId: string): Promise<void> {
   const selected = await open({
     multiple: true,
     filters: [{ name: 'Videos', extensions: VIDEO_EXTS }],
@@ -34,6 +34,7 @@ export async function selectAndImportAssets(): Promise<void> {
     id: crypto.randomUUID(),
     filename: p.split(/[\\/]/).pop() || 'video.mp4',
     sourcePath: p,
+    projectId,
     status: 'queued',
     progress: 0,
   }));
@@ -51,10 +52,18 @@ async function processJob(job: UploadJob): Promise<void> {
       jobId: job.id,
       filename: job.filename,
       localPath: job.sourcePath,
+      projectId: job.projectId,
       serverUrl: env.VITE_API_BASE_URL,
       sessionToken,
     });
-    update(job.id, { status: 'uploading', progress: 0 });
+    // After invoke resolves the job may already be `ready` (dedup hit — Rust
+    // emitted progress:100 then returned) or `uploading` (a progress event
+    // already raced in). Only nudge it to `uploading` if it's still stuck on
+    // `compressing`, and don't reset progress so the bar doesn't jump back.
+    const current = useCanvasStore.getState().uploadJobs.find((j) => j.id === job.id);
+    if (current && current.status === 'compressing') {
+      update(job.id, { status: 'uploading' });
+    }
   } catch (error: any) {
     const msg = typeof error === 'string' ? error : error?.message ?? String(error);
     update(job.id, { status: 'error', errorMessage: msg });
@@ -78,7 +87,7 @@ export function useGlobalAssetImportListeners() {
       if (isComplete) {
         // Refresh active route loaders + the chat widget's asset-library query.
         revalidator.revalidate();
-        queryClient.invalidateQueries({ queryKey: ['assets-library'] });
+        queryClient.invalidateQueries({ queryKey: ['assets-library'], exact: false });
       }
       setJobs((current) =>
         current.map((j) => {

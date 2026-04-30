@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useLoaderData, useNavigate } from 'react-router';
 import { Flame, TrendingUp, Loader2 } from 'lucide-react';
 import { env } from '../env';
+import { authFetch } from '../lib/auth';
 
 interface Hotspot {
   id: string;
@@ -33,7 +34,7 @@ const SOURCE_META: Record<string, { label: string; dot: string }> = {
 
 export async function clientLoader(): Promise<LoaderData> {
   try {
-    const res = await fetch(`${env.VITE_API_BASE_URL}/api/hotspots`);
+    const res = await authFetch(`${env.VITE_API_BASE_URL}/api/hotspots`);
     if (!res.ok) return { hotspots: [], categories: [] };
     return res.json() as Promise<LoaderData>;
   } catch {
@@ -55,7 +56,7 @@ export default function HotspotsLibrary() {
     if (creatingId) return;
     setCreatingId(hotspot.id);
     try {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/from-hotspot`, {
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/from-hotspot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hotspotId: hotspot.id }),

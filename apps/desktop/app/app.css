@@ -3,3 +3,11 @@
 
 /* [架构师决断]: 覆写 Tailwind v4 的默认 dark 变体触发机制为基于 HTML 标签的 class */
 @custom-variant dark (&:where(.dark, .dark *));
+
+/* Sidebar collapse/expand animation. Targets the outer [data-panel] div
+   (the one with flex-basis sizing) which Panel's className prop can't reach. */
+.shell-sidebar-transitioning > [data-panel]:first-of-type {
+  transition: flex-basis 220ms cubic-bezier(0.32, 0.72, 0, 1),
+              flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1),
+              flex-shrink 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}

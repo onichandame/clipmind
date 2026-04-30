@@ -20,6 +20,7 @@ import { AssetPickerWidget } from './AssetPickerWidget';
 export interface WidgetProps {
   part: any;        // the typed tool part: { type, toolCallId, state, input, output }
   projectId: string;
+  onSubmit?: (message: string) => void;  // sends a user message into the chat
 }
 
 export const WIDGET_TOOL_NAMES = new Set<string>([

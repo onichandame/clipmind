@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
 import { env } from '../env';
+import { authFetch } from '../lib/auth';
 
 interface EditableProjectTitleProps {
   projectId: string;
@@ -26,7 +27,7 @@ export function EditableProjectTitle({ projectId, initialTitle, className = '' }
 
   const patchTitleMutation = useMutation({
     mutationFn: async (newTitle: string) => {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: newTitle }),

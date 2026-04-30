@@ -1,11 +1,21 @@
-// FIX: 全局布局重构，引入深色模式和 30/70 比例
+// react-resizable-panels v4 exports Group and Separator (not PanelGroup/PanelResizeHandle).
+// v4 dropped autoSaveId; use useDefaultLayout({ id, storage }) for equivalent persistence.
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, useDefaultLayout } from "react-resizable-panels";
 import { ChatPanel } from "./ChatPanel";
-import { CanvasPanel } from "./CanvasPanel";
+import { RightPanel } from "./RightPanel";
+import { useCanvasStore } from "../store/useCanvasStore";
+
+// useDefaultLayout has `storage = localStorage` as an ES default param — passing `undefined`
+// triggers eager evaluation and crashes during SSR pre-render. Use a no-op stub on the server.
+const noopStorage = { getItem: () => null, setItem: () => {} };
+const layoutStorage = typeof window !== 'undefined' ? window.localStorage : noopStorage;
 
 interface Project {
   id: string;
   title: string;
   createdAt: string | Date;
+  retrievedClips?: any[];
+  editingPlans?: any[];
 }
 
 interface OutlineData {
@@ -19,22 +29,38 @@ interface WorkspaceLayoutProps {
   initialMessages?: any[];
 }
 
-    export function WorkspaceLayout({ project, outline, initialMessages = [] }: WorkspaceLayoutProps) {
-      console.log("🛠️ [Layout 接收] initialMessages 长度:", initialMessages.length);
+export function WorkspaceLayout({ project, outline, initialMessages = [] }: WorkspaceLayoutProps) {
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: 'clipmind-workspace',
+    storage: layoutStorage,
+  });
 
-      return (
-    <div className="flex h-full w-full overflow-hidden transition-colors duration-200">
-      {/* FIX: ChatPanel 容器调整为 30%，添加最小和最大宽度保护 */}
-      <div className="w-[30%] min-w-[320px] max-w-[420px] h-full flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800/60 bg-zinc-50 dark:bg-zinc-900/20 transition-colors duration-200">
+  const outlineContent = useCanvasStore((s) => s.projects[project.id]?.outlineContent || "");
+  const hasClips = (project.retrievedClips?.length ?? 0) > 0;
+  const hasPlans = (project.editingPlans?.length ?? 0) > 0;
+  const hasOutline = !!outline || outlineContent.trim().length > 0;
+  const showRightPanel = hasClips || hasPlans || hasOutline;
+
+  return (
+    <div className="h-full w-full overflow-hidden">
+      {showRightPanel ? (
+        <PanelGroup
+          direction="horizontal"
+          id="clipmind-workspace"
+          defaultLayout={defaultLayout}
+          onLayoutChanged={onLayoutChanged}
+        >
+          <Panel defaultSize="50%" minSize="30%">
+            <ChatPanel key={project.id} projectId={project.id} initialMessages={initialMessages} />
+          </Panel>
+          <PanelResizeHandle className="w-px bg-zinc-200 dark:bg-zinc-800/60 hover:bg-indigo-400 dark:hover:bg-indigo-500 transition-colors" />
+          <Panel defaultSize="50%" minSize="30%">
+            <RightPanel projectId={project.id} outline={outline} />
+          </Panel>
+        </PanelGroup>
+      ) : (
         <ChatPanel key={project.id} projectId={project.id} initialMessages={initialMessages} />
-      </div>
-
-      {/* FIX: 彻底移除原有的 w-px bg-gray-300 丑陋分割线 */}
-
-      {/* CanvasPanel 容器 (占满剩余 70%) */}
-      <div className="flex-1 h-full min-w-0 bg-white dark:bg-zinc-950 relative transition-colors duration-200">
-        <CanvasPanel projectId={project.id} projectTitle={project.title} outline={outline} />
-      </div>
+      )}
     </div>
   );
 }
