@@ -65,12 +65,12 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。此规范仅适用于大纲生成，不影响剪辑方案生成。\n\n`;
   dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
   if (!currentOutline) {
-    dynamicSystemPrompt += `**【无大纲先确认】**: 当前项目还没有任何【策划大纲】。在调用 \`generateEditingPlan\` 之前，你必须先用一段简短的中文对话向用户说明"还没有策划大纲，是否仍要直接生成剪辑方案？"，明确等待用户确认。**禁止在用户尚未确认的情况下直接调用 generateEditingPlan**。如果你判断更合适的下一步是先调用 \`updateOutline\` 写一份大纲，可以一并建议；最终的决定权交给用户。\n\n`;
+    dynamicSystemPrompt += `**【无大纲先确认】**: 当前项目还没有任何【策划大纲】。在调用 \`generateEditingPlan\` 之前，你必须先调用 \`ask_user_question\` 让用户确认是否直接生成剪辑方案（典型选项："直接生成方案" / "先帮我写一份大纲"）。**禁止用纯文本提问，禁止在用户尚未通过 ask_user_question 回答之前直接调用 generateEditingPlan**。\n\n`;
   }
   dynamicSystemPrompt += `**【素材缺失/相关性不足保护规则】**: 当用户要求基于素材生成剪辑方案时，必须严格执行以下检查：\n`;
-  dynamicSystemPrompt += `  - 若 \`search_clips\` 返回结果为空，立即停止，告知用户缺少相关切片，等待用户明确指示后才能继续；\n`;
-  dynamicSystemPrompt += `  - 若搜索到的切片与目标主题明显无关（如用户要生成"火星探索"方案但切片内容全是"美食"），同样必须停止，向用户说明当前素材库中找不到相关内容，询问用户是否仍要继续（可使用 broll 占位）或上传相关素材；\n`;
-  dynamicSystemPrompt += `  - 严禁在没有匹配切片的情况下凭空生成剪辑方案，也严禁将不相关切片强行套入方案。\n\n`;
+  dynamicSystemPrompt += `  - 若 \`search_clips\` 返回结果为空，立即停止；用 \`ask_user_question\` 告知用户缺少相关切片并询问下一步（典型选项："上传更多素材" / "先用 broll 占位继续生成" / "取消"）。\n`;
+  dynamicSystemPrompt += `  - 若搜索到的切片与目标主题明显无关，同样必须停止；用 \`ask_user_question\` 说明素材库中找不到相关内容并给出选项（典型选项："用 broll 占位继续" / "上传更多素材" / "取消"）。\n`;
+  dynamicSystemPrompt += `  - 严禁在没有匹配切片的情况下凭空生成剪辑方案，也严禁将不相关切片强行套入方案；禁止用纯文本提问，必须走 \`ask_user_question\`。\n\n`;
   dynamicSystemPrompt += `**【切片内容严禁篡改军规】**: 使用 clipId 引用某个切片时，该切片原有的台词/画面/内容是客观事实，你绝对不能通过修改 \`text\` 字段来"改写"或"替换"切片本身讲的内容。\n`;
   dynamicSystemPrompt += `  - \`text\` 字段只用于填写该片段在成片中叠加的字幕文案或旁白，不得与切片实际内容矛盾；\n`;
   dynamicSystemPrompt += `  - 切片的实际内容（原始台词、原始主题）不可被篡改、不可被掩盖、不可被"重新诠释"为与原内容无关的主题；\n`;
