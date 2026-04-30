@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../db';
-import { projects, projectOutlines, editingPlans, mediaFiles, projectAssets } from '@clipmind/db/schema';
+import { projects, projectOutlines, editingPlans, mediaFiles, projectAssets, hotspots } from '@clipmind/db/schema';
 import { desc, eq, inArray, and, sql } from 'drizzle-orm';
 import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
@@ -9,6 +9,46 @@ import { requireAuth } from '../middleware/auth';
 const app = new Hono();
 
 app.use('*', requireAuth);
+
+// idea 模式首条消息：text followup + 留学热点 carousel widget。
+// 复用 material 模式 request_asset_import 的 seed 套路 —— 用 AI SDK 标准 tool-* part
+// 形状伪造一次"工具已完成调用"，前端 widgetRegistry 按 `tool-show_hotspots` 渲染
+// HotspotsCarouselWidget。output.hotspots 在创建时一次性查 DB 注入，之后即使热点表
+// 变化，本项目内看到的卡片都是创建时的快照。
+async function buildIdeaModeSeedMessage() {
+  let items: any[] = [];
+  try {
+    items = await db
+      .select({
+        id: hotspots.id,
+        category: hotspots.category,
+        title: hotspots.title,
+        description: hotspots.description,
+        source: hotspots.source,
+        heatMetric: hotspots.heatMetric,
+      })
+      .from(hotspots)
+      .where(eq(hotspots.isActive, true))
+      .orderBy(desc(hotspots.heatScore))
+      .limit(12);
+  } catch (e) {
+    console.error('[Projects] idea-seed 取热点失败，将以空 carousel 继续:', e);
+  }
+  return {
+    id: crypto.randomUUID(),
+    role: 'assistant' as const,
+    parts: [
+      { type: 'text', text: IDEA_MODE_FOLLOWUP },
+      {
+        type: 'tool-show_hotspots',
+        toolCallId: `seed-${crypto.randomUUID()}`,
+        state: 'output-available',
+        input: { reason: 'workflow-init' },
+        output: { hotspots: items },
+      },
+    ],
+  };
+}
 
 // 1. 获取项目列表（按当前登录用户限定）。
 //    ?pinned=true   仅置顶项目（无分页，按 pinnedAt 降序）
@@ -110,7 +150,8 @@ app.post('/', async (c) => {
         ],
       });
     } else if (workflowMode === 'idea') {
-      initialMessages.push({ role: 'assistant', content: IDEA_MODE_FOLLOWUP });
+      // [HITL] 想法驱动模式：followup 文案后内嵌留学热点 carousel widget（同 material 套路）。
+      initialMessages.push(await buildIdeaModeSeedMessage());
     } else {
       initialMessages.push({ role: 'assistant', content: INITIAL_GREETING });
     }
@@ -389,14 +430,19 @@ app.patch('/:id', async (c) => {
         const followupContent = body.workflowMode === 'material'
           ? MATERIAL_MODE_FOLLOWUP
           : IDEA_MODE_FOLLOWUP;
-        const alreadyPresent = existingMessages.some(
-          (m: any) => m.role === 'assistant' && m.content === followupContent
-        );
+        // 兼容两种 seed 形状：旧 plain-content 和带 parts 的 widget 消息。
+        const alreadyPresent = existingMessages.some((m: any) => {
+          if (m.role !== 'assistant') return false;
+          if (m.content === followupContent) return true;
+          return Array.isArray(m.parts)
+            && m.parts.some((p: any) => p.type === 'text' && p.text === followupContent);
+        });
         if (!alreadyPresent) {
-          updatePayload.uiMessages = [
-            ...existingMessages,
-            { role: 'assistant', content: followupContent },
-          ];
+          // idea 模式追加完整 seed（含热点 carousel widget）；material 维持原 plain-text 行为。
+          const followupMessage = body.workflowMode === 'idea'
+            ? await buildIdeaModeSeedMessage()
+            : { role: 'assistant', content: followupContent };
+          updatePayload.uiMessages = [...existingMessages, followupMessage];
         }
       }
     }
