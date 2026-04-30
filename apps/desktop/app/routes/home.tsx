@@ -1,178 +1,240 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Film, Lightbulb, MessageCircle, Send, Clock, Sparkles, Trash2 } from 'lucide-react';
 import { env } from '../env';
-import { useNavigate } from "react-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Plus,
-  Trash2,
-  Clock,
-  LayoutGrid,
-  Sparkles
-} from "lucide-react";
-import { useState } from "react";
-import { ProjectCard } from "../components/ProjectCard";
-import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
-import { IconButton } from "../components/IconButton";
+import { authFetch, getCachedUser, type AuthUser } from '../lib/auth';
+import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 
-export default function Home() {
+type Mode = 'material' | 'idea' | 'freechat';
+
+const MODE_CARDS: Array<{ id: Mode; title: string; subtitle: string; icon: any; tone: string; bg: string; ring: string }> = [
+  {
+    id: 'material',
+    title: '我有素材',
+    subtitle: '从素材库出发，AI 帮你分析并生成剪辑方案',
+    icon: Film,
+    tone: 'text-emerald-600 dark:text-emerald-400',
+    bg: 'bg-emerald-50 dark:bg-emerald-500/10',
+    ring: 'hover:border-emerald-300 dark:hover:border-emerald-500/40',
+  },
+  {
+    id: 'idea',
+    title: '我有想法',
+    subtitle: '从灵感或热点出发，AI 帮你规划拍摄大纲',
+    icon: Lightbulb,
+    tone: 'text-indigo-600 dark:text-indigo-400',
+    bg: 'bg-indigo-50 dark:bg-indigo-500/10',
+    ring: 'hover:border-indigo-300 dark:hover:border-indigo-500/40',
+  },
+  {
+    id: 'freechat',
+    title: '自由对话',
+    subtitle: '不预设流程，先和 AI 探讨思路与素材',
+    icon: MessageCircle,
+    tone: 'text-amber-600 dark:text-amber-400',
+    bg: 'bg-amber-50 dark:bg-amber-500/10',
+    ring: 'hover:border-amber-300 dark:hover:border-amber-500/40',
+  },
+];
+
+interface ProjectListItem {
+  id: string;
+  title: string;
+  workflowMode?: Mode | null;
+  updatedAt: string;
+}
+
+export default function LandingChat() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
 
-  // [端云水合]: 通过 React Query 直连 Hono 后端
-  const { data, isLoading } = useQuery({
+  useEffect(() => {
+    setUser(getCachedUser());
+  }, []);
+
+  const { data: projectsData } = useQuery({
     queryKey: ['projects'],
     queryFn: async () => {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects`);
-      if (!res.ok) throw new Error('Network response was not ok');
-      return res.json();
-    }
-  });
-
-  const createMutation = useMutation({
-    mutationFn: async () => {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects`, { method: 'POST' });
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects`);
       if (!res.ok) throw new Error('Network error');
-      return res.json();
+      return res.json() as Promise<{ projects: ProjectListItem[] }>;
     },
-    onSuccess: (newData) => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      navigate(`/projects/${newData.id}`);
-    }
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Network error');
-      return res.json();
+  const deleteProject = useMutation({
+    mutationFn: async (projectId: string) => {
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Failed to delete project');
     },
     onSuccess: () => {
-      setDeleteId(null);
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-    }
+    },
   });
 
-  const allProjects: any[] = data?.projects || [];
-  const recentProjects = allProjects.slice(0, 3);
-  const isCreating = createMutation.isPending;
+  const createProject = useMutation({
+    mutationFn: async ({ workflowMode, seedMessage }: { workflowMode: Mode; seedMessage?: string }) => {
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflowMode, seedMessage }),
+      });
+      if (!res.ok) throw new Error('Failed to create project');
+      return (await res.json()) as { id: string };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      navigate(`/projects/${data.id}`);
+    },
+  });
 
-  const confirmDelete = (id: string) => {
-    deleteMutation.mutate(id);
+  const handleCardClick = async (mode: Mode) => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      await createProject.mutateAsync({ workflowMode: mode });
+    } finally {
+      setCreating(false);
+    }
   };
 
-  if (allProjects.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-8 text-center bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
-        <div className="w-24 h-24 mb-6 rounded-full bg-white dark:bg-zinc-900 flex items-center justify-center border border-zinc-200 dark:border-zinc-800 shadow-sm dark:shadow-none">
-          <Sparkles className="w-10 h-10 text-zinc-400 dark:text-zinc-500" />
-        </div>
-        <h2 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100 mb-2">你的第一个视频大纲，从这里开始</h2>
-        <p className="text-zinc-500 max-w-md mb-8">
-          告诉 AI 你的创作灵感，我们将为你自动生成大纲并匹配库中的高光素材。
-        </p>
-        <button
-          onClick={() => createMutation.mutate()}
-          disabled={isCreating}
-          className="px-8 py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-950 rounded-lg font-bold hover:bg-zinc-800 dark:hover:bg-white transition-all disabled:opacity-50 cursor-pointer"
-        >
-          {isCreating ? "正在创建..." : "+ 开始首次创作"}
-        </button>
-      </div>
-    );
-  }
+  const handleSubmitDraft = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text || creating) return;
+    setCreating(true);
+    try {
+      await createProject.mutateAsync({ workflowMode: 'freechat', seedMessage: text });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const recent = (projectsData?.projects || []).slice(0, 6);
+  const displayName = user?.email ? user.email.split('@')[0] : 'Creator';
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950 transition-colors duration-200">
-      <header className="flex items-center justify-between px-8 py-10 flex-shrink-0">
-        <div>
-          <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-100">工作台</h1>
-          <p className="text-zinc-500 mt-1">早安，创作者。</p>
+    <div className="h-full overflow-y-auto bg-indigo-50/40 dark:bg-zinc-950 transition-colors duration-200">
+      <div className="max-w-3xl mx-auto px-6 py-12">
+        {/* Greeting */}
+        <div className="flex items-center gap-4 mb-8">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center shadow-md shadow-indigo-500/20 flex-shrink-0">
+            <Sparkles className="w-8 h-8 text-white" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-2xl md:text-3xl font-bold text-zinc-900 dark:text-zinc-100 truncate">
+              Hello, {displayName}
+            </h1>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+              我是 ClipMind，帮你把素材变成成片，先聊聊今天想做什么？
+            </p>
+          </div>
         </div>
-        <button
-          onClick={() => createMutation.mutate()}
-          disabled={isCreating}
-          className="flex items-center gap-2 px-6 py-2.5 bg-zinc-100 text-zinc-950 rounded-lg font-bold hover:bg-white transition-all shadow-lg shadow-zinc-950/20 cursor-pointer"
-        >
-          <Plus size={20} />
-          <span>{isCreating ? "正在创建..." : "新建项目"}</span>
-        </button>
-      </header>
 
-      <main className="flex-1 overflow-y-auto px-8 pb-12 space-y-12">
-        {/* Recent Section - 使用重构后的 ProjectCard 组件 */}
-        {recentProjects.length > 0 && (
+        {/* Mode cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+          {MODE_CARDS.map(({ id, title, subtitle, icon: Icon, tone, bg, ring }) => (
+            <button
+              key={id}
+              onClick={() => handleCardClick(id)}
+              disabled={creating}
+              className={`group text-left rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 cursor-pointer ${ring} hover:shadow-md hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              <div className={`w-10 h-10 rounded-xl ${bg} flex items-center justify-center mb-3`}>
+                <Icon className={`w-5 h-5 ${tone}`} />
+              </div>
+              <div className="text-sm font-bold text-zinc-900 dark:text-zinc-100 mb-1">{title}</div>
+              <div className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{subtitle}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* Free-chat input */}
+        <form onSubmit={handleSubmitDraft} className="mb-12">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 focus-within:border-indigo-400 dark:focus-within:border-indigo-500/60 focus-within:ring-4 focus-within:ring-indigo-500/10 rounded-2xl shadow-sm transition-all p-3">
+            <input
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder="或者直接说出你的想法，AI 会帮你边聊边推进…"
+              disabled={creating}
+              className="w-full bg-transparent text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-2 py-2 focus:outline-none disabled:opacity-50"
+            />
+            <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-100 dark:border-zinc-800/70">
+              <div className="text-[11px] text-zinc-400 dark:text-zinc-500 px-2">
+                Enter 发送 · Shift+Enter 换行
+              </div>
+              <button
+                type="submit"
+                disabled={!draft.trim() || creating}
+                className="p-2 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 hover:from-indigo-400 hover:to-violet-400 disabled:from-zinc-200 disabled:to-zinc-200 dark:disabled:from-zinc-800 dark:disabled:to-zinc-800 disabled:text-zinc-400 text-white shadow-sm transition-all"
+                title="开启自由对话"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </form>
+
+        {/* Recent projects strip */}
+        {recent.length > 0 && (
           <section>
-            <h3 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Clock size={14} />
-              最近打开
+            <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5" />
+              最近项目
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {recentProjects.map((p) => (
-                <ProjectCard
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              {recent.map((p) => (
+                <div
                   key={p.id}
-                  project={p}
-                  onDelete={() => setDeleteId(p.id)}
-                />
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/projects/${p.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      navigate(`/projects/${p.id}`);
+                    }
+                  }}
+                  className="group relative text-left rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3 pr-8 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-500/40 hover:shadow-sm transition-all"
+                >
+                  <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate" title={p.title}>{p.title}</div>
+                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
+                    {new Date(p.updatedAt).toLocaleDateString()}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirmDelete({ id: p.id, title: p.title });
+                    }}
+                    className="absolute top-2 right-2 p-1.5 rounded-md text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
+                    title="删除项目"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               ))}
             </div>
           </section>
         )}
-
-        {/* All Projects Section - 优化表格整行点击 */}
-        <section>
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
-              <LayoutGrid size={14} />
-              全部项目
-            </h3>
-          </div>
-          <div className="bg-white dark:bg-zinc-900/30 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm dark:shadow-none transition-colors">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500 uppercase transition-colors">
-                  <th className="px-6 py-4 font-semibold">项目名称</th>
-                  <th className="px-6 py-4 font-semibold">更新时间</th>
-                  <th className="px-6 py-4"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800/50 transition-colors">
-                {allProjects.map((p) => (
-                  <tr
-                    key={p.id}
-                    onClick={() => navigate(`/projects/${p.id}`)}
-                    className="group hover:bg-zinc-50 dark:hover:bg-zinc-900/40 transition-colors cursor-pointer"
-                  >
-                    <td className="px-6 py-4 font-bold text-zinc-900 dark:text-zinc-200 dark:group-hover:text-white transition-colors">
-                      {p.title}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-zinc-500 transition-colors">
-                      {new Date(p.updatedAt).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <IconButton
-                        icon={Trash2}
-                        onClick={(e) => {
-                          e.stopPropagation(); // 阻止冒泡，防止触发 tr 的跳转
-                          setDeleteId(p.id);
-                        }}
-                        className="text-zinc-600 hover:text-red-400"
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </main>
-
-      {/* Delete Confirmation Modal */}
-      {deleteId && (
+      </div>
+      {confirmDelete && (
         <DeleteConfirmModal
           title="确认删除项目？"
-          description={`此操作将永久删除该项目对应的策划大纲并清空素材篮子。底层的全局素材库不会受到影响。`}
-          onCancel={() => setDeleteId(null)}
-          onConfirm={() => confirmDelete(deleteId)}
+          description={`确定要删除项目"${confirmDelete.title || '未命名'}"吗？此操作不可恢复。`}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => {
+            const id = confirmDelete.id;
+            setConfirmDelete(null);
+            deleteProject.mutate(id);
+          }}
         />
       )}
     </div>

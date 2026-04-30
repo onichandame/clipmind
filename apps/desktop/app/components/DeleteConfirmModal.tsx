@@ -1,3 +1,7 @@
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import { Button } from "./Button";
+
 export function DeleteConfirmModal({
   onCancel,
   onConfirm,
@@ -9,7 +13,11 @@ export function DeleteConfirmModal({
   title?: string;
   description?: string;
 }) {
-  return (
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-zinc-950/80 backdrop-blur-sm p-4"
       onClick={onCancel}
@@ -21,20 +29,15 @@ export function DeleteConfirmModal({
         <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 mb-2">{title}</h3>
         <p className="text-zinc-600 dark:text-zinc-400 mb-8 whitespace-pre-wrap">{description}</p>
         <div className="flex gap-4">
-          <button
-            onClick={onCancel}
-            className="flex-1 py-2 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 font-bold transition-all"
-          >
+          <Button variant="secondary" fullWidth onClick={onCancel}>
             取消
-          </button>
-          <button
-            onClick={onConfirm}
-            className="flex-1 py-2 bg-red-600 text-white hover:bg-red-700 dark:bg-red-900/50 dark:text-red-400 dark:border dark:border-red-800/50 rounded-lg font-bold dark:hover:bg-red-900 transition-all"
-          >
+          </Button>
+          <Button variant="danger" fullWidth onClick={onConfirm}>
             确认删除
-          </button>
+          </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
