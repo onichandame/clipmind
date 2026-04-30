@@ -13,7 +13,8 @@ import { useCanvasStore } from "../store/useCanvasStore";
 import { EditingPlanCard } from "./EditingPlanCard";
 import { EditableProjectTitle } from "./EditableProjectTitle";
 import { DeleteConfirmModal } from "./DeleteConfirmModal";
-import { WIDGET_TOOL_NAMES, widgetRegistry } from "./widgets/registry";
+import { WIDGET_TOOL_NAMES, SILENT_TOOL_NAMES, widgetRegistry } from "./widgets/registry";
+import { MemoryUpdateToast } from "./MemoryUpdateToast";
 
 interface ChatPanelProps {
   projectId: string;
@@ -50,7 +51,7 @@ const MessageBubble = memo(function MessageBubble({
   // Tool pills stay visible after the React loop ends as part of the latest
   // message's record — bridges the gap between loop completion and any
   // downstream UI (e.g. right panel sliding in) settling.
-  const hasVisibleTools = !isUser && isLast && !!message?.parts?.some((p: any) => isToolUIPart(p));
+  const hasVisibleTools = !isUser && isLast && !!message?.parts?.some((p: any) => isToolUIPart(p) && !SILENT_TOOL_NAMES.has(p.type));
   // HITL widgets render unconditionally (not gated by isLoading), so a message
   // carrying only a widget part (no text, no streaming pill) is still visible.
   const hasWidget = !isUser && !!message?.parts?.some((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type));
@@ -93,8 +94,8 @@ const MessageBubble = memo(function MessageBubble({
           return <Widget key={`widget-${idx}`} part={widgetPart} projectId={projectId} answer={nextUserText} onSubmit={onWidgetSubmit} />;
         })}
 
-        {/* Tool Invocations 状态渲染 — 保留至最近一条 AI 消息上，loop 结束后仍作为历史展示。Widget 工具不在此处渲染。 */}
-        {isLast && message?.parts?.filter((p: any) => isToolUIPart(p) && !WIDGET_TOOL_NAMES.has(p.type)).map((toolPart: any, index: number) => {
+        {/* Tool Invocations 状态渲染 — 保留至最近一条 AI 消息上，loop 结束后仍作为历史展示。Widget / 静默工具不在此处渲染。 */}
+        {isLast && message?.parts?.filter((p: any) => isToolUIPart(p) && !WIDGET_TOOL_NAMES.has(p.type) && !SILENT_TOOL_NAMES.has(p.type)).map((toolPart: any, index: number) => {
           const state = toolPart.state;
           const toolName = toolPart.toolName || toolPart.type;
 
@@ -288,6 +289,39 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   // 当前架构已将持久化收敛至后端，前端仅需等待重新拉取即可。
   // (旧版拦截 ToolCall 处理 RAG 数据的反模式代码已彻底移除)
 
+  // [Long-term memory] 监听 tool-update_user_memory 静默工具的 output-available 事件，
+  // 弹出无交互 toast。toolCallId 去重防止重渲染重复触发；历史消息（刷新加载）也会进
+  // 这个扫描，但 seenToolCallIds 在挂载时填充全部历史的 ID（取消首屏静默通过设
+  // didInitMemoryToastRef 表示），因此只有"首次出现"的写入才弹 toast。
+  const [memoryToastNonce, setMemoryToastNonce] = useState(0);
+  const seenMemoryCallsRef = useRef<Set<string>>(new Set());
+  const didInitMemoryToastRef = useRef(false);
+  useEffect(() => {
+    const fresh: string[] = [];
+    for (const m of messages) {
+      if (m.role !== 'assistant' || !Array.isArray(m.parts)) continue;
+      for (const p of m.parts) {
+        if (
+          (p as any)?.type === 'tool-update_user_memory' &&
+          (p as any)?.state === 'output-available'
+        ) {
+          const id = (p as any).toolCallId || `${m.id}-mem`;
+          if (!seenMemoryCallsRef.current.has(id)) {
+            seenMemoryCallsRef.current.add(id);
+            fresh.push(id);
+          }
+        }
+      }
+    }
+    if (!didInitMemoryToastRef.current) {
+      didInitMemoryToastRef.current = true;
+      return; // first pass: just record existing IDs without firing toast
+    }
+    if (fresh.length > 0) {
+      setMemoryToastNonce((n) => n + 1);
+    }
+  }, [messages]);
+
   // 切项目时由 WorkspaceLayout 的 key={project.id} 触发重挂载，useChat 会以新 startingMessages 重置。
   // 此处只负责挂载初始化：清空该项目残留的 canvas 状态。
   useEffect(() => {
@@ -363,7 +397,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const lastAssistantParts = (lastMessage?.role === "assistant" ? lastMessage.parts ?? [] : []) as any[];
   // An active tool call (still receiving input) shows its own spinner — no extra bubble needed.
   const hasActiveToolCall = lastAssistantParts.some(
-    (p: any) => isToolUIPart(p) && (p.state === 'input-streaming' || p.state === 'input-available')
+    (p: any) => isToolUIPart(p) && !SILENT_TOOL_NAMES.has(p.type) && (p.state === 'input-streaming' || p.state === 'input-available')
   );
   // Streaming text is self-evidencing — no extra bubble needed.
   const hasAssistantText = lastAssistantParts.some((p: any) => p.type === 'text' && p.text?.length > 0);
@@ -375,6 +409,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
           return (
             <div className="flex flex-col h-full bg-transparent">
+              <MemoryUpdateToast nonce={memoryToastNonce} />
               {/* Header */}
               <div className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 backdrop-blur-sm z-10 transition-colors">
                 <div className="text-[13px] font-bold text-zinc-900 dark:text-zinc-100 transition-colors tracking-tight min-w-0 flex-1">

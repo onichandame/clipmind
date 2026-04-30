@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, projects, hotspots } from "@clipmind/db";
+import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, projects, hotspots, users } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
@@ -30,8 +30,21 @@ app.post("/", async (c) => {
     .limit(1);
   if (!currProject) return c.json({ error: "Project not found" }, 404);
 
+  // [Long-term memory] 跨项目稳定的用户画像。仅在 chat 路由读取，注入到 system prompt 最前部，
+  // 让模型在看到具体项目状态前就已经"认识"用户。空时跳过整段注入，零回填。
+  const userMemoryRow = await db
+    .select({ md: users.memoryMd })
+    .from(users)
+    .where(eq(users.id, user.id))
+    .limit(1);
+  const userMemoryMd = userMemoryRow[0]?.md?.trim() ?? '';
+
   // 动态注入上下文，解决防冲撞与幻觉覆盖问题
   let dynamicSystemPrompt = SYSTEM_PROMPT;
+
+  if (userMemoryMd) {
+    dynamicSystemPrompt += `\n\n## 关于你正在对话的用户（长期记忆）\n这是你跨项目积累的对该用户的了解。优先用这些已知偏好回答，不要再问已经记下来的事。\n\n${userMemoryMd}\n`;
+  }
 
   // 注入工作流模式上下文，引导 AI 针对当前创作模式给出合适的响应
   if (currProject.workflowMode === 'material') {
@@ -64,6 +77,12 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `**【反问规范】**: 只要你的下一步是向用户提问且答案可以枚举（包括 yes/no、是否继续、是否确认这类确认型问题），都必须调用 \`ask_user_question\`，禁止把问题用纯文本抛出来等用户敲字。同一思考里若有多个独立分叉，把它们一起塞进 \`questions\` 数组里一次问完（最多 5 个），避免连续多轮反问。每个问题的 \`options\` 不要写"其他/自定义"——前端会自动追加一个开放式输入框选项。调用后必须立即停步，由用户点击提交触发下一轮。**唯一例外**：纯开放式问题（如"你想加什么字幕文案？"）无法预设选项时才用纯文本提问。\n`;
   dynamicSystemPrompt += `**【反问无铺垫硬规则】**: 决定要调 \`ask_user_question\` 时，**禁止在调用前发出任何引导/铺垫文本**——例如"先确认一下创作方向："、"让我问你几个问题："、"在继续之前我想问下："、"为了更好地帮你..."。这些铺垫文本必然导致问题语义在文本和 widget 之间撕裂。**直接调工具**，问题语境一律写进 \`question\` 字段本身（如 \`question: "在继续展开大纲前，先确认创作方向"\`）。**违反此规则等同于把问题用纯文本抛出来**。\n\n`;
   dynamicSystemPrompt += `**【灵感发散规范】**: 当用户在【灵感 / 自由对话】项目里表达"想看看热点 / 帮我找方向 / 最近留学圈在聊什么 / 我没什么思路 / 给点选题"这类发散意图时，必须调用 \`show_hotspots\` 而不是自己凭空生成话题清单。前端会渲染留学行业热点 carousel，用户点击某条会作为创作种子塞回对话。调用后停步。**禁用场景**：用户已经有明确选题、用户在做素材操作、剪辑方案推进流程中——此时不要调用 \`show_hotspots\`。\n\n`;
+  dynamicSystemPrompt += `**【长期记忆 update_user_memory】** (D 频道，静默工具，不停步)：\n`;
+  dynamicSystemPrompt += `- 当且仅当用户在对话中暴露**跨项目都成立的稳定信息**时调用：用户身份（垂类/平台/角色）、创作偏好（节奏/风格/字幕排版/转场偏好）、工作流偏好、用户明示"记住这件事/下次别再问/我就是不喜欢 X"的反馈。\n`;
+  dynamicSystemPrompt += `- **不要**保存：当前项目的具体素材、当前会话的剪辑方案、临时任务状态、敏感信息（邮箱/手机号/家庭住址/支付方式，除非用户主动要求）。\n`;
+  dynamicSystemPrompt += `- 调用方式：每次都传**完整新版 markdown**（全量重写、不是 diff），≤12KB。当前 memory（如果存在）已经在 system prompt 顶部「## 关于你正在对话的用户」段，把它当底稿，合并新事实、删过期项。建议用 \`## 身份\` / \`## 创作偏好\` / \`## 工作流偏好\` / \`## 反馈\` 这类章节结构。\n`;
+  dynamicSystemPrompt += `- 调用频次：一次会话最多调用 2 次。**不要**把每条用户消息都当成可记忆事实——宁可漏写、不能错写（用户没有撤销路径）。\n`;
+  dynamicSystemPrompt += `- 静默：调用后不要在文字回复里说"我已经记住了"——前端有 toast，重复说反而冗余。\n\n`;
   dynamicSystemPrompt += `**【热点 seed 后禁搜规则】**: 若用户最新一条消息以"我想围绕这个留学热点创作："开头（这是 hotspots carousel 卡片点击后塞回对话的固定 seed 格式），消息体里已包含 title / category / source / heatMetric / description 全部上下文。这就是创作起点的完整信息——**禁止再调 \`search_web\` / \`fetch_webpage\` 去补充背景**（毫无必要且常被 Google 反爬挡掉，给用户暴露一段无关的"搜索失败"文本）。直接进入下一步：调 \`ask_user_question\` 确认风格 / 时长 / 角度，或者调 \`updateOutline\` 起草大纲。\n\n`;
   dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。此规范仅适用于大纲生成，不影响剪辑方案生成。\n\n`;
   dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
@@ -367,6 +386,46 @@ app.post("/", async (c) => {
           } catch (error) {
             console.error('❌ show_hotspots 取数失败:', error);
             return { hotspots: [] };
+          }
+        },
+      }),
+      // [Long-term memory] 静默工具：把跨项目稳定的用户画像全量重写到 users.memory_md。
+      // 不停步，无 stopCondition；前端在右下角弹出无交互 toast 5s 自动消失。
+      update_user_memory: tool({
+        description:
+          "更新关于当前用户的【长期跨项目记忆】。" +
+          "**必须传完整的新版 markdown**（不是增量），后端做全量替换。" +
+          "调用前你看到的当前 memory 已经在 system prompt 顶部【关于你正在对话的用户】段（若空则是首次写入）。" +
+          "**何时调用**：用户暴露稳定的身份/偏好/工作流习惯/反馈。" +
+          "**何时不调用**：项目内临时事实、敏感个人信息、用户没明确表态的猜测。" +
+          "调用后必须继续完成本轮回复（**不**停步），并保持文字回复极简——前端有 toast 提示，不要重复说\"我记住了\"。",
+        inputSchema: z.object({
+          contentMd: z.string()
+            .min(1)
+            .max(12_000, 'memory 太长，先在心里压缩再传过来')
+            .describe('完整新版 memory.md 内容（全量替换，不是 diff）。建议用 ## 身份 / ## 创作偏好 / ## 工作流偏好 / ## 反馈 这类章节。'),
+          reason: z.string().min(1).describe('一句话说为什么这次要更新（用户哪句话触发的、保留/删/改了什么）'),
+        }).strict(),
+        execute: async (args) => {
+          try {
+            const beforeRow = await db
+              .select({ md: users.memoryMd })
+              .from(users)
+              .where(eq(users.id, user.id))
+              .limit(1);
+            const before = beforeRow[0]?.md ?? '';
+            await db.update(users)
+              .set({ memoryMd: args.contentMd, memoryUpdatedAt: new Date() })
+              .where(eq(users.id, user.id));
+            return {
+              success: true,
+              reason: args.reason,
+              before,
+              after: args.contentMd,
+            };
+          } catch (error: any) {
+            console.error('❌ update_user_memory 写入失败:', error);
+            return { success: false, error: error.message };
           }
         },
       }),

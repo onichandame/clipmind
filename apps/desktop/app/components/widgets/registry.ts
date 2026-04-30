@@ -34,6 +34,13 @@ export const WIDGET_TOOL_NAMES = new Set<string>([
   'tool-show_hotspots',
 ]);
 
+// Side-channel tools that fire a transient effect (toast) but do NOT render in the
+// transcript and do NOT show a status pill. Used to keep the AI's silent
+// background writes (long-term user memory, etc.) out of the conversation surface.
+export const SILENT_TOOL_NAMES = new Set<string>([
+  'tool-update_user_memory',
+]);
+
 export const widgetRegistry: Record<string, ComponentType<WidgetProps>> = {
   'tool-request_asset_import': AssetPickerWidget,
   'tool-ask_user_question': AskUserQuestionWidget,

@@ -43,6 +43,13 @@
       "when": 1777953600000,
       "tag": "0005_purge_assets",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1777531978341,
+      "tag": "0006_exotic_kat_farrell",
+      "breakpoints": true
     }
   ]
 }

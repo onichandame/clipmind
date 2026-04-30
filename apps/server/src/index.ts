@@ -32,6 +32,7 @@ import assetsRoute from './routes/assets';
 import hotspotsAdminRoute from './routes/hotspots-admin';
 import { startDanglingOssCleanupJob } from './jobs/cleanup-dangling-oss';
 import { startHotspotsPipeline } from './jobs/hotspots-pipeline';
+import { startMemoryCompactionJob } from './jobs/memory-compaction';
 
 app.route('/api/chat', chatRoute);
 app.route('/api/oss-callback', ossCallbackRoute);
@@ -48,6 +49,8 @@ const startServer = async () => {
     startDanglingOssCleanupJob();
     // 启动热点库采集管道
     startHotspotsPipeline();
+    // 启动用户长期记忆压缩任务（每天 03:00）
+    startMemoryCompactionJob();
 
     serve({ fetch: app.fetch, port: serverConfig.PORT }, (info) => {
       console.log(`🚀 Server listening on port ${info.port} [CORS Allowed: ${serverConfig.CORS_ORIGIN.join(', ')}]`);

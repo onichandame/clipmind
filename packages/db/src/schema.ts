@@ -11,6 +11,8 @@ export const users = mysqlTable('users', {
   passwordHash: varchar('password_hash', { length: 255 }).notNull(),
   emailVerifiedAt: timestamp('email_verified_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  memoryMd: text('memory_md'),
+  memoryUpdatedAt: timestamp('memory_updated_at'),
 });
 
 // 单次性 webhook nonce 防重放：oss-callback 在校验 HMAC 后插入 nonce；
