@@ -56,17 +56,12 @@ export function AskUserQuestionWidget({ part, onSubmit, answer }: WidgetProps) {
     [isAnswered, answer, questions],
   );
 
-  // Fallback: model called the tool with malformed/empty input. Render an
-  // explicit error state instead of disappearing — silent null + leading
-  // preamble text from the model = "widget didn't render" mystery for users.
-  if (!questions.length) {
-    return (
-      <div className="mt-4 mb-2 rounded-2xl border border-amber-200 dark:border-amber-500/30 bg-amber-50/60 dark:bg-amber-500/10 px-4 py-3 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2">
-        <HelpCircle className="w-3.5 h-3.5 flex-shrink-0" />
-        <span>这条提问卡片少了具体问题（模型未返回有效 questions），请直接在输入框作答继续。</span>
-      </div>
-    );
-  }
+  // Empty/malformed questions → silent null. Most occurrences are stale
+  // historical records from before the no-preamble prompt rule landed.
+  // For *new* malformed calls, the assistant text bubble above this part
+  // still renders, so the user can keep typing freely; an inline amber
+  // warning was tried but caused more visual noise than it resolved.
+  if (!questions.length) return null;
 
   const headerTitle = questions.length === 1 ? questions[0].question : `帮我确认 ${questions.length} 件事`;
   const allAnswered = questions.every((_, i) => {
