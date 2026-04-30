@@ -59,7 +59,9 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`。若涉及素材检索，禁止同时修改大纲。\n`;
   dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n`;
   dynamicSystemPrompt += `- 【精挑（人工操作）】: 精挑是纯人工操作，**AI 不得替用户执行精挑**。当用户对某个素材满意、或询问如何精挑时，你应明确告知：请在右侧素材面板中点击素材上的"精挑"按钮进行手动精挑。你的职责是推荐与描述，最终的精挑决策权归用户。\n`;
-  dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n\n`;
+  dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n`;
+  dynamicSystemPrompt += `- 【频道 D: HITL 反问】: 仅包含 \`ask_user_question\`。它不与其他频道互斥，但单步内不得与任何其他工具并发调用。调用后必须停步等待用户回答。\n\n`;
+  dynamicSystemPrompt += `**【反问规范】**: 当你的下一步本应让用户在 **2–6 个明确选项** 中做单选时，必须调用 \`ask_user_question\`，禁止把问题用纯文本抛出来等用户敲字。同一思考里若有多个独立分叉，把它们一起塞进 \`questions\` 数组里一次问完（最多 5 个），避免连续多轮反问。每个问题的 \`options\` 不要写"其他/自定义"——前端会自动追加一个开放式输入框选项。调用后必须立即停步，由用户点击提交触发下一轮。\n\n`;
   dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。此规范仅适用于大纲生成，不影响剪辑方案生成。\n\n`;
   dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
   if (!currentOutline) {
@@ -168,7 +170,7 @@ app.post("/", async (c) => {
 
   // 核心修复 2：针对大模型提前结束生命周期导致文本为空的问题，注入强制结语指令
   const finalSystemPrompt = dynamicSystemPrompt + `\n\n【系统高优先级指令】：在执行完任何工具（Tool）后，你绝对不能静默结束对话。你必须在收到工具结果后，追加一段面向用户的自然语言（Text）说明，告知用户工具的执行结果或下一步建议！`;
-  const stopConditions = [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan')];
+  const stopConditions = [stepCountIs(MAX_STEPS), hasToolCall('generateEditingPlan'), hasToolCall('ask_user_question')];
   const result = streamText({
     model, system: finalSystemPrompt, messages: safeMessages,
     maxRetries: 3,
@@ -308,6 +310,28 @@ app.post("/", async (c) => {
             return { success: false, error: "Database error" };
           }
         }
+      }),
+      // [HITL Widget] 无副作用工具：让用户在按钮里做单选，避免敲键盘。一次可问多个问题。
+      ask_user_question: tool({
+        description:
+          "当你的下一步是让用户在 **2–6 个明确选项** 中做单选时调用本工具，前端会渲染按钮卡片让用户一键回答。" +
+          "**支持一次问多个问题**：把所有需要用户同时决策的分叉打包进 questions 数组（最多 5 个），避免连续多轮反问。" +
+          "**重要**：每个问题的选项**末尾会被前端自动追加一个\"其他/自由输入\"项**，你**不需要也不能**在 options 里加这一项。" +
+          "**典型场景**：缺大纲是先写还是直接生成方案 / 节奏紧凑还是舒缓 / 推进路线分叉。" +
+          "**禁用场景**：开放式问题（'你打算讲什么主题？'）、确认型 yes/no（直接发文本即可）。" +
+          "**输出顺序**：直接调用本工具，不要在调用前/后再发任何重复文本——卡片本身已经把问题渲染出来了。" +
+          "**调用后必须停步**，等用户点击提交触发下一轮。",
+        inputSchema: z.object({
+          questions: z.array(z.object({
+            question: z.string().min(1).describe('一句话问题，作为该 section 的标题展示'),
+            options: z.array(z.object({
+              label: z.string().min(1).describe('按钮主文案，短句（≤ 12 字）'),
+              value: z.string().min(1).describe('被点击时作为该问题答案使用的字符串；通常和 label 相同'),
+              description: z.string().optional().describe('按钮下的灰色小字补充说明，可省略'),
+            })).min(2).max(6).describe('候选选项；不要包含"其他/自由输入"项，前端会自动注入'),
+          })).min(1).max(5),
+        }).strict(),
+        execute: async (input) => ({ ok: true, ...input }),
       }),
       // [HITL Widget] 无副作用工具：仅向前端发出"请展示素材选择/上传 UI"的请求。
       request_asset_import: tool({
