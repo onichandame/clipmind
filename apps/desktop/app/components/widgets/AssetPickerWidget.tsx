@@ -139,11 +139,19 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
                   ? `${asset.filename}\n\nAI 内容分析中，完成前无法被选入素材篮`
                   : `${asset.filename}\n\n内容分析失败，此素材不可用于检索`;
               return (
-                <button
+                <div
                   key={asset.id}
-                  type="button"
-                  disabled={!selectable}
+                  role="button"
+                  tabIndex={selectable ? 0 : -1}
+                  aria-disabled={!selectable}
                   onClick={() => selectable && toggleSelect.mutate(asset.id)}
+                  onKeyDown={(e) => {
+                    if (!selectable) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleSelect.mutate(asset.id);
+                    }
+                  }}
                   className={`group relative flex-shrink-0 w-32 rounded-xl overflow-hidden border-2 transition-all snap-start ${
                     selectable ? 'cursor-pointer' : 'cursor-not-allowed'
                   } ${
@@ -198,7 +206,7 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
                       {asset.filename}
                     </div>
                   </div>
-                </button>
+                </div>
               );
             })}
 

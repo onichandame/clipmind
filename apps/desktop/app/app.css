@@ -11,3 +11,11 @@
               flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1),
               flex-shrink 220ms cubic-bezier(0.32, 0.72, 0, 1);
 }
+
+/* Right panel slide-in/out animation in the project workspace. Animates both
+   the chat panel (first-of-type, expanding to fill) and the right panel itself. */
+.workspace-rightpanel-transitioning > [data-panel] {
+  transition: flex-basis 220ms cubic-bezier(0.32, 0.72, 0, 1),
+              flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1),
+              flex-shrink 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}

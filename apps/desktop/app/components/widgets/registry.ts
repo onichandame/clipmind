@@ -16,17 +16,23 @@
 
 import type { ComponentType } from 'react';
 import { AssetPickerWidget } from './AssetPickerWidget';
+import { AskUserQuestionWidget } from './AskUserQuestionWidget';
 
 export interface WidgetProps {
   part: any;        // the typed tool part: { type, toolCallId, state, input, output }
   projectId: string;
   onSubmit?: (message: string) => void;  // sends a user message into the chat
+  // The text of the next user message after this widget's message, if any.
+  // Widgets that need an "answered/locked" state (e.g. AskUserQuestionWidget) read this.
+  answer?: string;
 }
 
 export const WIDGET_TOOL_NAMES = new Set<string>([
   'tool-request_asset_import',
+  'tool-ask_user_question',
 ]);
 
 export const widgetRegistry: Record<string, ComponentType<WidgetProps>> = {
   'tool-request_asset_import': AssetPickerWidget,
+  'tool-ask_user_question': AskUserQuestionWidget,
 };

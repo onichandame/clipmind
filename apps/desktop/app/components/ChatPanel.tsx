@@ -1,6 +1,6 @@
 import { env } from '../env';
 import { authFetch, authHeaders } from '../lib/auth';
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useMemo, useCallback, memo } from "react";
 import { useNavigate, useRevalidator } from "react-router";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, isToolUIPart } from "ai";
@@ -24,6 +24,144 @@ const sanitizeSchema = {
   ...defaultSchema,
   attributes: { ...defaultSchema.attributes, code: [...(defaultSchema.attributes?.code || []), "className"] },
 };
+
+interface MessageBubbleProps {
+  message: any;
+  isLast: boolean;
+  showInlineThinking: boolean;
+  projectId: string;
+  onWidgetSubmit: (msg: string) => void;
+  // Text of the user message immediately following this one, if any. Widgets
+  // that lock into "answered" state (e.g. AskUserQuestionWidget) read this.
+  nextUserText?: string;
+}
+
+const MessageBubble = memo(function MessageBubble({
+  message,
+  isLast,
+  showInlineThinking,
+  projectId,
+  onWidgetSubmit,
+  nextUserText,
+}: MessageBubbleProps) {
+  const isUser = message?.role === "user";
+  const msgText = !isUser ? (message?.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || '') : '';
+  const hasCleanText = !!msgText && !msgText.includes('{"toolCalls":') && !msgText.includes('"toolCallId":');
+  // Tool pills stay visible after the React loop ends as part of the latest
+  // message's record — bridges the gap between loop completion and any
+  // downstream UI (e.g. right panel sliding in) settling.
+  const hasVisibleTools = !isUser && isLast && !!message?.parts?.some((p: any) => isToolUIPart(p));
+  // HITL widgets render unconditionally (not gated by isLoading), so a message
+  // carrying only a widget part (no text, no streaming pill) is still visible.
+  const hasWidget = !isUser && !!message?.parts?.some((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type));
+  if (!isUser && !hasCleanText && !hasVisibleTools && !hasWidget && !showInlineThinking) return null;
+
+  if (isUser) {
+    const userText = message?.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || '';
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] px-4 py-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800/70 text-zinc-900 dark:text-zinc-100 text-[14px] leading-relaxed whitespace-pre-wrap break-words">
+          {userText}
+        </div>
+      </div>
+    );
+  }
+
+  const textToRender = msgText;
+  const showText = !!textToRender && !textToRender.includes('{"toolCalls":') && !textToRender.includes('"toolCallId":');
+
+  return (
+    <div className="flex items-start gap-3">
+      <div
+        className="w-7 h-7 mt-0.5 rounded-lg flex items-center justify-center text-white text-xs font-bold shadow-[0_0_12px_rgba(109,93,251,0.3)] flex-shrink-0"
+        style={{ backgroundColor: '#6D5DFB' }}
+      >
+        C
+      </div>
+      <div className="flex-1 min-w-0 text-[14px] leading-7 text-zinc-800 dark:text-zinc-200">
+        {showText && (
+          <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-7 prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-200 dark:prose-pre:border-zinc-800 transition-colors">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
+          </div>
+        )}
+
+        {/* HITL Widgets — persistent in-chat UI cards (asset picker, future confirm buttons, etc.).
+            Always render (independent of streaming state) once the tool part is in the message. */}
+        {message?.parts?.filter((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type)).map((widgetPart: any, idx: number) => {
+          const Widget = widgetRegistry[widgetPart.type];
+          if (!Widget) return null;
+          return <Widget key={`widget-${idx}`} part={widgetPart} projectId={projectId} answer={nextUserText} onSubmit={onWidgetSubmit} />;
+        })}
+
+        {/* Tool Invocations 状态渲染 — 保留至最近一条 AI 消息上，loop 结束后仍作为历史展示。Widget 工具不在此处渲染。 */}
+        {isLast && message?.parts?.filter((p: any) => isToolUIPart(p) && !WIDGET_TOOL_NAMES.has(p.type)).map((toolPart: any, index: number) => {
+          const state = toolPart.state;
+          const toolName = toolPart.toolName || toolPart.type;
+
+          if (toolName?.includes('generateEditingPlan')) {
+            if (state === 'output-available') {
+              if (toolPart.output && toolPart.output.success === false) {
+                return (
+                  <div key={index} className="mt-3 mb-1 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
+                    ⚠️ 方案解析失败: {toolPart.output.error || '未知错误'}
+                  </div>
+                );
+              }
+              return (
+                <div key={index} className="inline-flex items-center gap-2 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20 mt-3 text-xs font-medium">
+                  <span>✨</span>
+                  <span>剪辑方案已生成并保存</span>
+                </div>
+              );
+            } else if (state === 'input-available' || state === 'input-streaming') {
+              return (
+                <div key={index} className="inline-flex items-center gap-2 text-indigo-500 dark:text-indigo-400 bg-indigo-500/5 px-3 py-1.5 rounded-full border border-indigo-500/20 mt-3 text-xs font-medium animate-pulse">
+                  <div className="animate-spin h-3 w-3 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                  <span>正在生成智能剪辑方案…</span>
+                </div>
+              );
+            }
+          }
+
+          const isCalling = state === 'input-streaming' || state === 'input-available';
+          const isOutline = toolName?.includes('updateOutline');
+          const isPlan = toolName?.includes('generateEditingPlan');
+          const isWebSearch = toolName?.includes('search_web');
+          const isFetchPage = toolName?.includes('fetch_webpage');
+
+          const callingLabel = isOutline ? "正在构思大纲…"
+            : isPlan ? "正在生成剪辑方案…"
+            : isWebSearch ? "正在网络搜索…"
+            : isFetchPage ? "正在读取网页…"
+            : "正在检索素材…";
+
+          const doneLabel = isOutline ? "大纲已同步"
+            : isPlan ? "剪辑方案生成完毕"
+            : isWebSearch ? "网络搜索完成"
+            : isFetchPage ? "网页读取完成"
+            : "素材检索完成";
+
+          return (
+            <div key={index} className="inline-flex items-center gap-2 text-indigo-500 dark:text-indigo-400 bg-indigo-500/5 px-3 py-1.5 rounded-full border border-indigo-500/20 mt-3 mr-2 text-xs font-medium">
+              {isCalling ? (
+                <div className="animate-spin h-3 w-3 border-2 border-indigo-500 border-t-transparent rounded-full" />
+              ) : (
+                <span>✓</span>
+              )}
+              <span>{isCalling ? callingLabel : doneLabel}</span>
+            </div>
+          );
+        })}
+        {showInlineThinking && (
+          <div className="flex items-center gap-2 text-zinc-400 dark:text-zinc-500 mt-1">
+            <div className="animate-spin h-3.5 w-3.5 border-2 border-zinc-400 border-t-transparent rounded-full" />
+            <span className="text-sm">思考中…</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
 
 export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const setActiveMode = useCanvasStore((s) => s.setActiveMode);
@@ -57,17 +195,36 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const revalidator = useRevalidator();
   const autoTriggeredRef = useRef<Record<string, boolean>>({});
 
+  // Refs that always hold the latest value of body deps so the transport's
+  // body factory and the stable widget callback can read them without taking
+  // them as deps (and thus without invalidating memoization on every change).
+  const projectIdRef = useRef(projectId);
+  const outlineContentRef = useRef(outlineContent);
+  const isDirtyRef = useRef(isDirty);
+  useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
+  useEffect(() => { outlineContentRef.current = outlineContent; }, [outlineContent]);
+  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
+
+  const transport = useMemo(
+    () => new DefaultChatTransport({
+      api: `${env.VITE_API_BASE_URL}/api/chat`,
+      headers: () => authHeaders(),
+      body: () => ({
+        projectId: projectIdRef.current,
+        currentOutline: outlineContentRef.current,
+        isDirty: isDirtyRef.current,
+      }),
+    }),
+    [],
+  );
+
   const { messages, sendMessage, regenerate, status, } = useChat({
     id: projectId,
 
 
 
     messages: startingMessages,
-    transport: new DefaultChatTransport({
-      api: `${env.VITE_API_BASE_URL}/api/chat`,
-      headers: () => authHeaders(),
-      body: { projectId, currentOutline: outlineContent, isDirty }
-    }),
+    transport,
     onData: (data) => {
       console.log("📥 [网络层探针] 收到 data! :", data.type, JSON.stringify(data.data));
     },
@@ -103,6 +260,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   // [DEBUG INJECTION] 实时监控大模型的流式分发状态 (放在 useChat 后面)
   const setOutlineContent = useCanvasStore((s) => s.setOutlineContent);
+  // Track the last contentMd we pushed to the canvas store so we don't fire
+  // redundant setOutlineContent on every streaming token. Without this, each
+  // token re-pushed the same state into Zustand → triggered a ChatPanel
+  // re-render → re-ran this effect → loop. Breaking the loop is what kills
+  // the streaming-time feedback storm.
+  const lastPushedOutlineRef = useRef<string>('');
   useEffect(() => {
     if (messages.length > 0) {
       const last = messages[messages.length - 1];
@@ -111,7 +274,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       const outlinePart = last?.parts?.filter(p => isToolUIPart(p)).find((p) => p.type === 'tool-updateOutline');
       if (outlinePart && (outlinePart.state === 'input-streaming' || outlinePart.state === 'input-available')) {
         const input = outlinePart.input as { contentMd: string } | undefined;
-        if (input?.contentMd) {
+        if (input?.contentMd && input.contentMd !== lastPushedOutlineRef.current) {
+          lastPushedOutlineRef.current = input.contentMd;
           setOutlineContent(projectId, input.contentMd, "agent");
           if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
         }
@@ -156,6 +320,24 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     }
   }, [messages]);
 
+  // Stable callback for HITL widgets to send a user message back into the chat.
+  // Reads body deps from refs so the identity is stable across renders — that
+  // keeps memoized message bubbles (and any widget memoization) from busting.
+  const sendMessageRef = useRef(sendMessage);
+  useEffect(() => { sendMessageRef.current = sendMessage; }, [sendMessage]);
+  const handleWidgetSubmit = useCallback((msg: string) => {
+    sendMessageRef.current(
+      { text: msg },
+      {
+        body: {
+          projectId: projectIdRef.current,
+          currentOutline: outlineContentRef.current,
+          isDirty: isDirtyRef.current,
+        },
+      },
+    );
+  }, []);
+
   const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -172,7 +354,11 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
   const isLoading = status === "streaming" || status === "submitted";
 
-  const lastMessage = messages[messages.length - 1];
+  // Filter once and reuse — both for the map below and for derived flags
+  // (lastMessage etc.) so indices in the rendered list always agree.
+  const visibleMessages = useMemo(() => messages.filter(Boolean), [messages]);
+
+  const lastMessage = visibleMessages[visibleMessages.length - 1];
   const lastIsUser = lastMessage?.role === "user";
   const lastAssistantParts = (lastMessage?.role === "assistant" ? lastMessage.parts ?? [] : []) as any[];
   // An active tool call (still receiving input) shows its own spinner — no extra bubble needed.
@@ -199,123 +385,30 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-8">
-        {messages.filter(Boolean).map((message) => {
-          const isUser = message?.role === "user";
-          const msgText = !isUser ? (message?.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || '') : '';
-          const hasCleanText = !!msgText && !msgText.includes('{"toolCalls":') && !msgText.includes('"toolCallId":');
-          const hasVisibleTools = !isUser && isLoading && message === lastMessage && !!message?.parts?.some((p: any) => isToolUIPart(p));
-          // HITL widgets render unconditionally (not gated by isLoading), so a message
-          // carrying only a widget part (no text, no streaming pill) is still visible.
-          const hasWidget = !isUser && !!message?.parts?.some((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type));
-          const showInlineThinking = !isUser && isLoading && message === lastMessage && !hasActiveToolCall && !hasAssistantText;
-          if (!isUser && !hasCleanText && !hasVisibleTools && !hasWidget && !showInlineThinking) return null;
-
-          if (isUser) {
-            const userText = message?.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || '';
-            return (
-              <div key={message.id} className="flex justify-end">
-                <div className="max-w-[85%] px-4 py-2.5 rounded-2xl bg-zinc-100 dark:bg-zinc-800/70 text-zinc-900 dark:text-zinc-100 text-[14px] leading-relaxed whitespace-pre-wrap break-words">
-                  {userText}
-                </div>
-              </div>
-            );
-          }
-
+        {visibleMessages.map((message, idx) => {
+          const isLast = idx === visibleMessages.length - 1;
+          // Precompute the next user message text so MessageBubble doesn't have
+          // to walk the messages array internally — keeps the bubble's prop
+          // shape stable across renders for memoization.
+          const next = visibleMessages[idx + 1];
+          const nextUserText = next?.role === 'user'
+            ? (next.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || undefined)
+            : undefined;
+          // showInlineThinking only matters for the last assistant message
+          // during streaming. For older messages it's always false, so passing
+          // a constant `false` keeps their props stable as isLoading flips.
+          const showInlineThinking =
+            isLast && isLoading && !lastIsUser && !hasActiveToolCall && !hasAssistantText && message?.role !== 'user';
           return (
-            <div key={message.id} className="flex items-start gap-3">
-              <div
-                className="w-7 h-7 mt-0.5 rounded-lg flex items-center justify-center text-white text-xs font-bold shadow-[0_0_12px_rgba(109,93,251,0.3)] flex-shrink-0"
-                style={{ backgroundColor: '#6D5DFB' }}
-              >
-                C
-              </div>
-              <div className="flex-1 min-w-0 text-[14px] leading-7 text-zinc-800 dark:text-zinc-200">
-                {(() => {
-                  const msg = message;
-                  let textToRender = msg?.parts?.filter(p => p.type === 'text').map(p => p.text).join('') || ``;
-                  if (!textToRender || textToRender.includes('{"toolCalls":') || textToRender.includes('"toolCallId":')) return null;
-                  return (
-                    <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-7 prose-pre:bg-zinc-100 dark:prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-200 dark:prose-pre:border-zinc-800 transition-colors">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}>{textToRender}</ReactMarkdown>
-                    </div>
-                  );
-                })()}
-
-                {/* HITL Widgets — persistent in-chat UI cards (asset picker, future confirm buttons, etc.).
-                    Always render (independent of streaming state) once the tool part is in the message. */}
-                {message?.parts?.filter((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type)).map((widgetPart: any, idx: number) => {
-                  const Widget = widgetRegistry[widgetPart.type];
-                  if (!Widget) return null;
-                  return <Widget key={`widget-${idx}`} part={widgetPart} projectId={projectId} onSubmit={(msg) => sendMessage({ text: msg }, { body: { projectId, currentOutline: outlineContent, isDirty } })} />;
-                })}
-
-                {/* Tool Invocations 状态渲染 — 仅在当前轮流式期间可见。Widget 工具不在此处渲染。 */}
-                {isLoading && message === lastMessage && message?.parts?.filter((p: any) => isToolUIPart(p) && !WIDGET_TOOL_NAMES.has(p.type)).map((toolPart: any, index: number) => {
-                  const state = toolPart.state;
-                  const toolName = toolPart.toolName || toolPart.type;
-
-                  if (toolName?.includes('generateEditingPlan')) {
-                    if (state === 'output-available') {
-                      if (toolPart.output && toolPart.output.success === false) {
-                        return (
-                          <div key={index} className="mt-3 mb-1 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
-                            ⚠️ 方案解析失败: {toolPart.output.error || '未知错误'}
-                          </div>
-                        );
-                      }
-                      return (
-                        <div key={index} className="inline-flex items-center gap-2 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20 mt-3 text-xs font-medium">
-                          <span>✨</span>
-                          <span>剪辑方案已生成并保存</span>
-                        </div>
-                      );
-                    } else if (state === 'input-available' || state === 'input-streaming') {
-                      return (
-                        <div key={index} className="inline-flex items-center gap-2 text-indigo-500 dark:text-indigo-400 bg-indigo-500/5 px-3 py-1.5 rounded-full border border-indigo-500/20 mt-3 text-xs font-medium animate-pulse">
-                          <div className="animate-spin h-3 w-3 border-2 border-indigo-500 border-t-transparent rounded-full" />
-                          <span>正在生成智能剪辑方案…</span>
-                        </div>
-                      );
-                    }
-                  }
-
-                  const isCalling = state === 'input-streaming' || state === 'input-available';
-                  const isOutline = toolName?.includes('updateOutline');
-                  const isPlan = toolName?.includes('generateEditingPlan');
-                  const isWebSearch = toolName?.includes('search_web');
-                  const isFetchPage = toolName?.includes('fetch_webpage');
-
-                  const callingLabel = isOutline ? "正在构思大纲…"
-                    : isPlan ? "正在生成剪辑方案…"
-                    : isWebSearch ? "正在网络搜索…"
-                    : isFetchPage ? "正在读取网页…"
-                    : "正在检索素材…";
-
-                  const doneLabel = isOutline ? "大纲已同步"
-                    : isPlan ? "剪辑方案生成完毕"
-                    : isWebSearch ? "网络搜索完成"
-                    : isFetchPage ? "网页读取完成"
-                    : "素材检索完成";
-
-                  return (
-                    <div key={index} className="inline-flex items-center gap-2 text-indigo-500 dark:text-indigo-400 bg-indigo-500/5 px-3 py-1.5 rounded-full border border-indigo-500/20 mt-3 mr-2 text-xs font-medium">
-                      {isCalling ? (
-                        <div className="animate-spin h-3 w-3 border-2 border-indigo-500 border-t-transparent rounded-full" />
-                      ) : (
-                        <span>✓</span>
-                      )}
-                      <span>{isCalling ? callingLabel : doneLabel}</span>
-                    </div>
-                  );
-                })}
-                {showInlineThinking && (
-                  <div className="flex items-center gap-2 text-zinc-400 dark:text-zinc-500 mt-1">
-                    <div className="animate-spin h-3.5 w-3.5 border-2 border-zinc-400 border-t-transparent rounded-full" />
-                    <span className="text-sm">思考中…</span>
-                  </div>
-                )}
-              </div>
-            </div>
+            <MessageBubble
+              key={message.id}
+              message={message}
+              isLast={isLast}
+              showInlineThinking={showInlineThinking}
+              projectId={projectId}
+              onWidgetSubmit={handleWidgetSubmit}
+              nextUserText={nextUserText}
+            />
           );
         })}
         {showThinking && (

@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from "react-router";
-import { Moon, Sun, LogOut, Sparkles, Film, Lightbulb, MessageCircle, History, Pin, PanelLeftClose, PanelLeftOpen, MoreHorizontal, Trash2 } from "lucide-react";
+import { Moon, Sun, LogOut, Sparkles, Film, Lightbulb, MessageCircle, History, Pin, PinOff, PanelLeftClose, PanelLeftOpen, MoreHorizontal, Trash2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createPortal } from "react-dom";
@@ -52,12 +52,12 @@ function ProjectRow({ p, isActive, onClick }: { p: ProjectListItem; isActive: bo
     >
       <Icon className="w-3.5 h-3.5 flex-shrink-0 opacity-70" />
       <span className="text-[13px] truncate min-w-0 flex-1">{p.title || '未命名'}</span>
-      <RowMenu projectId={p.id} title={p.title} isActive={isActive} />
+      <RowMenu projectId={p.id} title={p.title} isActive={isActive} pinned={!!p.pinnedAt} />
     </div>
   );
 }
 
-function RowMenu({ projectId, title, isActive }: { projectId: string; title: string; isActive: boolean }) {
+function RowMenu({ projectId, title, isActive, pinned }: { projectId: string; title: string; isActive: boolean; pinned: boolean }) {
   const [open, setOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -98,6 +98,21 @@ function RowMenu({ projectId, title, isActive }: { projectId: string; title: str
     },
   });
 
+  const pinMutation = useMutation({
+    mutationFn: async (next: boolean) => {
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned: next }),
+      });
+      if (!res.ok) throw new Error('Failed to update pin state');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+    },
+  });
+
   const handleTriggerClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     const rect = triggerRef.current?.getBoundingClientRect();
@@ -125,6 +140,17 @@ function RowMenu({ projectId, title, isActive }: { projectId: string; title: str
           className="w-36 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-lg z-50 overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              pinMutation.mutate(!pinned);
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm cursor-pointer text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800/60 transition-colors"
+          >
+            {pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+            <span>{pinned ? '取消置顶' : '置顶'}</span>
+          </button>
           <button
             type="button"
             onClick={() => {
