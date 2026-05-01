@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { mediaFiles, projectAssets } from "@clipmind/db";
+import { mediaFiles, projectAssets, projects } from "@clipmind/db";
 import { desc, eq, and, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { signAssetViewUrl, signAssetDownloadUrl } from "../utils/oss";
@@ -9,6 +9,114 @@ import { requireAuth } from "../middleware/auth";
 const app = new Hono();
 
 app.use('*', requireAuth);
+
+// GET /api/assets/library — list all of the user's underlying media files
+// (deduped by file hash) along with which projects use each one. Used by the
+// global "素材库" page; preview-only (no upload).
+app.get("/library", async (c) => {
+  const user = c.get('user');
+  try {
+    // Pull every project_assets row for the user joined with media_files and
+    // owning project title. We do client-side grouping by mediaFileId — each
+    // user has bounded asset count so this is fine.
+    const rows = await db
+      .select({
+        // project_assets fields (per-use)
+        projectAssetId: projectAssets.id,
+        projectId: projectAssets.projectId,
+        projectTitle: projects.title,
+        filename: projectAssets.filename,
+        localPath: projectAssets.localPath,
+        originDeviceId: projectAssets.originDeviceId,
+        videoOssKey: projectAssets.videoOssKey,
+        backupStatus: projectAssets.backupStatus,
+        paCreatedAt: projectAssets.createdAt,
+        // media_files fields (canonical)
+        mediaFileId: mediaFiles.id,
+        fileSize: mediaFiles.fileSize,
+        duration: mediaFiles.duration,
+        status: mediaFiles.status,
+        asrStatus: mediaFiles.asrStatus,
+        summary: mediaFiles.summary,
+        audioOssKey: mediaFiles.audioOssKey,
+        thumbnailOssKey: mediaFiles.thumbnailOssKey,
+        createdAt: mediaFiles.createdAt,
+      })
+      .from(projectAssets)
+      .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+      .innerJoin(projects, eq(projects.id, projectAssets.projectId))
+      .where(eq(projectAssets.userId, user.id))
+      .orderBy(desc(mediaFiles.createdAt));
+
+    type MediaGroup = {
+      mediaFileId: string;
+      filename: string;
+      localPath: string | null;
+      originDeviceId: string | null;
+      videoOssUrl: string | null;
+      audioOssUrl: string | null;
+      thumbnailUrl: string | null;
+      backupStatus: string | null;
+      fileSize: number;
+      duration: number | null;
+      status: string;
+      asrStatus: string | null;
+      summary: string | null;
+      createdAt: Date;
+      // first project_asset for the modal's "id" field (id is needed for delete/relink)
+      representativeAssetId: string;
+      usedBy: Array<{ projectId: string; projectTitle: string; projectAssetId: string }>;
+    };
+
+    const grouped = new Map<string, MediaGroup>();
+    for (const r of rows) {
+      let g = grouped.get(r.mediaFileId);
+      if (!g) {
+        g = {
+          mediaFileId: r.mediaFileId,
+          filename: r.filename,
+          localPath: r.localPath ?? null,
+          originDeviceId: r.originDeviceId ?? null,
+          videoOssUrl: r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
+          audioOssUrl: r.audioOssKey ? signAssetViewUrl(r.audioOssKey) : null,
+          thumbnailUrl: r.thumbnailOssKey ? signAssetViewUrl(r.thumbnailOssKey) : null,
+          backupStatus: r.backupStatus ?? null,
+          fileSize: r.fileSize,
+          duration: r.duration ?? null,
+          status: r.status ?? 'processing',
+          asrStatus: r.asrStatus ?? null,
+          summary: r.summary ?? null,
+          createdAt: r.createdAt,
+          representativeAssetId: r.projectAssetId,
+          usedBy: [],
+        };
+        grouped.set(r.mediaFileId, g);
+      } else {
+        // Prefer a project_asset row that has a localPath / videoOssKey so
+        // the modal can play it back.
+        if (!g.localPath && r.localPath) {
+          g.localPath = r.localPath;
+          g.originDeviceId = r.originDeviceId ?? g.originDeviceId;
+          g.representativeAssetId = r.projectAssetId;
+        }
+        if (!g.videoOssUrl && r.videoOssKey) {
+          g.videoOssUrl = signAssetViewUrl(r.videoOssKey);
+          g.backupStatus = r.backupStatus ?? g.backupStatus;
+        }
+      }
+      g.usedBy.push({
+        projectId: r.projectId,
+        projectTitle: r.projectTitle,
+        projectAssetId: r.projectAssetId,
+      });
+    }
+
+    return c.json(Array.from(grouped.values()));
+  } catch (error) {
+    console.error('❌ 获取素材库失败:', error);
+    return c.json({ error: 'Database Error' }, 500);
+  }
+});
 
 // GET /api/assets?projectId=xxx — list project-scoped assets joining media_files for processing state
 app.get("/", async (c) => {
