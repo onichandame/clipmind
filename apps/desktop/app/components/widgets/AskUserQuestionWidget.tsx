@@ -45,7 +45,11 @@ function parseAnswer(questions: Question[], answer: string): Map<number, string>
 }
 
 export function AskUserQuestionWidget({ part, onSubmit, answer }: WidgetProps) {
-  const questions: Question[] = part?.input?.questions ?? [];
+  // During input-streaming the partial-JSON parser can hand `questions` as a
+  // non-array intermediate (string mid-token, etc.). Coerce defensively so the
+  // widget renders a no-op until the array materializes.
+  const rawQuestions = part?.input?.questions;
+  const questions: Question[] = Array.isArray(rawQuestions) ? rawQuestions : [];
   const isAnswered = !!answer;
 
   const [selections, setSelections] = useState<Map<number, Selection>>(new Map());
