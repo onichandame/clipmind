@@ -4,5 +4,6 @@ export default [
   index("routes/home.tsx"),
   route("login", "routes/login.tsx"),
   route("signup", "routes/signup.tsx"),
+  route("library", "routes/library.tsx"),
   route("projects/:projectId", "routes/projects.$projectId.tsx"),
 ] satisfies RouteConfig;

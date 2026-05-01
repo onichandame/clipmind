@@ -14,6 +14,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, type PanelImperativeHandle } from "react-resizable-panels";
 import { GlobalSidebar } from "./components/GlobalSidebar";
+import { IconNavBar } from "./components/IconNavBar";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fetchMe, getToken, type AuthUser, getCachedUser } from "./lib/auth";
 import { useGlobalAssetImportListeners } from "./lib/asset-import";
@@ -74,6 +75,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     sidebarRef.current?.expand();
     window.setTimeout(() => setSidebarTransitioning(false), 250);
   };
+  const handleToggleProjectList = () => {
+    if (sidebarCollapsed) expandSidebar();
+    else collapseSidebar();
+  };
 
   useEffect(() => {
     setMounted(true);
@@ -123,34 +128,39 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
   return (
-    <div className="h-screen w-screen overflow-hidden bg-indigo-50/40 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 font-sans tracking-wide transition-colors duration-200">
-      <PanelGroup
-        direction="horizontal"
-        id="clipmind-shell"
-        className={sidebarTransitioning ? "shell-sidebar-transitioning" : ""}
-      >
-        <Panel
-          panelRef={sidebarRef}
-          defaultSize="240px"
-          minSize="200px"
-          maxSize="380px"
-          collapsible
-          collapsedSize="56px"
-          onResize={(size) => setSidebarCollapsed(size.inPixels < 100)}
+    <div className="h-screen w-screen overflow-hidden bg-indigo-50/40 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 font-sans tracking-wide transition-colors duration-200 flex">
+      {/* Always-visible icon nav bar */}
+      <IconNavBar
+        projectListCollapsed={sidebarCollapsed}
+        onToggleProjectList={handleToggleProjectList}
+      />
+
+      {/* Resizable: project list + main content */}
+      <div className="flex-1 min-w-0">
+        <PanelGroup
+          direction="horizontal"
+          id="clipmind-shell"
+          className={sidebarTransitioning ? "shell-sidebar-transitioning" : ""}
         >
-          <GlobalSidebar
-            collapsed={sidebarCollapsed}
-            onCollapse={collapseSidebar}
-            onExpand={expandSidebar}
-          />
-        </Panel>
-        <PanelResizeHandle className="w-px bg-zinc-200 dark:bg-zinc-800/60 hover:bg-indigo-400 dark:hover:bg-indigo-500 transition-colors" />
-        <Panel minSize="50%">
-          <div className="h-full w-full relative overflow-y-auto">
-            {children}
-          </div>
-        </Panel>
-      </PanelGroup>
+          <Panel
+            panelRef={sidebarRef}
+            defaultSize="240px"
+            minSize="200px"
+            maxSize="380px"
+            collapsible
+            collapsedSize="0%"
+            onResize={(size) => setSidebarCollapsed(size.inPixels < 80)}
+          >
+            <GlobalSidebar />
+          </Panel>
+          <PanelResizeHandle className="w-px bg-zinc-200 dark:bg-zinc-800/60 hover:bg-indigo-400 dark:hover:bg-indigo-500 transition-colors" />
+          <Panel minSize="50%">
+            <div className="h-full w-full relative overflow-y-auto">
+              {children}
+            </div>
+          </Panel>
+        </PanelGroup>
+      </div>
     </div>
   );
 }
