@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { mediaFiles, projectAssets, projects } from "@clipmind/db";
-import { desc, eq, and, inArray } from "drizzle-orm";
+import { desc, eq, and, inArray, isNotNull, ne } from "drizzle-orm";
 import { db } from "../db";
-import { signAssetViewUrl, signAssetDownloadUrl } from "../utils/oss";
+import { signAssetViewUrl, signAssetDownloadUrl, deleteAsset } from "../utils/oss";
 import { deleteVectorsByAssetId, QDRANT_SUMMARY_COLLECTION } from "../utils/qdrant";
 import { requireAuth } from "../middleware/auth";
 
@@ -357,6 +357,70 @@ app.post('/:mediaFileId/backup-status', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
   return c.json({ success: true });
+});
+
+// POST /api/assets/:mediaFileId/unbackup —— 用户主动取消云备份。
+//
+// 跨用户引用计数：video-backup 的 OSS object key 是 hash-derived (assets/by-hash/{sha256}.{ext})，
+// 多个用户备份同一份内容时共享一个 OSS 对象。本 endpoint 先清掉本用户的 videoOssKey/backupStatus，
+// 再扫一遍是否还有其它用户在同一 fileHash 上保留 videoOssKey；都没有时才真正删 OSS。
+//
+// 失败模式：DB 永远先一致地清理；若 OSS DELETE 因网络/权限失败，留下 orphan 由后续 sweep 回收，
+// 不让 endpoint 整体失败（用户 UI 已经按 local_only 显示）。
+app.post('/:mediaFileId/unbackup', async (c) => {
+  const user = c.get('user');
+  const mediaFileId = c.req.param('mediaFileId');
+
+  const result = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({
+        fileHash: mediaFiles.fileHash,
+        videoOssKey: mediaFiles.videoOssKey,
+      })
+      .from(mediaFiles)
+      .where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.userId, user.id)))
+      .limit(1);
+    if (!row) return { found: false as const };
+
+    await tx
+      .update(mediaFiles)
+      .set({ videoOssKey: null, backupStatus: 'local_only' })
+      .where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.userId, user.id)));
+
+    // 是否还有其它 media_files 行在同一 hash 上挂着 videoOssKey
+    const stillReferenced = await tx
+      .select({ id: mediaFiles.id })
+      .from(mediaFiles)
+      .where(and(
+        eq(mediaFiles.fileHash, row.fileHash),
+        isNotNull(mediaFiles.videoOssKey),
+        ne(mediaFiles.id, mediaFileId),
+      ))
+      .limit(1);
+
+    return {
+      found: true as const,
+      isLastReferrer: row.videoOssKey != null && stillReferenced.length === 0,
+      ossKey: row.videoOssKey,
+    };
+  });
+
+  if (!result.found) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+
+  let ossDeleted = false;
+  if (result.isLastReferrer && result.ossKey) {
+    try {
+      await deleteAsset(result.ossKey);
+      ossDeleted = true;
+    } catch (e) {
+      // DB is already consistent; orphaned object can be swept later.
+      console.error('[unbackup] OSS delete failed, leaving orphan:', result.ossKey, e);
+    }
+  }
+
+  return c.json({ success: true, ossDeleted });
 });
 
 export default app;

@@ -58,3 +58,11 @@ export function signUploadUrl(objectKey: string, contentType: string): string {
     secure: true,
   });
 }
+
+/**
+ * 删除 OSS 对象。用于跨用户引用计数归零后清理共享视频备份原片。
+ * 不存在的对象返回成功（OSS DELETE 是幂等的）。
+ */
+export async function deleteAsset(objectKey: string): Promise<void> {
+  await ossClient.delete(objectKey);
+}

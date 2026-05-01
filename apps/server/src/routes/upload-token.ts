@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne, isNotNull } from 'drizzle-orm';
 import { db } from '../db';
 import { mediaFiles } from '@clipmind/db/schema';
 import { signUploadUrl } from '../utils/oss';
@@ -43,8 +43,9 @@ app.post('/', async (c) => {
 
   // All three kinds (audio / thumbnail / video-backup) are now keyed by media_files.id
   // — backup state moved to media_files (per-content), so we can do a single ownership check.
+  // We also pull fileHash so video-backup can use a content-addressed key (cross-user dedup).
   const [owned] = await db
-    .select({ id: mediaFiles.id })
+    .select({ id: mediaFiles.id, fileHash: mediaFiles.fileHash })
     .from(mediaFiles)
     .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, user.id)))
     .limit(1);
@@ -53,7 +54,40 @@ app.post('/', async (c) => {
   }
 
   const ext = (filename.split('.').pop() || '').toLowerCase();
-  const objectKey = KIND_TO_KEY[kind](assetId, ext);
+
+  // video-backup: cross-user content dedup. Before issuing a presigned PUT URL,
+  // check whether *another* user already holds an OSS reference for this hash.
+  // If yes, copy that user's videoOssKey onto this user's row and flip
+  // backupStatus='backed_up' synchronously — the client will skip the PUT
+  // entirely. We trust the existing row's videoOssKey rather than recomputing
+  // from filename, so .mov-vs-.mp4-extension users converge on whichever key
+  // was first uploaded.
+  if (kind === 'video-backup') {
+    const [shared] = await db
+      .select({ videoOssKey: mediaFiles.videoOssKey })
+      .from(mediaFiles)
+      .where(and(
+        eq(mediaFiles.fileHash, owned.fileHash),
+        isNotNull(mediaFiles.videoOssKey),
+        ne(mediaFiles.id, assetId),
+      ))
+      .limit(1);
+
+    if (shared && shared.videoOssKey) {
+      await db
+        .update(mediaFiles)
+        .set({ videoOssKey: shared.videoOssKey, backupStatus: 'backed_up' })
+        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, user.id)));
+      return c.json({ alreadyUploaded: true, objectKey: shared.videoOssKey });
+    }
+  }
+
+  // video-backup is content-addressed: every user uploading the same SHA-256
+  // shares one OSS object. Unsync deletes only when the last referrer drops.
+  // audio/thumbnail remain per-mediaFileId (today they're per-user processing artifacts).
+  const objectKey = kind === 'video-backup'
+    ? `assets/by-hash/${owned.fileHash}.${ext || 'mp4'}`
+    : KIND_TO_KEY[kind](assetId, ext);
   const contentType = KIND_CONTENT_TYPE[kind](filename);
 
   const callbackToken = signWebhookPayload({
@@ -66,6 +100,7 @@ app.post('/', async (c) => {
   });
 
   return c.json({
+    alreadyUploaded: false,
     uploadUrl: signUploadUrl(objectKey, contentType),
     objectKey,
     contentType,
