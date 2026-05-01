@@ -1,19 +1,17 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Library, Film, Clock, Layers, Activity, CheckCircle2, AlertCircle } from 'lucide-react';
 import { env } from '../env';
 import { authFetch } from '../lib/auth';
 import { AssetDetailModal } from '../components/AssetDetailModal';
-import { useDeviceId } from '../lib/asset-uri';
+import { useLocalAssets } from '../lib/asset-uri';
 import { getAnalysisStage, type Asset } from '../lib/asset-types';
 
 interface LibraryVariant {
   projectId: string;
   projectTitle: string;
   projectAssetId: string;
-  localPath: string | null;
-  originDeviceId: string | null;
   videoOssUrl: string | null;
   backupStatus: Asset['backupStatus'];
 }
@@ -21,6 +19,7 @@ interface LibraryVariant {
 interface LibraryItem {
   mediaFileId: string;
   filename: string;
+  sha256: string;
   audioOssUrl: string | null;
   thumbnailUrl: string | null;
   fileSize: number;
@@ -51,37 +50,26 @@ function formatSize(bytes: number): string {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-// Pick the variant most likely to play on this device:
-//  1. localPath set AND originDeviceId === currentDeviceId
-//  2. backupStatus === 'backed_up' (cloud playback works anywhere)
-//  3. anything with a localPath (relink path)
-//  4. fall back to the first variant
-function pickVariant(variants: LibraryVariant[], currentDeviceId: string | null): LibraryVariant {
-  if (variants.length === 0) {
+// Pick the best playback source for a media_file:
+//   1. Local copy on this device (per-device SQLite has a row keyed by mediaFileId)
+//   2. Any backed-up cloud variant
+//   3. First variant (so we still surface the project list and a relink option)
+function pickVariant(item: LibraryItem): LibraryVariant {
+  if (item.variants.length === 0) {
     throw new Error('Library item with zero variants — server should never emit this');
   }
-  const localMatch = currentDeviceId
-    ? variants.find((v) => v.localPath && v.originDeviceId === currentDeviceId)
-    : undefined;
-  if (localMatch) return localMatch;
-
-  const backedUp = variants.find((v) => v.backupStatus === 'backed_up' && v.videoOssUrl);
+  const backedUp = item.variants.find((v) => v.backupStatus === 'backed_up' && v.videoOssUrl);
   if (backedUp) return backedUp;
-
-  const anyLocal = variants.find((v) => v.localPath);
-  if (anyLocal) return anyLocal;
-
-  return variants[0];
+  return item.variants[0];
 }
 
-function libraryItemToAsset(item: LibraryItem, currentDeviceId: string | null): Asset {
-  const variant = pickVariant(item.variants, currentDeviceId);
+function libraryItemToAsset(item: LibraryItem): Asset {
+  const variant = pickVariant(item);
   return {
     id: variant.projectAssetId,
     mediaFileId: item.mediaFileId,
     filename: item.filename,
-    localPath: variant.localPath,
-    originDeviceId: variant.originDeviceId,
+    sha256: item.sha256,
     backupStatus: variant.backupStatus,
     audioOssUrl: item.audioOssUrl,
     thumbnailUrl: item.thumbnailUrl,
@@ -97,7 +85,6 @@ function libraryItemToAsset(item: LibraryItem, currentDeviceId: string | null): 
 
 export default function LibraryPage() {
   const navigate = useNavigate();
-  const deviceId = useDeviceId();
   const [selected, setSelected] = useState<LibraryItem | null>(null);
 
   const { data, isLoading, isError } = useQuery({
@@ -110,6 +97,11 @@ export default function LibraryPage() {
   });
 
   const items = data ?? [];
+  const mediaFileIds = useMemo(() => items.map((i) => i.mediaFileId), [items]);
+  // Page-level batch lookup: ask Rust once which of these media_files have a
+  // local copy on this device. Card-level rendering uses this map to flag
+  // local availability without per-card IPC chatter.
+  const { data: localMap } = useLocalAssets(mediaFileIds);
 
   return (
     <div className="h-full overflow-y-auto bg-indigo-50/40 dark:bg-zinc-950 transition-colors duration-200">
@@ -151,6 +143,7 @@ export default function LibraryPage() {
               <LibraryCard
                 key={item.mediaFileId}
                 item={item}
+                hasLocal={!!localMap?.[item.mediaFileId]}
                 onOpen={() => setSelected(item)}
                 onProjectClick={(projectId) => navigate(`/projects/${projectId}`)}
               />
@@ -161,7 +154,7 @@ export default function LibraryPage() {
 
       {selected && (
         <AssetDetailModal
-          asset={libraryItemToAsset(selected, deviceId)}
+          asset={libraryItemToAsset(selected)}
           onClose={() => setSelected(null)}
         />
       )}
@@ -171,10 +164,12 @@ export default function LibraryPage() {
 
 function LibraryCard({
   item,
+  hasLocal,
   onOpen,
   onProjectClick,
 }: {
   item: LibraryItem;
+  hasLocal: boolean;
   onOpen: () => void;
   onProjectClick: (projectId: string) => void;
 }) {
@@ -232,6 +227,15 @@ function LibraryCard({
             {new Date(item.createdAt).toLocaleDateString()}
           </span>
           <span>{formatSize(item.fileSize)}</span>
+          <span
+            className={
+              hasLocal
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-zinc-400 dark:text-zinc-500'
+            }
+          >
+            {hasLocal ? '本机已存' : '未在本机'}
+          </span>
         </div>
 
         {/* Used-by chips (one chip per project the underlying file is used in) */}

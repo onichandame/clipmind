@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Film, X, CloudUpload, HardDrive, Cloud, AlertTriangle, Activity, CheckCircle2, AlertCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getAnalysisStage, type Asset } from "../lib/asset-types";
-import { useAssetUri, useDeviceId } from "../lib/asset-uri";
+import { useAssetUri, useLocalAsset } from "../lib/asset-uri";
 
 const BACKUP_LABEL: Record<string, { text: string; tone: string }> = {
   local_only: { text: '仅本地保存', tone: 'text-zinc-500 dark:text-zinc-400' },
@@ -14,12 +14,14 @@ const BACKUP_LABEL: Record<string, { text: string; tone: string }> = {
 };
 
 export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: () => void }) {
-  const deviceId = useDeviceId();
   const playable = useAssetUri(asset);
+  const { data: localAsset } = useLocalAsset(asset.mediaFileId);
   const queryClient = useQueryClient();
   const [backupStatus, setBackupStatus] = useState<string>(asset.backupStatus || 'local_only');
   const [busy, setBusy] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [relinking, setRelinking] = useState(false);
+  const [relinkError, setRelinkError] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -31,11 +33,12 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
     setVideoFailed(false);
   }, [playable.uri]);
 
-  const isLocalOrigin = !!asset.originDeviceId && asset.originDeviceId === deviceId;
+  const hasLocalCopy = !!localAsset;
   const statusMeta = BACKUP_LABEL[backupStatus] || BACKUP_LABEL.local_only;
 
   const handleBackup = async () => {
     if (busy) return;
+    if (!localAsset) return;
     setBusy(true);
     setBackupStatus('queued');
     try {
@@ -44,7 +47,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
       const { env } = await import('../env');
       await invoke('backup_video_to_cloud', {
         assetId: asset.id,
-        localPath: asset.localPath,
+        localPath: localAsset.localPath,
         filename: asset.filename,
         serverUrl: env.VITE_API_BASE_URL,
         sessionToken: getToken() || '',
@@ -59,22 +62,31 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
   };
 
   const handleRelink = async () => {
+    if (relinking) return;
+    setRelinkError(null);
     const { open } = await import('@tauri-apps/plugin-dialog');
     const picked = await open({ multiple: false, filters: [{ name: 'Videos', extensions: ['mp4', 'mov', 'MP4', 'MOV'] }] });
     if (!picked || Array.isArray(picked)) return;
+    setRelinking(true);
     try {
-      const { authFetch } = await import('../lib/auth');
-      const { env } = await import('../env');
-      await authFetch(`${env.VITE_API_BASE_URL}/api/assets/${asset.id}/relink`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ localPath: picked, originDeviceId: deviceId }),
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('local_assets_relink', {
+        mediaFileId: asset.mediaFileId,
+        expectedSha256: asset.sha256,
+        newPath: picked,
       });
       queryClient.invalidateQueries({ queryKey: ['library'] });
-      queryClient.invalidateQueries({ queryKey: ['assets-library'], exact: false });
-      onClose();
-    } catch (e) {
-      console.error('[Relink] failed:', e);
+      queryClient.invalidateQueries({ queryKey: ['local-assets'], exact: false });
+    } catch (e: any) {
+      const msg = typeof e === 'string' ? e : e?.message ?? String(e);
+      console.error('[Relink] failed:', msg);
+      setRelinkError(
+        msg.includes('hash_mismatch')
+          ? '所选文件与原片不匹配，请重新选择。'
+          : '重新定位失败，请稍后再试。',
+      );
+    } finally {
+      setRelinking(false);
     }
   };
 
@@ -117,16 +129,15 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 text-white text-sm font-medium gap-2 px-4 text-center">
                 <AlertTriangle className="w-6 h-6" />
                 <div>{videoFailed ? '本地文件无法播放' : '视频不在本机可用'}</div>
-                {asset.originDeviceId && (
-                  <div className="text-xs opacity-80">来源设备：{asset.originDeviceId.slice(0, 8)}…</div>
-                )}
-                {isLocalOrigin && (
-                  <button
-                    onClick={handleRelink}
-                    className="mt-2 px-3 py-1.5 bg-white text-zinc-900 rounded-md text-xs font-semibold hover:bg-zinc-100"
-                  >
-                    重新定位本地文件…
-                  </button>
+                <button
+                  onClick={handleRelink}
+                  disabled={relinking}
+                  className="mt-2 px-3 py-1.5 bg-white text-zinc-900 rounded-md text-xs font-semibold hover:bg-zinc-100 disabled:opacity-50"
+                >
+                  {relinking ? '校验中…' : '重新定位本地文件…'}
+                </button>
+                {relinkError && (
+                  <div className="text-[11px] text-rose-200">{relinkError}</div>
                 )}
               </div>
             </>
@@ -159,7 +170,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
             <span className={`text-xs font-medium ${statusMeta.tone}`}>{statusMeta.text}</span>
           </div>
 
-          {isLocalOrigin && asset.localPath && (backupStatus === 'local_only' || backupStatus === 'failed' || backupStatus === 'stale') && (
+          {hasLocalCopy && (backupStatus === 'local_only' || backupStatus === 'failed' || backupStatus === 'stale') && (
             <button
               onClick={handleBackup}
               disabled={busy}
@@ -175,10 +186,10 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
             {"　"}
             {new Date(asset.createdAt).toLocaleString()}
           </p>
-          {asset.localPath && (
+          {localAsset && (
             <p className="text-xs text-zinc-500 dark:text-zinc-400 break-all">
               <span className="font-medium text-zinc-700 dark:text-zinc-300">本地路径：</span>
-              {asset.localPath}
+              {localAsset.localPath}
             </p>
           )}
 

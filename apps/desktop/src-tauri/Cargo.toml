@@ -35,3 +35,4 @@ uuid = { version = "1.20.0", features = ["v4"] }
 sha2 = "0.10"
 tiny_http = "0.12"
 urlencoding = "2.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }

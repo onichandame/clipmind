@@ -4,6 +4,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::sqlite::SqlitePool;
 use std::collections::VecDeque;
 use std::fs;
 use std::time::{Duration, Instant};
@@ -14,10 +15,33 @@ use tokio::sync::Semaphore;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
 
+mod local_db;
 mod local_file_server;
 
 fn env_tag() -> String {
     format!("[{}/{}]", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+// Streaming SHA-256 of a file. Reused by import (preflight hash) and relink
+// (verifies a user-picked replacement actually matches the known media_file).
+async fn compute_sha256(path: &str) -> Result<String, String> {
+    use tokio::io::AsyncReadExt;
+    let mut hasher = Sha256::new();
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("{} 无法打开文件计算哈希 ({}): {}", env_tag(), path, e))?;
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("{} 读取文件哈希失败 ({}): {}", env_tag(), path, e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 // 生成/复用稳定的本机设备 UUID。写入 app_data_dir/device_id，跨重启稳定。
@@ -154,8 +178,6 @@ struct AssetCreatePayload {
     project_id: String,
     file_hash: String,
     filename: String,
-    local_path: String,
-    origin_device_id: String,
     file_size: u64,
     duration: Option<i32>,
     asr_status: Option<String>,
@@ -175,8 +197,6 @@ struct PreflightPayload<'a> {
     project_id: &'a str,
     file_hash: &'a str,
     filename: &'a str,
-    local_path: &'a str,
-    origin_device_id: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -184,7 +204,6 @@ struct PreflightPayload<'a> {
 struct PreflightResponse {
     dedup_hit: bool,
     asset_id: Option<String>,
-    #[allow(dead_code)]
     media_file_id: Option<String>,
     #[allow(dead_code)]
     already_processed: Option<bool>,
@@ -318,9 +337,10 @@ async fn upload_file_and_notify(
 //
 // Flow:
 //   0. SHA-256 哈希（在拿 CPU 信号量之前完成）
-//   0.5 POST /api/assets/preflight — 命中即直接挂一条 project_assets 然后返回
+//   0.5 POST /api/assets/preflight — 命中即记录本地路径到 SQLite 后返回
 //   1. FFmpeg 抽取音频 + 缩略图（视频原片不动）
-//   2. POST /api/assets 预登记资产行（携带 localPath / originDeviceId / fileSize / duration）
+//   2. POST /api/assets 预登记资产行（携带 fileSize / duration），返回 mediaFileId
+//      → 立刻 upsert (mediaFileId, localPath, fileSize, sha256) 到桌面端 SQLite
 //   3. 后台并发上传 audio (if any) + thumbnail（仅元数据轨上云，video 留在本地）
 // ===================================================================
 #[tauri::command]
@@ -339,35 +359,22 @@ async fn process_video_asset(
     }
 
     // Step 0: Compute SHA-256 of source file (before acquiring CPU semaphore)
-    let file_hash = {
-        let _ = app.emit("upload-progress", serde_json::json!({ "id": &job_id, "progress": 2 }));
-        let mut hasher = Sha256::new();
-        let mut file = tokio::fs::File::open(&local_path)
-            .await
-            .map_err(|e| format!("{} 无法打开源文件计算哈希: {}", env_tag(), e))?;
-        let mut buf = vec![0u8; 65536];
-        loop {
-            use tokio::io::AsyncReadExt;
-            let n = file.read(&mut buf).await
-                .map_err(|e| format!("{} 读取文件哈希失败: {}", env_tag(), e))?;
-            if n == 0 { break; }
-            hasher.update(&buf[..n]);
-        }
-        format!("{:x}", hasher.finalize())
-    };
+    let _ = app.emit("upload-progress", serde_json::json!({ "id": &job_id, "progress": 2 }));
+    let file_hash = compute_sha256(&local_path).await?;
+    let file_size_bytes = tokio::fs::metadata(&local_path)
+        .await
+        .map_err(|e| format!("{} 读取源文件大小失败: {}", env_tag(), e))?
+        .len();
 
     // Step 0.5: Preflight — short-circuit FFmpeg if the same hash already exists
     // for this user. On hit, the server creates the project_assets row and we
     // return immediately, skipping FFmpeg + audio/thumbnail uploads entirely.
-    let device_id = ensure_device_id(&app).map_err(|e| format!("[Job {}] {}", job_id, e))?;
     {
         let preflight_client = Client::new();
         let preflight_payload = PreflightPayload {
             project_id: &project_id,
             file_hash: &file_hash,
             filename: &filename,
-            local_path: &local_path,
-            origin_device_id: &device_id,
         };
         let preflight_res = preflight_client
             .post(format!("{}/api/assets/preflight", server_url))
@@ -393,6 +400,22 @@ async fn process_video_asset(
         if preflight_resp.dedup_hit {
             let asset_id = preflight_resp.asset_id.ok_or_else(||
                 format!("{} preflight 命中但缺少 assetId", env_tag()))?;
+            let media_file_id = preflight_resp.media_file_id.ok_or_else(||
+                format!("{} preflight 命中但缺少 mediaFileId", env_tag()))?;
+            // Bind this device's local copy to the deduped media_file. Backend
+            // doesn't carry per-device paths anymore; this is the source of truth.
+            let pool = app.state::<SqlitePool>();
+            if let Err(e) = local_db::upsert(
+                pool.inner(),
+                &media_file_id,
+                &local_path,
+                file_size_bytes as i64,
+                &file_hash,
+            )
+            .await
+            {
+                eprintln!("[local_db] dedup-hit upsert 失败: {}", e);
+            }
             let _ = app.emit(
                 "upload-progress",
                 serde_json::json!({ "id": &job_id, "progress": 100 }),
@@ -553,11 +576,6 @@ async fn process_video_asset(
     drop(_permit);
 
     // ===== 预登记资产行（preflight 已确认是新文件，这里只是创建 media_files + project_assets）=====
-    let video_size = tokio::fs::metadata(&local_path)
-        .await
-        .map_err(|e| format!("{} 读取原始视频元数据失败: {}", env_tag(), e))?
-        .len();
-
     let has_audio = matches!(
         tokio::fs::metadata(&temp_audio).await,
         Ok(m) if m.len() > 0
@@ -569,9 +587,7 @@ async fn process_video_asset(
         project_id: project_id.clone(),
         file_hash: file_hash.clone(),
         filename: filename.clone(),
-        local_path: local_path.clone(),
-        origin_device_id: device_id.clone(),
-        file_size: video_size,
+        file_size: file_size_bytes,
         duration: Some(extracted_duration as i32),
         asr_status: Some(asr_status_hint),
     };
@@ -596,6 +612,23 @@ async fn process_video_asset(
         .json()
         .await
         .map_err(|e| format!("{} 资产预登记响应解析失败: {}", env_tag(), e))?;
+
+    // Persist the local-path → media_file_id mapping. Backend no longer
+    // carries this; the local SQLite store is the source of truth.
+    {
+        let pool = app.state::<SqlitePool>();
+        if let Err(e) = local_db::upsert(
+            pool.inner(),
+            &create_resp.media_file_id,
+            &local_path,
+            file_size_bytes as i64,
+            &file_hash,
+        )
+        .await
+        {
+            eprintln!("[local_db] post-create upsert 失败: {}", e);
+        }
+    }
 
     // Race fallback: preflight missed, but a concurrent upload of the same hash
     // won the ER_DUP_ENTRY race and finished processing before we got here.
@@ -700,6 +733,81 @@ async fn process_video_asset(
     Ok(project_asset_id_for_return)
 }
 
+// ===================================================================
+// Local asset DB commands — per-device SQLite, keyed by media_file_id.
+//
+// Backend MySQL no longer carries (local_path, origin_device_id) because the
+// same media_file may live at different paths on each of a user's devices.
+// These commands are the only path the frontend uses to learn "is this asset
+// on my disk, and where?".
+// ===================================================================
+
+#[tauri::command]
+async fn local_assets_get(
+    pool: State<'_, SqlitePool>,
+    media_file_id: String,
+) -> Result<Option<local_db::LocalAsset>, String> {
+    local_db::get(pool.inner(), &media_file_id)
+        .await
+        .map_err(|e| format!("local_assets_get failed: {e}"))
+}
+
+#[tauri::command]
+async fn local_assets_get_many(
+    pool: State<'_, SqlitePool>,
+    media_file_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, local_db::LocalAsset>, String> {
+    local_db::get_many(pool.inner(), &media_file_ids)
+        .await
+        .map_err(|e| format!("local_assets_get_many failed: {e}"))
+}
+
+#[tauri::command]
+async fn local_assets_set(
+    pool: State<'_, SqlitePool>,
+    media_file_id: String,
+    local_path: String,
+    file_size: i64,
+    sha256: String,
+) -> Result<local_db::LocalAsset, String> {
+    local_db::upsert(pool.inner(), &media_file_id, &local_path, file_size, &sha256)
+        .await
+        .map_err(|e| format!("local_assets_set failed: {e}"))
+}
+
+#[tauri::command]
+async fn local_assets_delete(
+    pool: State<'_, SqlitePool>,
+    media_file_id: String,
+) -> Result<(), String> {
+    local_db::delete(pool.inner(), &media_file_id)
+        .await
+        .map_err(|e| format!("local_assets_delete failed: {e}"))
+}
+
+// Strict relink: the picked file must SHA-256 match the known media_file hash.
+// Stops users from accidentally binding a different file to a media_file row,
+// which would silently play wrong content under the same asset card.
+#[tauri::command]
+async fn local_assets_relink(
+    pool: State<'_, SqlitePool>,
+    media_file_id: String,
+    expected_sha256: String,
+    new_path: String,
+) -> Result<local_db::LocalAsset, String> {
+    let meta = tokio::fs::metadata(&new_path)
+        .await
+        .map_err(|e| format!("relink: 读取文件元数据失败: {e}"))?;
+    let size = meta.len() as i64;
+    let actual = compute_sha256(&new_path).await?;
+    if actual != expected_sha256 {
+        return Err("hash_mismatch: 选中的文件不是这个素材原片".to_string());
+    }
+    local_db::upsert(pool.inner(), &media_file_id, &new_path, size, &actual)
+        .await
+        .map_err(|e| format!("local_assets_relink upsert failed: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -710,6 +818,11 @@ pub fn run() {
             get_device_id,
             backup_video_to_cloud,
             get_local_file_server_info,
+            local_assets_get,
+            local_assets_get_many,
+            local_assets_set,
+            local_assets_delete,
+            local_assets_relink,
         ])
         .setup(|app| {
             // 启动即探测：将最优编码器与并发管理器挂载至全局
@@ -719,6 +832,21 @@ pub fn run() {
                 handle.manage(VideoEncoderState(encoder));
                 handle.manage(ProcessingManager::new());
             });
+
+            // Per-device asset metadata SQLite. Sits next to device_id under
+            // app_data_dir. Fail hard on init error: silent fallback would
+            // break local playback resolution.
+            let db_path = app
+                .path()
+                .app_data_dir()
+                .expect("无法定位 app data dir")
+                .join("local_assets.sqlite");
+            if let Some(parent) = db_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let pool = tauri::async_runtime::block_on(local_db::open_and_migrate(&db_path))
+                .expect("local SQLite init failed");
+            app.manage(pool);
 
             // Resolve the bundled ffmpeg sidecar path so the local file server
             // can spawn it for on-the-fly transcoding. Tauri places the sidecar
