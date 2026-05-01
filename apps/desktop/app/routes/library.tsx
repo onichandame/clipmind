@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Library, Film, Clock, Layers, Activity, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Library, Film, Layers, Activity, CheckCircle2, AlertCircle, Cloud } from 'lucide-react';
 import { env } from '../env';
 import { authFetch } from '../lib/auth';
 import { AssetDetailModal } from '../components/AssetDetailModal';
@@ -12,8 +12,6 @@ interface LibraryVariant {
   projectId: string;
   projectTitle: string;
   projectAssetId: string;
-  videoOssUrl: string | null;
-  backupStatus: Asset['backupStatus'];
 }
 
 interface LibraryItem {
@@ -22,6 +20,8 @@ interface LibraryItem {
   sha256: string;
   audioOssUrl: string | null;
   thumbnailUrl: string | null;
+  videoOssUrl: string | null;
+  backupStatus: NonNullable<Asset['backupStatus']>;
   fileSize: number;
   duration: number | null;
   status: Asset['status'];
@@ -50,16 +50,12 @@ function formatSize(bytes: number): string {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-// Pick the best playback source for a media_file:
-//   1. Local copy on this device (per-device SQLite has a row keyed by mediaFileId)
-//   2. Any backed-up cloud variant
-//   3. First variant (so we still surface the project list and a relink option)
+// Backup state and cloud URL are now per-content (on the LibraryItem), so we just
+// need a project_assets variant for the modal's "id" field. Pick the first one.
 function pickVariant(item: LibraryItem): LibraryVariant {
   if (item.variants.length === 0) {
     throw new Error('Library item with zero variants — server should never emit this');
   }
-  const backedUp = item.variants.find((v) => v.backupStatus === 'backed_up' && v.videoOssUrl);
-  if (backedUp) return backedUp;
   return item.variants[0];
 }
 
@@ -70,10 +66,10 @@ function libraryItemToAsset(item: LibraryItem): Asset {
     mediaFileId: item.mediaFileId,
     filename: item.filename,
     sha256: item.sha256,
-    backupStatus: variant.backupStatus,
+    backupStatus: item.backupStatus,
     audioOssUrl: item.audioOssUrl,
     thumbnailUrl: item.thumbnailUrl,
-    videoOssUrl: variant.videoOssUrl,
+    videoOssUrl: item.videoOssUrl,
     fileSize: item.fileSize,
     duration: item.duration ?? 0,
     status: item.status,
@@ -85,7 +81,12 @@ function libraryItemToAsset(item: LibraryItem): Asset {
 
 export default function LibraryPage() {
   const navigate = useNavigate();
-  const [selected, setSelected] = useState<LibraryItem | null>(null);
+  // Track the open modal by mediaFileId rather than holding a snapshot of the
+  // LibraryItem. After backup/unbackup invalidates ['library'], the refetched
+  // items array is fresh; deriving `selected` from items + id ensures the
+  // modal's asset prop (and thus button visibility) reflects the new state
+  // immediately. Snapshot would stay stale.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['library'],
@@ -97,6 +98,10 @@ export default function LibraryPage() {
   });
 
   const items = data ?? [];
+  const selected = useMemo(
+    () => (selectedId ? items.find((i) => i.mediaFileId === selectedId) ?? null : null),
+    [items, selectedId],
+  );
   const mediaFileIds = useMemo(() => items.map((i) => i.mediaFileId), [items]);
   // Page-level batch lookup: ask Rust once which of these media_files have a
   // local copy on this device. Card-level rendering uses this map to flag
@@ -144,7 +149,7 @@ export default function LibraryPage() {
                 key={item.mediaFileId}
                 item={item}
                 hasLocal={!!localMap?.[item.mediaFileId]}
-                onOpen={() => setSelected(item)}
+                onOpen={() => setSelectedId(item.mediaFileId)}
                 onProjectClick={(projectId) => navigate(`/projects/${projectId}`)}
               />
             ))}
@@ -155,7 +160,7 @@ export default function LibraryPage() {
       {selected && (
         <AssetDetailModal
           asset={libraryItemToAsset(selected)}
-          onClose={() => setSelected(null)}
+          onClose={() => setSelectedId(null)}
         />
       )}
     </div>
@@ -221,11 +226,7 @@ function LibraryCard({
         >
           {item.filename}
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
-          <span className="inline-flex items-center gap-1">
-            <Clock className="w-3 h-3" />
-            {new Date(item.createdAt).toLocaleDateString()}
-          </span>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500 dark:text-zinc-400">
           <span>{formatSize(item.fileSize)}</span>
           <span
             className={
@@ -236,6 +237,12 @@ function LibraryCard({
           >
             {hasLocal ? '本机已存' : '未在本机'}
           </span>
+          {item.backupStatus === 'backed_up' && (
+            <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400">
+              <Cloud className="w-3 h-3" />
+              已云端同步
+            </span>
+          )}
         </div>
 
         {/* Used-by chips (one chip per project the underlying file is used in) */}

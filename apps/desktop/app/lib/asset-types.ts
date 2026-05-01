@@ -5,7 +5,7 @@ export interface Asset {
   mediaFileId: string;      // media_files.id (also used to look up per-device local path in Rust SQLite)
   filename: string;
   sha256: string;           // mirror of media_files.fileHash; used for strict relink verification
-  backupStatus?: 'local_only' | 'queued' | 'uploading' | 'backed_up' | 'stale' | 'failed' | null;
+  backupStatus?: 'local_only' | 'uploading' | 'backed_up' | 'stale' | 'failed' | null;
   audioOssUrl?: string | null;
   thumbnailUrl?: string | null;
   videoOssUrl?: string | null;

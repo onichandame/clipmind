@@ -87,9 +87,15 @@ fn get_local_file_server_info() -> Result<LocalFileServerInfoFront, String> {
 }
 
 // 用户在 AssetDetailModal 主动开启云备份时触发：把本地原片走 video-backup 上传通道。
+//
+// 备份状态机（写入 media_files.backup_status，per-content）：
+//   local_only -> uploading (本函数开头 notify_backup_status)
+//   uploading  -> backed_up (oss-callback HMAC 路径 -- 唯一可信源)
+//   uploading  -> failed    (本函数末尾 notify_backup_status，PUT/callback 失败)
 #[tauri::command]
 async fn backup_video_to_cloud(
-    asset_id: String,
+    app: AppHandle,
+    media_file_id: String,
     local_path: String,
     filename: String,
     server_url: String,
@@ -99,16 +105,169 @@ async fn backup_video_to_cloud(
         return Err(format!("{} 缺少登录态，无法备份", env_tag()));
     }
     let client = Client::new();
-    upload_file_and_notify(
-        &client,
-        &server_url,
-        &session_token,
-        &asset_id,
-        "video-backup",
-        &local_path,
-        &filename,
+
+    // 1. 先把 uploading 持久化到服务端，让其它会话/设备立刻看到「正在备份」。
+    notify_backup_status(&client, &server_url, &session_token, &media_file_id, "uploading").await?;
+
+    // 2. 上传 + 回调（带进度事件）。
+    let upload_result = upload_file_and_notify_with_progress(
+        &app, &client, &server_url, &session_token,
+        &media_file_id, "video-backup", &local_path, &filename,
+    ).await;
+
+    // 3. 失败时回写 failed（best-effort，吞错以不掩盖原始错误）。成功时由 oss-callback 写 backed_up。
+    if upload_result.is_err() {
+        let _ = notify_backup_status(&client, &server_url, &session_token, &media_file_id, "failed").await;
+    }
+    upload_result
+}
+
+async fn notify_backup_status(
+    client: &Client,
+    server_url: &str,
+    session_token: &str,
+    media_file_id: &str,
+    status: &str,
+) -> Result<(), String> {
+    let res = client
+        .post(format!("{}/api/assets/{}/backup-status", server_url, media_file_id))
+        .bearer_auth(session_token)
+        .json(&serde_json::json!({ "status": status }))
+        .send()
+        .await
+        .map_err(|e| format!("{} backup-status 网络错误: {}", env_tag(), e))?;
+    if !res.status().is_success() {
+        let s = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!("{} backup-status 拒绝: {} {}", env_tag(), s, body));
+    }
+    Ok(())
+}
+
+// 用户在 AssetDetailModal 主动从云端拉回原片到本机时触发。流式下载 + 边写边算 SHA-256，
+// 哈希不匹配则丢弃临时文件；命中后原子重命名 + 写入桌面端 SQLite，让 useLocalAsset 立刻看到。
+//
+// 目标路径：app_data_dir/{userId}/assets/{mediaFileId}.{ext}
+//
+// 进度事件：emit("download-progress", { mediaFileId, sent, total })，节流 ≥500ms。
+#[tauri::command]
+async fn download_asset_to_local(
+    app: AppHandle,
+    pool: State<'_, SqlitePool>,
+    media_file_id: String,
+    user_id: String,
+    download_url: String,
+    filename: String,
+    expected_sha256: String,
+    expected_size: i64,
+) -> Result<local_db::LocalAsset, String> {
+    use tokio::io::AsyncWriteExt;
+
+    if user_id.trim().is_empty() {
+        return Err(format!("{} 缺少登录态，无法下载", env_tag()));
+    }
+
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位 app data dir: {}", e))?;
+    let asset_dir = app_data.join(&user_id).join("assets");
+    tokio::fs::create_dir_all(&asset_dir)
+        .await
+        .map_err(|e| format!("创建 assets 目录失败: {}", e))?;
+
+    let ext = filename
+        .rsplit('.')
+        .next()
+        .filter(|s| !s.is_empty() && s.len() <= 8)
+        .unwrap_or("mp4");
+    let target = asset_dir.join(format!("{}.{}", media_file_id, ext));
+    let tmp = asset_dir.join(format!("{}.{}.partial", media_file_id, ext));
+
+    let client = Client::new();
+    let mut res = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| format!("{} 下载请求失败: {}", env_tag(), e))?;
+    if !res.status().is_success() {
+        return Err(format!("{} 下载被拒绝: {}", env_tag(), res.status()));
+    }
+    let total = res.content_length().unwrap_or(expected_size.max(0) as u64);
+
+    let mut file = tokio::fs::File::create(&tmp)
+        .await
+        .map_err(|e| format!("无法创建临时文件: {}", e))?;
+    let mut hasher = Sha256::new();
+    let mut sent: u64 = 0;
+    let mut last_emit = Instant::now();
+
+    loop {
+        let chunk_opt = res
+            .chunk()
+            .await
+            .map_err(|e| format!("{} 下载流错误: {}", env_tag(), e))?;
+        let Some(chunk) = chunk_opt else { break };
+        if let Err(e) = file.write_all(&chunk).await {
+            // best-effort cleanup on write failure
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(format!("写入文件失败: {}", e));
+        }
+        hasher.update(&chunk);
+        sent += chunk.len() as u64;
+        let done = total > 0 && sent >= total;
+        if last_emit.elapsed().as_millis() >= 500 || done {
+            let _ = app.emit(
+                "download-progress",
+                serde_json::json!({
+                    "mediaFileId": &media_file_id,
+                    "sent": sent,
+                    "total": total,
+                }),
+            );
+            last_emit = Instant::now();
+        }
+    }
+    if let Err(e) = file.flush().await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("刷新文件失败: {}", e));
+    }
+    drop(file);
+
+    // 内容校验：服务端给的 sha256 是 media_files.fileHash，下载内容必须严格一致。
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected_sha256 {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!(
+            "hash_mismatch: 下载内容与服务端不一致 (expected {} got {})",
+            expected_sha256, actual
+        ));
+    }
+
+    let actual_size = tokio::fs::metadata(&tmp)
+        .await
+        .map_err(|e| format!("读取下载文件大小失败: {}", e))?
+        .len();
+
+    // 已存在 target 时直接覆盖（rename 在 Linux/macOS 是 atomic replace；Windows 需 remove）
+    #[cfg(windows)]
+    {
+        let _ = tokio::fs::remove_file(&target).await;
+    }
+    tokio::fs::rename(&tmp, &target)
+        .await
+        .map_err(|e| format!("移动文件失败: {}", e))?;
+
+    let target_str = target.to_string_lossy().to_string();
+    local_db::upsert(
+        pool.inner(),
+        &media_file_id,
+        &target_str,
+        actual_size as i64,
+        &expected_sha256,
     )
     .await
+    .map_err(|e| format!("写入本地资产记录失败: {}", e))
 }
 
 pub async fn detect_best_video_encoder(app: &tauri::AppHandle) -> String {
@@ -220,13 +379,21 @@ struct UploadTokenRequest<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadTokenResponse {
-    upload_url: String,
+    /// True only for kind=video-backup when another user already has the same
+    /// SHA-256 backed up. Server has already flipped this user's media_files
+    /// row to backed_up; Rust skips the PUT and the oss-callback entirely.
+    #[serde(default)]
+    already_uploaded: bool,
+    /// Present when already_uploaded == false.
+    upload_url: Option<String>,
     /// Server returns this for client-side reference; Rust no longer needs it
     /// (the callback now reads objectKey from the HMAC-verified payload).
     #[allow(dead_code)]
     object_key: String,
-    content_type: String,
-    callback_token: String,
+    /// Present when already_uploaded == false.
+    content_type: Option<String>,
+    /// Present when already_uploaded == false.
+    callback_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -285,12 +452,24 @@ async fn upload_file_and_notify(
         .await
         .map_err(|e| format!("{} upload-token 响应解析失败 ({}): {}", env_tag(), kind, e))?;
 
+    // alreadyUploaded only fires for kind=video-backup; audio/thumbnail always
+    // get a real upload URL. Defensive unwraps below match the server contract.
+    let upload_url = token_res.upload_url.ok_or_else(|| {
+        format!("{} upload-token 缺少 uploadUrl ({})", env_tag(), kind)
+    })?;
+    let content_type = token_res.content_type.ok_or_else(|| {
+        format!("{} upload-token 缺少 contentType ({})", env_tag(), kind)
+    })?;
+    let callback_token = token_res.callback_token.ok_or_else(|| {
+        format!("{} upload-token 缺少 callbackToken ({})", env_tag(), kind)
+    })?;
+
     let stream = FramedRead::new(file, BytesCodec::new());
     let body = reqwest::Body::wrap_stream(stream);
     let put_res = client
-        .put(&token_res.upload_url)
+        .put(&upload_url)
         .header(CONTENT_LENGTH, size)
-        .header(CONTENT_TYPE, &token_res.content_type)
+        .header(CONTENT_TYPE, &content_type)
         .body(body)
         .send()
         .await
@@ -308,7 +487,155 @@ async fn upload_file_and_notify(
     }
 
     let cb_payload = OssCallbackPayload {
-        callback_token: &token_res.callback_token,
+        callback_token: &callback_token,
+    };
+    let cb_res = client
+        .post(format!("{}/api/oss-callback", server_url))
+        .bearer_auth(session_token)
+        .json(&cb_payload)
+        .send()
+        .await
+        .map_err(|e| format!("{} oss-callback 请求失败 ({}): {}", env_tag(), kind, e))?;
+    if !cb_res.status().is_success() {
+        let status = cb_res.status();
+        let err_text = cb_res.text().await.unwrap_or_default();
+        return Err(format!(
+            "{} oss-callback 拒绝 ({}): {} {}",
+            env_tag(),
+            kind,
+            status,
+            err_text
+        ));
+    }
+
+    Ok(())
+}
+
+// 视频原片上传专用变体：在 PUT body 上挂一层进度计数器，每 ≥500ms 通过 Tauri event
+// 把字节数发给前端做进度条。audio/thumbnail 不需要这条路径（小文件、不在 UI 主轴）。
+async fn upload_file_and_notify_with_progress(
+    app: &AppHandle,
+    client: &Client,
+    server_url: &str,
+    session_token: &str,
+    media_file_id: &str,
+    kind: &str,
+    file_path: &str,
+    filename_for_token: &str,
+) -> Result<(), String> {
+    use futures_util::StreamExt;
+
+    let file = tokio::fs::File::open(file_path)
+        .await
+        .map_err(|e| format!("{} 无法打开 {} ({}): {}", env_tag(), kind, file_path, e))?;
+    let size = file
+        .metadata()
+        .await
+        .map_err(|e| format!("{} 读取 {} 元数据失败: {}", env_tag(), kind, e))?
+        .len();
+
+    let token_req = UploadTokenRequest {
+        kind,
+        asset_id: media_file_id,
+        filename: filename_for_token,
+    };
+    let token_res = client
+        .post(format!("{}/api/upload-token", server_url))
+        .bearer_auth(session_token)
+        .json(&token_req)
+        .send()
+        .await
+        .map_err(|e| format!("{} upload-token 请求失败 ({}): {}", env_tag(), kind, e))?;
+    if !token_res.status().is_success() {
+        let status = token_res.status();
+        let err_text = token_res.text().await.unwrap_or_default();
+        return Err(format!(
+            "{} upload-token 拒绝 ({}): {} {}",
+            env_tag(),
+            kind,
+            status,
+            err_text
+        ));
+    }
+    let token_res: UploadTokenResponse = token_res
+        .json()
+        .await
+        .map_err(|e| format!("{} upload-token 响应解析失败 ({}): {}", env_tag(), kind, e))?;
+
+    // Cross-user dedup short-circuit: another user already uploaded this
+    // SHA-256 to OSS. The server has flipped this user's media_files row to
+    // backed_up directly. We don't PUT, don't fire the HMAC callback. Emit
+    // one final 100% progress so the UI's progress bar finishes cleanly.
+    if token_res.already_uploaded {
+        let _ = app.emit(
+            "backup-progress",
+            serde_json::json!({
+                "mediaFileId": media_file_id,
+                "sent": size,
+                "total": size,
+            }),
+        );
+        return Ok(());
+    }
+
+    let upload_url = token_res.upload_url.ok_or_else(|| {
+        format!("{} upload-token 缺少 uploadUrl ({})", env_tag(), kind)
+    })?;
+    let content_type = token_res.content_type.ok_or_else(|| {
+        format!("{} upload-token 缺少 contentType ({})", env_tag(), kind)
+    })?;
+    let callback_token = token_res.callback_token.ok_or_else(|| {
+        format!("{} upload-token 缺少 callbackToken ({})", env_tag(), kind)
+    })?;
+
+    // Wrap FramedRead so each chunk increments a counter; throttle emit to ≥500ms,
+    // plus one final 100% emit when the stream finishes.
+    let app_handle = app.clone();
+    let asset_id_owned = media_file_id.to_string();
+    let mut sent: u64 = 0;
+    let mut last_emit = Instant::now();
+    let stream = FramedRead::new(file, BytesCodec::new()).map(move |chunk| {
+        if let Ok(ref bytes) = chunk {
+            sent += bytes.len() as u64;
+            let done = sent >= size;
+            if last_emit.elapsed().as_millis() >= 500 || done {
+                let _ = app_handle.emit(
+                    "backup-progress",
+                    serde_json::json!({
+                        "mediaFileId": &asset_id_owned,
+                        "sent": sent,
+                        "total": size,
+                    }),
+                );
+                last_emit = Instant::now();
+            }
+        }
+        chunk
+    });
+    let body = reqwest::Body::wrap_stream(stream);
+
+    let put_res = client
+        .put(&upload_url)
+        .header(CONTENT_LENGTH, size)
+        .header(CONTENT_TYPE, &content_type)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("{} {} 直传网络错误: {}", env_tag(), kind, e))?;
+    if !put_res.status().is_success() {
+        let status = put_res.status();
+        let err_text = put_res.text().await.unwrap_or_default();
+        return Err(format!(
+            "{} {} 直传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
+            env_tag(),
+            kind,
+            status,
+            err_text
+        ));
+    }
+
+    let cb_payload = OssCallbackPayload {
+        callback_token: &callback_token,
     };
     let cb_res = client
         .post(format!("{}/api/oss-callback", server_url))
@@ -817,6 +1144,7 @@ pub fn run() {
             process_video_asset,
             get_device_id,
             backup_video_to_cloud,
+            download_asset_to_local,
             get_local_file_server_info,
             local_assets_get,
             local_assets_get_many,
