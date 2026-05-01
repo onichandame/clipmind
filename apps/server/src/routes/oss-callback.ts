@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { mediaFiles, projectAssets, webhookNonces } from "@clipmind/db";
+import { mediaFiles, webhookNonces } from "@clipmind/db";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db";
 import { verifyWebhookPayload } from "../utils/auth";
@@ -48,9 +48,8 @@ app.post("/", async (c) => {
       throw e;
     }
 
-    // assetId meaning differs by kind:
-    //   audio/thumbnail → media_files.id
-    //   video-backup    → project_assets.id
+    // All kinds (audio / thumbnail / video-backup) are keyed by media_files.id —
+    // backup state is per-content, shared across all project_assets that point at this file.
     if (kind === 'audio') {
       await db
         .update(mediaFiles)
@@ -71,9 +70,9 @@ app.post("/", async (c) => {
         .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, userId)));
     } else if (kind === 'video-backup') {
       await db
-        .update(projectAssets)
+        .update(mediaFiles)
         .set({ videoOssKey: objectKey, backupStatus: 'backed_up' })
-        .where(and(eq(projectAssets.id, assetId), eq(projectAssets.userId, userId)));
+        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, userId)));
     }
 
     return c.json({ success: true });

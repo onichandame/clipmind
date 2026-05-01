@@ -53,6 +53,10 @@ export const mediaFiles = mysqlTable('media_files', {
   fileHash: varchar('file_hash', { length: 64 }).notNull(), // SHA-256 hex of original video
   audioOssKey: varchar('audio_oss_key', { length: 1024 }), // 音频强制上云用于 ASR
   thumbnailOssKey: varchar('thumbnail_oss_key', { length: 1024 }), // 缩略图强制上云用于跨设备
+  // 视频原片云备份：按 SHA-256 去重，per-content 一份。多个 project_assets 共享。
+  videoOssKey: varchar('video_oss_key', { length: 1024 }),
+  // 云备份生命周期：local_only | uploading | backed_up | failed (stale 当前未触发)
+  backupStatus: varchar('backup_status', { length: 20 }).default('local_only').notNull(),
   fileSize: int('file_size').notNull(),
   duration: int('duration'),
   status: varchar('status', { length: 20 }).default('processing'), // processing | ready | error
@@ -80,10 +84,7 @@ export const projectAssets = mysqlTable('project_assets', {
     .references(() => mediaFiles.id, { onDelete: 'cascade' }),
   filename: varchar('filename', { length: 255 }).notNull(),
   // 注意：localPath / originDeviceId 已迁移至桌面端 SQLite (apps/desktop/src-tauri/src/local_db.rs)。
-  // 同一用户的同一份 media_file 可能在不同设备上保存于不同路径，BE 不再作为这类信息的权威源。
-  videoOssKey: varchar('video_oss_key', { length: 1024 }), // 仅在用户开启云备份时填充
-  // 云备份生命周期：local_only | queued | uploading | backed_up | stale | failed
-  backupStatus: varchar('backup_status', { length: 20 }).default('local_only').notNull(),
+  // 视频备份 (videoOssKey / backupStatus) 已上提至 media_files —— per-content 一份，跨项目共享。
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
   projectIdx: index('idx_project_assets_project').on(t.projectId),

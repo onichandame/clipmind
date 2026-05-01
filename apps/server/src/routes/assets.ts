@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { mediaFiles, projectAssets, projects } from "@clipmind/db";
 import { desc, eq, and, inArray } from "drizzle-orm";
 import { db } from "../db";
@@ -26,10 +27,8 @@ app.get("/library", async (c) => {
         projectId: projectAssets.projectId,
         projectTitle: projects.title,
         filename: projectAssets.filename,
-        videoOssKey: projectAssets.videoOssKey,
-        backupStatus: projectAssets.backupStatus,
         paCreatedAt: projectAssets.createdAt,
-        // media_files fields (canonical)
+        // media_files fields (canonical, per-content)
         mediaFileId: mediaFiles.id,
         fileHash: mediaFiles.fileHash,
         fileSize: mediaFiles.fileSize,
@@ -39,6 +38,8 @@ app.get("/library", async (c) => {
         summary: mediaFiles.summary,
         audioOssKey: mediaFiles.audioOssKey,
         thumbnailOssKey: mediaFiles.thumbnailOssKey,
+        videoOssKey: mediaFiles.videoOssKey,
+        backupStatus: mediaFiles.backupStatus,
         createdAt: mediaFiles.createdAt,
       })
       .from(projectAssets)
@@ -48,18 +49,12 @@ app.get("/library", async (c) => {
       .orderBy(desc(mediaFiles.createdAt));
 
     // Each media_file may have multiple project_asset variants (one per project
-    // it was imported into). We send ALL variants so the client can show "used by
-    // these projects" + pick a backed-up variant for cloud playback. Whether a
-    // local copy exists is a per-device question answered by the desktop's
-    // SQLite store, so the client cross-references group.mediaFileId itself.
-    // group.sha256 is exposed so the strict relink path can verify the picked
-    // file actually matches the original media_file's hash.
+    // it was imported into). Backup state lives on media_files (per-content,
+    // shared across projects); variants only carry per-project identity.
     type Variant = {
       projectId: string;
       projectTitle: string;
       projectAssetId: string;
-      videoOssUrl: string | null;
-      backupStatus: string | null;
     };
     type MediaGroup = {
       mediaFileId: string;
@@ -67,6 +62,8 @@ app.get("/library", async (c) => {
       sha256: string;
       audioOssUrl: string | null;
       thumbnailUrl: string | null;
+      videoOssUrl: string | null;
+      backupStatus: string;
       fileSize: number;
       duration: number | null;
       status: string;
@@ -86,6 +83,8 @@ app.get("/library", async (c) => {
           sha256: r.fileHash,
           audioOssUrl: r.audioOssKey ? signAssetViewUrl(r.audioOssKey) : null,
           thumbnailUrl: r.thumbnailOssKey ? signAssetViewUrl(r.thumbnailOssKey) : null,
+          videoOssUrl: r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
+          backupStatus: r.backupStatus ?? 'local_only',
           fileSize: r.fileSize,
           duration: r.duration ?? null,
           status: r.status ?? 'processing',
@@ -100,8 +99,6 @@ app.get("/library", async (c) => {
         projectId: r.projectId,
         projectTitle: r.projectTitle,
         projectAssetId: r.projectAssetId,
-        videoOssUrl: r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
-        backupStatus: r.backupStatus ?? null,
       });
     }
 
@@ -126,10 +123,8 @@ app.get("/", async (c) => {
         mediaFileId: projectAssets.mediaFileId,
         projectId: projectAssets.projectId,
         filename: projectAssets.filename,
-        videoOssKey: projectAssets.videoOssKey,
-        backupStatus: projectAssets.backupStatus,
         createdAt: projectAssets.createdAt,
-        // from media_files
+        // from media_files (canonical per-content state)
         sha256: mediaFiles.fileHash,
         fileSize: mediaFiles.fileSize,
         duration: mediaFiles.duration,
@@ -138,6 +133,8 @@ app.get("/", async (c) => {
         summary: mediaFiles.summary,
         audioOssKey: mediaFiles.audioOssKey,
         thumbnailOssKey: mediaFiles.thumbnailOssKey,
+        videoOssKey: mediaFiles.videoOssKey,
+        backupStatus: mediaFiles.backupStatus,
       })
       .from(projectAssets)
       .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
@@ -189,7 +186,6 @@ app.post("/preflight", async (c) => {
       userId: user.id,
       mediaFileId: existing.id,
       filename,
-      backupStatus: 'local_only',
     });
 
     const alreadyProcessed = existing.status === 'ready'
@@ -268,7 +264,6 @@ app.post("/", async (c) => {
       userId: user.id,
       mediaFileId,
       filename,
-      backupStatus: 'local_only',
     });
 
     return c.json({ assetId: projectAssetId, mediaFileId, alreadyProcessed });
@@ -333,6 +328,35 @@ app.delete("/:id", async (c) => {
     console.error('❌ 删除资产失败:', error);
     return c.json({ error: 'Database Delete Error' }, 500);
   }
+});
+
+// POST /api/assets/:mediaFileId/backup-status — Rust 在 PUT 之前/失败时上报。
+// 仅允许 uploading / failed —— backed_up 唯一写入路径是 HMAC-verified oss-callback，
+// 防客户端伪造已备份。
+const backupStatusSchema = z.object({
+  status: z.enum(['uploading', 'failed']),
+});
+
+app.post('/:mediaFileId/backup-status', async (c) => {
+  const user = c.get('user');
+  const mediaFileId = c.req.param('mediaFileId');
+  const body = await c.req.json().catch(() => null);
+  const parsed = backupStatusSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'Invalid', issues: parsed.error.issues }, 400);
+  }
+
+  const result = await db
+    .update(mediaFiles)
+    .set({ backupStatus: parsed.data.status })
+    .where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.userId, user.id)));
+
+  // mysql2 returns [ResultSetHeader, undefined]; affectedRows surfaces on header
+  const affected = (result as any)?.[0]?.affectedRows ?? 0;
+  if (affected === 0) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+  return c.json({ success: true });
 });
 
 export default app;

@@ -293,14 +293,15 @@ app.get('/:id', async (c) => {
 
         // 本地优先：从 assets 表反查归属信息。仅在 videoOssKey 存在（已云备份）时签发 download URL；
         // 否则前端通过 useAssetUri(assetId) 走本地 asset:// 协议解析。
+        // 注意：videoOssKey / backupStatus 已上提至 media_files（per-content）。
         if (clip.assetId) {
           try {
             const [paRecord] = await db
               .select({
-                videoOssKey: projectAssets.videoOssKey,
                 filename: projectAssets.filename,
-                backupStatus: projectAssets.backupStatus,
                 mediaFileId: projectAssets.mediaFileId,
+                videoOssKey: mediaFiles.videoOssKey,
+                backupStatus: mediaFiles.backupStatus,
                 sha256: mediaFiles.fileHash,
                 thumbnailOssKey: mediaFiles.thumbnailOssKey,
               })
@@ -340,9 +341,9 @@ app.get('/:id', async (c) => {
           .select({
             id: projectAssets.id,
             filename: projectAssets.filename,
-            videoOssKey: projectAssets.videoOssKey,
-            backupStatus: projectAssets.backupStatus,
             mediaFileId: projectAssets.mediaFileId,
+            videoOssKey: mediaFiles.videoOssKey,
+            backupStatus: mediaFiles.backupStatus,
             sha256: mediaFiles.fileHash,
             thumbnailOssKey: mediaFiles.thumbnailOssKey,
           })
