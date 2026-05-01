@@ -26,13 +26,12 @@ app.get("/library", async (c) => {
         projectId: projectAssets.projectId,
         projectTitle: projects.title,
         filename: projectAssets.filename,
-        localPath: projectAssets.localPath,
-        originDeviceId: projectAssets.originDeviceId,
         videoOssKey: projectAssets.videoOssKey,
         backupStatus: projectAssets.backupStatus,
         paCreatedAt: projectAssets.createdAt,
         // media_files fields (canonical)
         mediaFileId: mediaFiles.id,
+        fileHash: mediaFiles.fileHash,
         fileSize: mediaFiles.fileSize,
         duration: mediaFiles.duration,
         status: mediaFiles.status,
@@ -49,21 +48,23 @@ app.get("/library", async (c) => {
       .orderBy(desc(mediaFiles.createdAt));
 
     // Each media_file may have multiple project_asset variants (one per project
-    // it was imported into, possibly from different devices). We send ALL
-    // variants so the client can pick the one matching the current device for
-    // local playback, or any backed-up variant for cloud playback.
+    // it was imported into). We send ALL variants so the client can show "used by
+    // these projects" + pick a backed-up variant for cloud playback. Whether a
+    // local copy exists is a per-device question answered by the desktop's
+    // SQLite store, so the client cross-references group.mediaFileId itself.
+    // group.sha256 is exposed so the strict relink path can verify the picked
+    // file actually matches the original media_file's hash.
     type Variant = {
       projectId: string;
       projectTitle: string;
       projectAssetId: string;
-      localPath: string | null;
-      originDeviceId: string | null;
       videoOssUrl: string | null;
       backupStatus: string | null;
     };
     type MediaGroup = {
       mediaFileId: string;
       filename: string;
+      sha256: string;
       audioOssUrl: string | null;
       thumbnailUrl: string | null;
       fileSize: number;
@@ -82,6 +83,7 @@ app.get("/library", async (c) => {
         g = {
           mediaFileId: r.mediaFileId,
           filename: r.filename,
+          sha256: r.fileHash,
           audioOssUrl: r.audioOssKey ? signAssetViewUrl(r.audioOssKey) : null,
           thumbnailUrl: r.thumbnailOssKey ? signAssetViewUrl(r.thumbnailOssKey) : null,
           fileSize: r.fileSize,
@@ -98,8 +100,6 @@ app.get("/library", async (c) => {
         projectId: r.projectId,
         projectTitle: r.projectTitle,
         projectAssetId: r.projectAssetId,
-        localPath: r.localPath ?? null,
-        originDeviceId: r.originDeviceId ?? null,
         videoOssUrl: r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
         backupStatus: r.backupStatus ?? null,
       });
@@ -126,12 +126,11 @@ app.get("/", async (c) => {
         mediaFileId: projectAssets.mediaFileId,
         projectId: projectAssets.projectId,
         filename: projectAssets.filename,
-        localPath: projectAssets.localPath,
-        originDeviceId: projectAssets.originDeviceId,
         videoOssKey: projectAssets.videoOssKey,
         backupStatus: projectAssets.backupStatus,
         createdAt: projectAssets.createdAt,
         // from media_files
+        sha256: mediaFiles.fileHash,
         fileSize: mediaFiles.fileSize,
         duration: mediaFiles.duration,
         status: mediaFiles.status,
@@ -168,9 +167,9 @@ app.post("/preflight", async (c) => {
   const user = c.get('user');
   try {
     const body = await c.req.json();
-    const { projectId, fileHash, filename, localPath, originDeviceId } = body || {};
-    if (!projectId || !fileHash || !filename || !localPath || !originDeviceId) {
-      return c.json({ error: 'projectId, fileHash, filename, localPath, originDeviceId required' }, 400);
+    const { projectId, fileHash, filename } = body || {};
+    if (!projectId || !fileHash || !filename) {
+      return c.json({ error: 'projectId, fileHash, filename required' }, 400);
     }
 
     const [existing] = await db
@@ -190,8 +189,6 @@ app.post("/preflight", async (c) => {
       userId: user.id,
       mediaFileId: existing.id,
       filename,
-      localPath,
-      originDeviceId,
       backupStatus: 'local_only',
     });
 
@@ -210,10 +207,10 @@ app.post("/", async (c) => {
   const user = c.get('user');
   try {
     const body = await c.req.json();
-    const { projectId, fileHash, filename, localPath, originDeviceId, fileSize, duration, asrStatus } = body || {};
+    const { projectId, fileHash, filename, fileSize, duration, asrStatus } = body || {};
 
-    if (!projectId || !fileHash || !filename || !localPath || !originDeviceId || typeof fileSize !== 'number') {
-      return c.json({ error: 'projectId, fileHash, filename, localPath, originDeviceId, fileSize required' }, 400);
+    if (!projectId || !fileHash || !filename || typeof fileSize !== 'number') {
+      return c.json({ error: 'projectId, fileHash, filename, fileSize required' }, 400);
     }
 
     const allowedAsr = new Set(['pending', 'skipped']);
@@ -271,8 +268,6 @@ app.post("/", async (c) => {
       userId: user.id,
       mediaFileId,
       filename,
-      localPath,
-      originDeviceId,
       backupStatus: 'local_only',
     });
 
@@ -283,27 +278,10 @@ app.post("/", async (c) => {
   }
 });
 
-// POST /api/assets/:id/relink — update local path on project_assets
-app.post('/:id/relink', async (c) => {
-  const user = c.get('user');
-  const id = c.req.param('id');
-  const body = await c.req.json().catch(() => ({}));
-  const localPath = typeof body?.localPath === 'string' ? body.localPath : null;
-  const originDeviceId = typeof body?.originDeviceId === 'string' ? body.originDeviceId : null;
-  if (!localPath || !originDeviceId) {
-    return c.json({ error: 'localPath and originDeviceId required' }, 400);
-  }
-  try {
-    await db
-      .update(projectAssets)
-      .set({ localPath, originDeviceId })
-      .where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('❌ relink 失败:', error);
-    return c.json({ error: 'Database Error' }, 500);
-  }
-});
+// Note: the legacy `POST /api/assets/:id/relink` endpoint has been removed.
+// Per-device path bindings now live in the desktop SQLite store
+// (apps/desktop/src-tauri/src/local_db.rs); the desktop calls
+// `local_assets_relink` directly via Tauri IPC.
 
 // DELETE /api/assets/:id — delete project_asset; clean up media_file if last reference for this user
 app.delete("/:id", async (c) => {

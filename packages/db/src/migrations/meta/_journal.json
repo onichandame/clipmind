@@ -50,6 +50,13 @@
       "when": 1778040000000,
       "tag": "0006_exotic_kat_farrell",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1778126400000,
+      "tag": "0007_keen_ghost_rider",
+      "breakpoints": true
     }
   ]
 }

@@ -79,9 +79,8 @@ export const projectAssets = mysqlTable('project_assets', {
     .notNull()
     .references(() => mediaFiles.id, { onDelete: 'cascade' }),
   filename: varchar('filename', { length: 255 }).notNull(),
-  // 本地优先：原片默认留在导入设备上
-  localPath: varchar('local_path', { length: 1024 }),
-  originDeviceId: varchar('origin_device_id', { length: 64 }),
+  // 注意：localPath / originDeviceId 已迁移至桌面端 SQLite (apps/desktop/src-tauri/src/local_db.rs)。
+  // 同一用户的同一份 media_file 可能在不同设备上保存于不同路径，BE 不再作为这类信息的权威源。
   videoOssKey: varchar('video_oss_key', { length: 1024 }), // 仅在用户开启云备份时填充
   // 云备份生命周期：local_only | queued | uploading | backed_up | stale | failed
   backupStatus: varchar('backup_status', { length: 20 }).default('local_only').notNull(),

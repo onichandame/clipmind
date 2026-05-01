@@ -300,7 +300,8 @@ app.get('/:id', async (c) => {
                 videoOssKey: projectAssets.videoOssKey,
                 filename: projectAssets.filename,
                 backupStatus: projectAssets.backupStatus,
-                originDeviceId: projectAssets.originDeviceId,
+                mediaFileId: projectAssets.mediaFileId,
+                sha256: mediaFiles.fileHash,
                 thumbnailOssKey: mediaFiles.thumbnailOssKey,
               })
               .from(projectAssets)
@@ -310,7 +311,8 @@ app.get('/:id', async (c) => {
             if (paRecord) {
               clip.filename = paRecord.filename;
               clip.backupStatus = paRecord.backupStatus;
-              clip.originDeviceId = paRecord.originDeviceId;
+              clip.mediaFileId = paRecord.mediaFileId;
+              clip.sha256 = paRecord.sha256;
               clip.thumbnailUrl = signAssetViewUrl(paRecord.thumbnailOssKey);
               if (paRecord.videoOssKey) {
                 clip.videoUrl = signAssetDownloadUrl(paRecord.videoOssKey, paRecord.filename);
@@ -323,8 +325,9 @@ app.get('/:id', async (c) => {
       }
     }
 
-    // [Arch] JIT 元数据补齐 editing plan clips：批量写入 backupStatus/originDeviceId/filename，
-    // 仅在已云备份时附带可签发的 videoUrl，本地优先方案由前端通过 useAssetUri 解析。
+    // [Arch] JIT 元数据补齐 editing plan clips：批量写入 backupStatus/mediaFileId/sha256/filename，
+    // 仅在已云备份时附带可签发的 videoUrl，本地优先方案由前端通过 useAssetUri 解析
+    // (前端用 mediaFileId 反查桌面端 SQLite 里的 local_path)。
     if (projectData.editingPlans && Array.isArray(projectData.editingPlans)) {
       for (const plan of projectData.editingPlans) {
         if (!plan.clips || !Array.isArray(plan.clips)) continue;
@@ -339,7 +342,8 @@ app.get('/:id', async (c) => {
             filename: projectAssets.filename,
             videoOssKey: projectAssets.videoOssKey,
             backupStatus: projectAssets.backupStatus,
-            originDeviceId: projectAssets.originDeviceId,
+            mediaFileId: projectAssets.mediaFileId,
+            sha256: mediaFiles.fileHash,
             thumbnailOssKey: mediaFiles.thumbnailOssKey,
           })
           .from(projectAssets)
@@ -355,7 +359,8 @@ app.get('/:id', async (c) => {
           clip.fileName = asset.filename;
           clip.thumbnailUrl = signAssetViewUrl(asset.thumbnailOssKey);
           clip.backupStatus = asset.backupStatus;
-          clip.originDeviceId = asset.originDeviceId;
+          clip.mediaFileId = asset.mediaFileId;
+          clip.sha256 = asset.sha256;
           clip.videoUrl = asset.videoOssKey ? signAssetDownloadUrl(asset.videoOssKey, asset.filename) : null;
         }
       }
