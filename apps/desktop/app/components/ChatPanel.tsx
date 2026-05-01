@@ -372,6 +372,15 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     );
   }, []);
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const autoResizeTextarea = () => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  };
+
   const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -383,6 +392,8 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
       );
       if (isDirty) clearDirtyState(projectId);
       e.currentTarget.reset();
+      // After form.reset(), restore textarea to single-row height.
+      requestAnimationFrame(autoResizeTextarea);
     }
   };
 
@@ -465,9 +476,22 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
 
       {/* Input Area */}
       <div className="px-5 py-4 pb-6 bg-transparent">
-        <form onSubmit={handleSubmit} className="relative flex items-end">
-          <div className="relative w-full flex items-center bg-white dark:bg-zinc-800/60 border border-zinc-300 dark:border-zinc-700/60 hover:border-zinc-400 dark:hover:border-zinc-600 focus-within:border-indigo-500/50 focus-within:bg-zinc-50 dark:focus-within:bg-zinc-800 transition-all rounded-2xl shadow-sm overflow-hidden">
-            <input type="text" name="content" disabled={isLoading} autoComplete="off" placeholder={
+        <form onSubmit={handleSubmit} className="relative">
+          <div className="relative w-full flex items-end bg-white dark:bg-zinc-800/60 border border-zinc-300 dark:border-zinc-700/60 hover:border-zinc-400 dark:hover:border-zinc-600 focus-within:border-indigo-500/50 focus-within:bg-zinc-50 dark:focus-within:bg-zinc-800 transition-all rounded-2xl shadow-sm overflow-hidden">
+            <textarea
+              ref={textareaRef}
+              name="content"
+              disabled={isLoading}
+              autoComplete="off"
+              rows={1}
+              onInput={autoResizeTextarea}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  (e.currentTarget.form as HTMLFormElement)?.requestSubmit();
+                }
+              }}
+              placeholder={
                 workflowMode === 'material'
                   ? "素材选好后，告诉我你的视频目标…"
                   : workflowMode === 'idea'
@@ -475,12 +499,17 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
                     : workflowMode === 'freechat'
                       ? "随便聊聊，AI 会用工具帮你搜素材或网页…"
                       : "向 AI 描述你的需求…"
-              } className="flex-1 w-full bg-transparent text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-4 py-3.5 focus:outline-none disabled:opacity-50 transition-colors" />
-            <div className="pr-2 flex-shrink-0">
+              }
+              className="flex-1 w-full bg-transparent text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-4 py-3.5 focus:outline-none disabled:opacity-50 transition-colors resize-none leading-6"
+            />
+            <div className="pr-2 pb-2 flex-shrink-0">
               <button type="submit" disabled={isLoading} className="p-1.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition-colors disabled:opacity-50 disabled:bg-zinc-200 dark:disabled:bg-zinc-700 disabled:text-zinc-400 dark:disabled:text-zinc-500">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>
               </button>
             </div>
+          </div>
+          <div className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1.5 px-2">
+            Enter 发送 · Shift+Enter 换行
           </div>
         </form>
       </div>

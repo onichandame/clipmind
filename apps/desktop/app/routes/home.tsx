@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Film, Lightbulb, MessageCircle, Send, Clock, Sparkles, Trash2 } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Film, Lightbulb, MessageCircle, Send, Sparkles } from 'lucide-react';
 import { env } from '../env';
 import { authFetch, getCachedUser, type AuthUser } from '../lib/auth';
-import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 
 type Mode = 'material' | 'idea' | 'freechat';
 
@@ -38,45 +37,28 @@ const MODE_CARDS: Array<{ id: Mode; title: string; subtitle: string; icon: any; 
   },
 ];
 
-interface ProjectListItem {
-  id: string;
-  title: string;
-  workflowMode?: Mode | null;
-  updatedAt: string;
-}
-
 export default function LandingChat() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState('');
   const [creating, setCreating] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setUser(getCachedUser());
   }, []);
 
-  const { data: projectsData } = useQuery({
-    queryKey: ['projects'],
-    queryFn: async () => {
-      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects`);
-      if (!res.ok) throw new Error('Network error');
-      return res.json() as Promise<{ projects: ProjectListItem[] }>;
-    },
-  });
+  const autoResize = () => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+  };
 
-  const deleteProject = useMutation({
-    mutationFn: async (projectId: string) => {
-      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error('Failed to delete project');
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-    },
-  });
+  useEffect(() => {
+    autoResize();
+  }, [draft]);
 
   const createProject = useMutation({
     mutationFn: async ({ workflowMode, seedMessage }: { workflowMode: Mode; seedMessage?: string }) => {
@@ -116,7 +98,6 @@ export default function LandingChat() {
     }
   };
 
-  const recent = (projectsData?.projects || []).slice(0, 6);
   const displayName = user?.email ? user.email.split('@')[0] : 'Creator';
 
   return (
@@ -158,13 +139,20 @@ export default function LandingChat() {
         {/* Free-chat input */}
         <form onSubmit={handleSubmitDraft} className="mb-12">
           <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 focus-within:border-indigo-400 dark:focus-within:border-indigo-500/60 focus-within:ring-4 focus-within:ring-indigo-500/10 rounded-2xl shadow-sm transition-all p-3">
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  (e.currentTarget.form as HTMLFormElement)?.requestSubmit();
+                }
+              }}
+              rows={1}
               placeholder="或者直接说出你的想法，AI 会帮你边聊边推进…"
               disabled={creating}
-              className="w-full bg-transparent text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-2 py-2 focus:outline-none disabled:opacity-50"
+              className="w-full bg-transparent text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 text-sm px-2 py-2 focus:outline-none disabled:opacity-50 resize-none overflow-y-auto leading-6"
             />
             <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-100 dark:border-zinc-800/70">
               <div className="text-[11px] text-zinc-400 dark:text-zinc-500 px-2">
@@ -181,62 +169,7 @@ export default function LandingChat() {
             </div>
           </div>
         </form>
-
-        {/* Recent projects strip */}
-        {recent.length > 0 && (
-          <section>
-            <h3 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <Clock className="w-3.5 h-3.5" />
-              最近项目
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {recent.map((p) => (
-                <div
-                  key={p.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate(`/projects/${p.id}`)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      navigate(`/projects/${p.id}`);
-                    }
-                  }}
-                  className="group relative text-left rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3 pr-8 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-500/40 hover:shadow-sm transition-all"
-                >
-                  <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate" title={p.title}>{p.title}</div>
-                  <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1">
-                    {new Date(p.updatedAt).toLocaleDateString()}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmDelete({ id: p.id, title: p.title });
-                    }}
-                    className="absolute top-2 right-2 p-1.5 rounded-md text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
-                    title="删除项目"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
       </div>
-      {confirmDelete && (
-        <DeleteConfirmModal
-          title="确认删除项目？"
-          description={`确定要删除项目"${confirmDelete.title || '未命名'}"吗？此操作不可恢复。`}
-          onCancel={() => setConfirmDelete(null)}
-          onConfirm={() => {
-            const id = confirmDelete.id;
-            setConfirmDelete(null);
-            deleteProject.mutate(id);
-          }}
-        />
-      )}
     </div>
   );
 }
