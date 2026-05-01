@@ -14,6 +14,8 @@ use tokio::sync::Semaphore;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use uuid::Uuid;
 
+mod local_file_server;
+
 fn env_tag() -> String {
     format!("[{}/{}]", std::env::consts::OS, std::env::consts::ARCH)
 }
@@ -40,6 +42,24 @@ fn ensure_device_id(app: &AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn get_device_id(app: AppHandle) -> Result<String, String> {
     ensure_device_id(&app)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalFileServerInfoFront {
+    base_url: String,
+    token: String,
+}
+
+// Frontend uses this to build playable http://127.0.0.1:PORT/file?token=...&path=...
+// URLs for <video src=...> on Linux WebKitGTK where asset:// is rejected.
+#[tauri::command]
+fn get_local_file_server_info() -> Result<LocalFileServerInfoFront, String> {
+    let info = local_file_server::start()?;
+    Ok(LocalFileServerInfoFront {
+        base_url: info.base_url,
+        token: info.token,
+    })
 }
 
 // 用户在 AssetDetailModal 主动开启云备份时触发：把本地原片走 video-backup 上传通道。
@@ -689,6 +709,7 @@ pub fn run() {
             process_video_asset,
             get_device_id,
             backup_video_to_cloud,
+            get_local_file_server_info,
         ])
         .setup(|app| {
             // 启动即探测：将最优编码器与并发管理器挂载至全局
@@ -698,6 +719,40 @@ pub fn run() {
                 handle.manage(VideoEncoderState(encoder));
                 handle.manage(ProcessingManager::new());
             });
+
+            // Resolve the bundled ffmpeg sidecar path so the local file server
+            // can spawn it for on-the-fly transcoding. Tauri places the sidecar
+            // next to the app binary in both dev and bundled builds.
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    // Probe both the un-suffixed name (dev: `target/debug/ffmpeg`)
+                    // and the triple-suffixed name (some bundle layouts).
+                    let candidates: Vec<std::path::PathBuf> = if cfg!(target_os = "windows") {
+                        vec![dir.join("ffmpeg.exe"), dir.join("ffmpeg")]
+                    } else {
+                        vec![
+                            dir.join("ffmpeg"),
+                            dir.join("ffmpeg-x86_64-unknown-linux-gnu"),
+                            dir.join("ffmpeg-aarch64-unknown-linux-gnu"),
+                            dir.join("ffmpeg-aarch64-apple-darwin"),
+                            dir.join("ffmpeg-x86_64-apple-darwin"),
+                        ]
+                    };
+                    for p in candidates {
+                        if p.exists() {
+                            eprintln!("[local_file_server] ffmpeg resolved at {:?}", p);
+                            local_file_server::set_ffmpeg_path(p);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Eagerly start the localhost file server so the first preview
+            // doesn't pay the bind+token cost. Fail-soft: log and continue.
+            if let Err(e) = local_file_server::start() {
+                eprintln!("[local_file_server] failed to start: {}", e);
+            }
 
             if cfg!(debug_assertions) {
                 app.handle().plugin(

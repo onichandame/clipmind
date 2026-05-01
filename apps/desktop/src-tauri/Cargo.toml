@@ -33,3 +33,5 @@ tokio = { version = "1.51.1", features = ["fs", "io-util", "rt"] }
 bytes = "1.11.1"
 uuid = { version = "1.20.0", features = ["v4"] }
 sha2 = "0.10"
+tiny_http = "0.12"
+urlencoding = "2.1"

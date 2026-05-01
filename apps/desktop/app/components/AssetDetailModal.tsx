@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Film, X, CloudUpload, HardDrive, Cloud, AlertTriangle, Activity, CheckCircle2, AlertCircle } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { getAnalysisStage, type Asset } from "../lib/asset-types";
 import { useAssetUri, useDeviceId } from "../lib/asset-uri";
 
@@ -15,14 +16,20 @@ const BACKUP_LABEL: Record<string, { text: string; tone: string }> = {
 export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: () => void }) {
   const deviceId = useDeviceId();
   const playable = useAssetUri(asset);
+  const queryClient = useQueryClient();
   const [backupStatus, setBackupStatus] = useState<string>(asset.backupStatus || 'local_only');
   const [busy, setBusy] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  useEffect(() => {
+    setVideoFailed(false);
+  }, [playable.uri]);
 
   const isLocalOrigin = !!asset.originDeviceId && asset.originDeviceId === deviceId;
   const statusMeta = BACKUP_LABEL[backupStatus] || BACKUP_LABEL.local_only;
@@ -63,7 +70,8 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ localPath: picked, originDeviceId: deviceId }),
       });
-      // Caller is expected to refresh the asset list to pick up the new path.
+      queryClient.invalidateQueries({ queryKey: ['library'] });
+      queryClient.invalidateQueries({ queryKey: ['assets-library'], exact: false });
       onClose();
     } catch (e) {
       console.error('[Relink] failed:', e);
@@ -81,12 +89,22 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
       >
         {/* Video / Thumbnail */}
         <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden rounded-t-xl">
-          {playable.uri ? (
+          {playable.uri && !videoFailed ? (
             <video
               src={playable.uri}
               poster={asset.thumbnailUrl || undefined}
               controls
               preload="metadata"
+              onError={(e) => {
+                const v = e.currentTarget;
+                console.warn('[AssetDetailModal] video load failed', {
+                  uri: playable.uri,
+                  kind: playable.kind,
+                  errorCode: v.error?.code,
+                  errorMessage: v.error?.message,
+                });
+                setVideoFailed(true);
+              }}
               className={`w-full h-full object-contain ${playable.kind === 'unavailable' ? 'grayscale' : ''}`}
             />
           ) : asset.thumbnailUrl ? (
@@ -98,7 +116,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
               />
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 text-white text-sm font-medium gap-2 px-4 text-center">
                 <AlertTriangle className="w-6 h-6" />
-                <div>视频不在本机可用</div>
+                <div>{videoFailed ? '本地文件无法播放' : '视频不在本机可用'}</div>
                 {asset.originDeviceId && (
                   <div className="text-xs opacity-80">来源设备：{asset.originDeviceId.slice(0, 8)}…</div>
                 )}

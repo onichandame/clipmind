@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 
 const DEVICE_ID_KEY = 'clipmind:device:id';
 
 let cachedDeviceId: string | null = null;
-let inflight: Promise<string | null> | null = null;
+let inflightDevice: Promise<string | null> | null = null;
 
 async function loadDeviceId(): Promise<string | null> {
   if (cachedDeviceId) return cachedDeviceId;
@@ -15,8 +15,8 @@ async function loadDeviceId(): Promise<string | null> {
       return stored;
     }
   }
-  if (inflight) return inflight;
-  inflight = (async () => {
+  if (inflightDevice) return inflightDevice;
+  inflightDevice = (async () => {
     try {
       const id = await invoke<string>('get_device_id');
       cachedDeviceId = id;
@@ -28,10 +28,10 @@ async function loadDeviceId(): Promise<string | null> {
       console.warn('[device] failed to load device_id:', e);
       return null;
     } finally {
-      inflight = null;
+      inflightDevice = null;
     }
   })();
-  return inflight;
+  return inflightDevice;
 }
 
 export function useDeviceId(): string | null {
@@ -41,6 +41,58 @@ export function useDeviceId(): string | null {
     loadDeviceId().then(setId);
   }, []);
   return id;
+}
+
+// Localhost file server: WebKitGTK on Linux refuses to play media from
+// asset://localhost/... URLs (errorCode 4 / SRC_NOT_SUPPORTED), so the Rust
+// shell exposes a tiny localhost HTTP server with Range support, and we
+// rewrite local-origin asset URIs to http://127.0.0.1:PORT/file?token=...&path=...
+interface LocalFileServerInfo {
+  baseUrl: string;
+  token: string;
+}
+let cachedLocalServer: LocalFileServerInfo | null = null;
+let inflightLocalServer: Promise<LocalFileServerInfo | null> | null = null;
+
+async function loadLocalServerInfo(): Promise<LocalFileServerInfo | null> {
+  if (cachedLocalServer) return cachedLocalServer;
+  if (inflightLocalServer) return inflightLocalServer;
+  inflightLocalServer = (async () => {
+    try {
+      const info = await invoke<LocalFileServerInfo>('get_local_file_server_info');
+      cachedLocalServer = info;
+      return info;
+    } catch (e) {
+      console.warn('[local-file-server] failed to load info:', e);
+      return null;
+    } finally {
+      inflightLocalServer = null;
+    }
+  })();
+  return inflightLocalServer;
+}
+
+function buildLocalFileUrl(localPath: string, info: LocalFileServerInfo): string {
+  const path = encodeURIComponent(localPath);
+  const token = encodeURIComponent(info.token);
+  return `${info.baseUrl}?token=${token}&path=${path}`;
+}
+
+// Eagerly request the localhost server info on module load so the first
+// preview click doesn't pay the IPC roundtrip. No-op in non-Tauri contexts.
+if (typeof window !== 'undefined') {
+  loadLocalServerInfo();
+}
+
+function useLocalServerInfo(): LocalFileServerInfo | null {
+  const [info, setInfo] = useState<LocalFileServerInfo | null>(cachedLocalServer);
+  useEffect(() => {
+    if (cachedLocalServer) return;
+    loadLocalServerInfo().then((v) => {
+      if (v) setInfo(v);
+    });
+  }, []);
+  return info;
 }
 
 export interface AssetLike {
@@ -60,15 +112,22 @@ export interface AssetUri {
 
 // Pure resolver: prefers local file when origin matches current device, falls back to
 // signed cloud URL when the asset has been backed up. Otherwise unavailable.
-export function resolveAssetUri(asset: AssetLike, currentDeviceId: string | null): AssetUri {
+//
+// Local URLs require localServer to have loaded; until then, kind === 'local'
+// but uri === null so callers know to wait (the hook re-renders when the info
+// resolves).
+export function resolveAssetUri(
+  asset: AssetLike,
+  currentDeviceId: string | null,
+  localServer: LocalFileServerInfo | null,
+): AssetUri {
   if (!asset) return { kind: 'unavailable', uri: null };
   const isLocalOrigin = !!asset.originDeviceId && !!currentDeviceId && asset.originDeviceId === currentDeviceId;
   if (isLocalOrigin && asset.localPath) {
-    try {
-      return { kind: 'local', uri: convertFileSrc(asset.localPath) };
-    } catch {
-      // convertFileSrc throws when not in a Tauri context — fall through to cloud/unavailable
-    }
+    return {
+      kind: 'local',
+      uri: localServer ? buildLocalFileUrl(asset.localPath, localServer) : null,
+    };
   }
   if (asset.backupStatus === 'backed_up') {
     const cloud = asset.videoOssUrl || asset.videoUrl;
@@ -79,5 +138,6 @@ export function resolveAssetUri(asset: AssetLike, currentDeviceId: string | null
 
 export function useAssetUri(asset: AssetLike): AssetUri {
   const deviceId = useDeviceId();
-  return resolveAssetUri(asset, deviceId);
+  const localServer = useLocalServerInfo();
+  return resolveAssetUri(asset, deviceId, localServer);
 }
