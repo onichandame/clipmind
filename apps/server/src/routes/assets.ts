@@ -48,24 +48,31 @@ app.get("/library", async (c) => {
       .where(eq(projectAssets.userId, user.id))
       .orderBy(desc(mediaFiles.createdAt));
 
-    type MediaGroup = {
-      mediaFileId: string;
-      filename: string;
+    // Each media_file may have multiple project_asset variants (one per project
+    // it was imported into, possibly from different devices). We send ALL
+    // variants so the client can pick the one matching the current device for
+    // local playback, or any backed-up variant for cloud playback.
+    type Variant = {
+      projectId: string;
+      projectTitle: string;
+      projectAssetId: string;
       localPath: string | null;
       originDeviceId: string | null;
       videoOssUrl: string | null;
+      backupStatus: string | null;
+    };
+    type MediaGroup = {
+      mediaFileId: string;
+      filename: string;
       audioOssUrl: string | null;
       thumbnailUrl: string | null;
-      backupStatus: string | null;
       fileSize: number;
       duration: number | null;
       status: string;
       asrStatus: string | null;
       summary: string | null;
       createdAt: Date;
-      // first project_asset for the modal's "id" field (id is needed for delete/relink)
-      representativeAssetId: string;
-      usedBy: Array<{ projectId: string; projectTitle: string; projectAssetId: string }>;
+      variants: Variant[];
     };
 
     const grouped = new Map<string, MediaGroup>();
@@ -75,39 +82,26 @@ app.get("/library", async (c) => {
         g = {
           mediaFileId: r.mediaFileId,
           filename: r.filename,
-          localPath: r.localPath ?? null,
-          originDeviceId: r.originDeviceId ?? null,
-          videoOssUrl: r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
           audioOssUrl: r.audioOssKey ? signAssetViewUrl(r.audioOssKey) : null,
           thumbnailUrl: r.thumbnailOssKey ? signAssetViewUrl(r.thumbnailOssKey) : null,
-          backupStatus: r.backupStatus ?? null,
           fileSize: r.fileSize,
           duration: r.duration ?? null,
           status: r.status ?? 'processing',
           asrStatus: r.asrStatus ?? null,
           summary: r.summary ?? null,
           createdAt: r.createdAt,
-          representativeAssetId: r.projectAssetId,
-          usedBy: [],
+          variants: [],
         };
         grouped.set(r.mediaFileId, g);
-      } else {
-        // Prefer a project_asset row that has a localPath / videoOssKey so
-        // the modal can play it back.
-        if (!g.localPath && r.localPath) {
-          g.localPath = r.localPath;
-          g.originDeviceId = r.originDeviceId ?? g.originDeviceId;
-          g.representativeAssetId = r.projectAssetId;
-        }
-        if (!g.videoOssUrl && r.videoOssKey) {
-          g.videoOssUrl = signAssetViewUrl(r.videoOssKey);
-          g.backupStatus = r.backupStatus ?? g.backupStatus;
-        }
       }
-      g.usedBy.push({
+      g.variants.push({
         projectId: r.projectId,
         projectTitle: r.projectTitle,
         projectAssetId: r.projectAssetId,
+        localPath: r.localPath ?? null,
+        originDeviceId: r.originDeviceId ?? null,
+        videoOssUrl: r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
+        backupStatus: r.backupStatus ?? null,
       });
     }
 
