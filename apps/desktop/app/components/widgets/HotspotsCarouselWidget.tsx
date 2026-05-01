@@ -71,7 +71,7 @@ export function HotspotsCarouselWidget({ part, onSubmit, answer }: WidgetProps) 
             </div>
           </div>
         ) : (
-          <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
+          <div className="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1 -mr-1">
             {items.map((h) => {
               const meta = SOURCE_META[h.source] ?? SOURCE_META.mixed;
               const isPicked = isAnswered && pickedTitleStr === h.title;
@@ -90,7 +90,7 @@ export function HotspotsCarouselWidget({ part, onSubmit, answer }: WidgetProps) 
                       handlePick(h);
                     }
                   }}
-                  className={`group relative flex-shrink-0 w-56 rounded-xl border-2 transition-all snap-start p-3 flex flex-col gap-2 ${
+                  className={`group relative w-full rounded-xl border-2 transition-all p-3 flex flex-col gap-2 ${
                     isAnswered ? 'cursor-default' : 'cursor-pointer'
                   } ${
                     isPicked
