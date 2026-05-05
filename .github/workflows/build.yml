@@ -64,9 +64,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_API_BASE_URL: "https://clipmind.prodream.cn"
           TARGET_TRIPLE: ${{ matrix.target }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/desktop
           args: --target ${{ matrix.target }}
+          includeUpdaterJson: true
 
       - name: Rename and collect artifacts (macOS)
         if: startsWith(matrix.os, 'macos')
@@ -80,6 +83,11 @@ jobs:
             stem=$(echo "$base" | sed 's/_[^_]*$//')
             cp "$f" "dist/${stem}_${LABEL}.dmg"
           done
+          # Updater payload: macOS downloads .app.tar.gz (NOT .dmg) for in-place swap
+          find "$BUNDLE_DIR/macos" -name "*.app.tar.gz" -exec cp {} "dist/" \; 2>/dev/null || true
+          find "$BUNDLE_DIR/macos" -name "*.app.tar.gz.sig" -exec cp {} "dist/" \; 2>/dev/null || true
+          # Per-platform updater manifest (merged later in release job)
+          find "$BUNDLE_DIR" -maxdepth 1 -name "latest.json" -exec cp {} "dist/latest-${LABEL}.json" \; 2>/dev/null || true
 
       - name: Rename and collect artifacts (Linux)
         if: matrix.os == 'ubuntu-22.04'
@@ -93,6 +101,10 @@ jobs:
             stem=$(echo "$base" | sed 's/_[^_]*$//')
             cp "$f" "dist/${stem}_${LABEL}.AppImage"
           done
+          # Updater payload sig (AppImage itself doubles as the payload)
+          find "$BUNDLE_DIR/appimage" -name "*.AppImage.sig" -exec cp {} "dist/" \; 2>/dev/null || true
+          # Per-platform updater manifest (merged later in release job)
+          find "$BUNDLE_DIR" -maxdepth 1 -name "latest.json" -exec cp {} "dist/latest-${LABEL}.json" \; 2>/dev/null || true
 
       - name: Rename and collect artifacts (Windows)
         if: matrix.os == 'windows-latest'
@@ -112,6 +124,15 @@ jobs:
           Get-ChildItem "$bundleDir/msi" -Filter "*.msi" -ErrorAction SilentlyContinue | ForEach-Object {
             $stem = $_.BaseName -replace '_en-US$', '' -replace '_x64$', ''
             Copy-Item $_.FullName "dist/${stem}_${label}.msi"
+          }
+
+          # Updater payload: NSIS .nsis.zip (the inner installer Tauri runs in passive mode) + sig
+          Get-ChildItem "$bundleDir/nsis" -Filter "*-setup.nsis.zip" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist/"
+          Get-ChildItem "$bundleDir/nsis" -Filter "*-setup.nsis.zip.sig" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist/"
+
+          # Per-platform updater manifest (merged later in release job)
+          Get-ChildItem $bundleDir -Filter "latest.json" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName "dist/latest-${label}.json"
           }
 
       - name: Upload build artifacts
@@ -138,6 +159,28 @@ jobs:
         with:
           path: artifacts/
           merge-multiple: true
+
+      # Each matrix run uploads its own platform-only latest.json. Without
+      # merging, the last writer wins and updater fails for all but one
+      # platform. Combine them into a single multi-platform manifest.
+      - name: Merge per-platform latest.json files
+        run: |
+          if ls artifacts/latest-*.json >/dev/null 2>&1; then
+            jq -s '
+              reduce .[] as $m (
+                {version: "", notes: "", pub_date: "", platforms: {}};
+                .version = $m.version
+                | .notes = $m.notes
+                | .pub_date = $m.pub_date
+                | .platforms = (.platforms + $m.platforms)
+              )
+            ' artifacts/latest-*.json > artifacts/latest.json
+            rm artifacts/latest-*.json
+            echo "Merged latest.json:"
+            cat artifacts/latest.json
+          else
+            echo "No per-platform latest.json files found; skipping merge."
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

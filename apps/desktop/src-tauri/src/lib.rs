@@ -1153,6 +1153,14 @@ pub fn run() {
             local_assets_relink,
         ])
         .setup(|app| {
+            // 自更新插件：仅 desktop 目标，必须在 release 中也运行
+            // （区别于 tauri_plugin_log 只在 debug_assertions 下挂载）。
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
+
             // 启动即探测：将最优编码器与并发管理器挂载至全局
             let handle = app.handle().clone();
             tauri::async_runtime::block_on(async move {

@@ -9,7 +9,10 @@
     "dev": "react-router dev",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bump:patch": "tsx scripts/bump-version.ts patch",
+    "bump:minor": "tsx scripts/bump-version.ts minor",
+    "bump:major": "tsx scripts/bump-version.ts major"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.52",
@@ -21,6 +24,8 @@
     "@tanstack/react-query": "^5.97.0",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.7.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@tiptap/pm": "^3.22.3",
     "@tiptap/react": "^3.22.3",
     "@tiptap/starter-kit": "^3.22.3",

@@ -15,9 +15,11 @@ import { useEffect, useRef, useState } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, type PanelImperativeHandle } from "react-resizable-panels";
 import { GlobalSidebar } from "./components/GlobalSidebar";
 import { IconNavBar } from "./components/IconNavBar";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fetchMe, getToken, type AuthUser, getCachedUser } from "./lib/auth";
 import { useGlobalAssetImportListeners } from "./lib/asset-import";
+import { useUpdateCheck } from "./lib/updater";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -52,6 +54,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // Wire Tauri asset-import progress events at the app root so any entry
   // point (chat widget, library page, future ones) sees the same store state.
   useGlobalAssetImportListeners();
+  const update = useUpdateCheck();
   const location = useLocation();
   const navigate = useNavigate();
   const isPublic = PUBLIC_ROUTES.has(location.pathname);
@@ -161,6 +164,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
           </Panel>
         </PanelGroup>
       </div>
+      <UpdateBanner status={update.status} onInstall={update.install} />
     </div>
   );
 }
