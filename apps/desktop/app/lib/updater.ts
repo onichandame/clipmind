@@ -16,6 +16,14 @@ export function useUpdateCheck() {
   const [pending, setPending] = useState<Update | null>(null);
 
   useEffect(() => {
+    // Skip in dev: tauri.conf.json's current_version (0.1.x) will lag behind
+    // any published latest.json, so the plugin would prompt a "new version"
+    // and clicking install would try to swap the debug binary with a prod
+    // bundle — undefined behavior at best.
+    if (import.meta.env.DEV) {
+      setStatus({ kind: 'none' });
+      return;
+    }
     let cancelled = false;
     setStatus({ kind: 'checking' });
     check()

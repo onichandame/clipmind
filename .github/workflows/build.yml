@@ -69,13 +69,13 @@ jobs:
         with:
           projectPath: apps/desktop
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: true
 
       - name: Rename and collect artifacts (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
           mkdir -p dist
           LABEL="${{ matrix.platform-label }}"
+          VERSION="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
           BUNDLE_DIR="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
           find "$BUNDLE_DIR/dmg" -name "*.dmg" | while read f; do
             base=$(basename "$f" .dmg)
@@ -83,11 +83,15 @@ jobs:
             stem=$(echo "$base" | sed 's/_[^_]*$//')
             cp "$f" "dist/${stem}_${LABEL}.dmg"
           done
-          # Updater payload: macOS downloads .app.tar.gz (NOT .dmg) for in-place swap
-          find "$BUNDLE_DIR/macos" -name "*.app.tar.gz" -exec cp {} "dist/" \; 2>/dev/null || true
-          find "$BUNDLE_DIR/macos" -name "*.app.tar.gz.sig" -exec cp {} "dist/" \; 2>/dev/null || true
-          # Per-platform updater manifest (merged later in release job)
-          find "$BUNDLE_DIR" -maxdepth 1 -name "latest.json" -exec cp {} "dist/latest-${LABEL}.json" \; 2>/dev/null || true
+          # Updater payload + signature: macOS downloads .app.tar.gz (NOT .dmg) for in-place swap.
+          # Tauri v2 names this "${productName}.app.tar.gz" — NO version, NO arch — so both
+          # matrix rows would collide on download-artifact merge. Rename per-row to disambiguate.
+          find "$BUNDLE_DIR/macos" -name "*.app.tar.gz" -not -name "*.sig" | while read f; do
+            cp "$f" "dist/clipmind_${VERSION}_${LABEL}.app.tar.gz"
+          done
+          find "$BUNDLE_DIR/macos" -name "*.app.tar.gz.sig" | while read f; do
+            cp "$f" "dist/clipmind_${VERSION}_${LABEL}.app.tar.gz.sig"
+          done
 
       - name: Rename and collect artifacts (Linux)
         if: matrix.os == 'ubuntu-22.04'
@@ -101,10 +105,13 @@ jobs:
             stem=$(echo "$base" | sed 's/_[^_]*$//')
             cp "$f" "dist/${stem}_${LABEL}.AppImage"
           done
-          # Updater payload sig (AppImage itself doubles as the payload)
-          find "$BUNDLE_DIR/appimage" -name "*.AppImage.sig" -exec cp {} "dist/" \; 2>/dev/null || true
-          # Per-platform updater manifest (merged later in release job)
-          find "$BUNDLE_DIR" -maxdepth 1 -name "latest.json" -exec cp {} "dist/latest-${LABEL}.json" \; 2>/dev/null || true
+          # Updater payload sig: rename in lockstep with the .AppImage rename above so
+          # the sig basename (minus .sig) matches the asset URL on the release.
+          find "$BUNDLE_DIR/appimage" -name "*.AppImage.sig" | while read f; do
+            base=$(basename "$f" .AppImage.sig)
+            stem=$(echo "$base" | sed 's/_[^_]*$//')
+            cp "$f" "dist/${stem}_${LABEL}.AppImage.sig"
+          done
 
       - name: Rename and collect artifacts (Windows)
         if: matrix.os == 'windows-latest'
@@ -126,13 +133,14 @@ jobs:
             Copy-Item $_.FullName "dist/${stem}_${label}.msi"
           }
 
-          # Updater payload: NSIS .nsis.zip (the inner installer Tauri runs in passive mode) + sig
-          Get-ChildItem "$bundleDir/nsis" -Filter "*-setup.nsis.zip" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist/"
-          Get-ChildItem "$bundleDir/nsis" -Filter "*-setup.nsis.zip.sig" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist/"
-
-          # Per-platform updater manifest (merged later in release job)
-          Get-ChildItem $bundleDir -Filter "latest.json" -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName "dist/latest-${label}.json"
+          # Updater payload: in Tauri v2 with `createUpdaterArtifacts: true` (NOT v1Compatible),
+          # the updater payload IS the same -setup.exe as the human installer — no .nsis.zip is
+          # produced. Only the .sig file needs separate handling. Rename in lockstep with the .exe
+          # rename above so the sig basename (minus .sig) matches the asset URL on the release.
+          Get-ChildItem "$bundleDir/nsis" -Filter "*-setup.exe.sig" -ErrorAction SilentlyContinue | ForEach-Object {
+            # BaseName = "clipmind_x.x.x_x64-setup.exe" (PS strips one extension, here .sig)
+            $stem = $_.BaseName -replace '-setup\.exe$', '' -replace '_x64$', ''
+            Copy-Item $_.FullName "dist/${stem}_${label}-setup.exe.sig"
           }
 
       - name: Upload build artifacts
@@ -160,27 +168,57 @@ jobs:
           path: artifacts/
           merge-multiple: true
 
-      # Each matrix run uploads its own platform-only latest.json. Without
-      # merging, the last writer wins and updater fails for all but one
-      # platform. Combine them into a single multi-platform manifest.
-      - name: Merge per-platform latest.json files
+      # Hand-author the updater manifest from the .sig files emitted by the
+      # Tauri bundler (createUpdaterArtifacts: true). We do NOT rely on
+      # tauri-action's includeUpdaterJson because that path is gated on a
+      # releaseId we don't provide (we manage the release in this job).
+      - name: Build latest.json from sig files
         run: |
-          if ls artifacts/latest-*.json >/dev/null 2>&1; then
-            jq -s '
-              reduce .[] as $m (
-                {version: "", notes: "", pub_date: "", platforms: {}};
-                .version = $m.version
-                | .notes = $m.notes
-                | .pub_date = $m.pub_date
-                | .platforms = (.platforms + $m.platforms)
-              )
-            ' artifacts/latest-*.json > artifacts/latest.json
-            rm artifacts/latest-*.json
-            echo "Merged latest.json:"
-            cat artifacts/latest.json
-          else
-            echo "No per-platform latest.json files found; skipping merge."
-          fi
+          set -e
+          VERSION="${{ steps.version.outputs.version }}"
+          BASE="https://github.com/onichandame/clipmind/releases/download/v${VERSION}"
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          jq -n --arg v "$VERSION" --arg pd "$PUB_DATE" \
+            '{ version: $v, notes: "", pub_date: $pd, platforms: {} }' \
+            > artifacts/latest.json
+
+          shopt -s nullglob
+          for sig_file in artifacts/*.sig; do
+            payload=$(basename "$sig_file" .sig)
+            url="${BASE}/${payload}"
+            sig_content=$(cat "$sig_file")
+
+            case "$payload" in
+              *_macOS-AppleSilicon.app.tar.gz)  key="darwin-aarch64" ;;
+              *_macOS-Intel.app.tar.gz)         key="darwin-x86_64" ;;
+              *_Linux-x64.AppImage)             key="linux-x86_64" ;;
+              *_Windows-x64-setup.exe)          key="windows-x86_64" ;;
+              *) echo "Skipping unrecognized sig: $payload"; continue ;;
+            esac
+
+            jq --arg k "$key" --arg s "$sig_content" --arg u "$url" \
+              '.platforms[$k] = {signature: $s, url: $u}' \
+              artifacts/latest.json > artifacts/latest.json.tmp
+            mv artifacts/latest.json.tmp artifacts/latest.json
+            echo "Added $key → $url"
+          done
+
+          echo "----- latest.json -----"
+          cat artifacts/latest.json
+          echo "-----------------------"
+
+          # Sanity: every advertised platform must have a non-null, non-empty signature + url.
+          # NB: jq's `null != ""` evaluates to true (different types), so a missing key would
+          # silently pass a naive check. Use `has()` and `// ""` to guard explicitly.
+          for k in darwin-aarch64 darwin-x86_64 linux-x86_64 windows-x86_64; do
+            jq -e --arg k "$k" '
+              (.platforms | has($k))
+              and ((.platforms[$k].signature // "") != "")
+              and ((.platforms[$k].url // "") != "")
+            ' artifacts/latest.json >/dev/null \
+              || { echo "ERROR: $k slot missing or incomplete in latest.json"; exit 1; }
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
