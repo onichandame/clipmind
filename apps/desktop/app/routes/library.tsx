@@ -109,7 +109,10 @@ export default function LibraryPage() {
   const { data: localMap } = useLocalAssets(mediaFileIds);
 
   return (
-    <div className="h-full overflow-y-auto bg-indigo-50/40 dark:bg-zinc-950 transition-colors duration-200">
+    <div
+      className="h-full overflow-y-auto transition-colors duration-200"
+      style={{ backgroundColor: 'var(--color-workspace-bg)' }}
+    >
       <div className="max-w-6xl mx-auto px-6 py-10">
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">

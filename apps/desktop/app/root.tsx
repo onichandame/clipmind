@@ -11,10 +11,9 @@ import {
   useNavigate,
 } from "react-router";
 
-import { useEffect, useRef, useState } from "react";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, type PanelImperativeHandle } from "react-resizable-panels";
-import { GlobalSidebar } from "./components/GlobalSidebar";
-import { IconNavBar } from "./components/IconNavBar";
+import { useEffect, useState } from "react";
+import { Sidebar } from "./components/Sidebar";
+import { ToastHost } from "./components/Toast";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fetchMe, getToken, type AuthUser, getCachedUser } from "./lib/auth";
@@ -64,23 +63,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [resolved, setResolved] = useState<boolean>(false);
-  const sidebarRef = useRef<PanelImperativeHandle | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarTransitioning, setSidebarTransitioning] = useState(false);
 
-  const collapseSidebar = () => {
-    setSidebarTransitioning(true);
-    sidebarRef.current?.collapse();
-    window.setTimeout(() => setSidebarTransitioning(false), 250);
-  };
-  const expandSidebar = () => {
-    setSidebarTransitioning(true);
-    sidebarRef.current?.expand();
-    window.setTimeout(() => setSidebarTransitioning(false), 250);
-  };
-  const handleToggleProjectList = () => {
-    if (sidebarCollapsed) expandSidebar();
-    else collapseSidebar();
+  const hasUpdate = update.status.kind === 'available';
+  const handleCheckUpdate = () => {
+    if (hasUpdate) update.install();
   };
 
   useEffect(() => {
@@ -125,46 +111,25 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   }
   if (!mounted || !resolved || !user) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-indigo-50/40 dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 text-sm">
+      <div
+        className="flex h-screen w-screen items-center justify-center text-zinc-500 dark:text-zinc-400 text-sm transition-colors duration-200"
+        style={{ backgroundColor: 'var(--color-workspace-bg)' }}
+      >
         正在加载…
       </div>
     );
   }
   return (
-    <div className="h-screen w-screen overflow-hidden bg-indigo-50/40 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200 font-sans tracking-wide transition-colors duration-200 flex">
-      {/* Always-visible icon nav bar */}
-      <IconNavBar
-        projectListCollapsed={sidebarCollapsed}
-        onToggleProjectList={handleToggleProjectList}
-      />
-
-      {/* Resizable: project list + main content */}
-      <div className="flex-1 min-w-0">
-        <PanelGroup
-          direction="horizontal"
-          id="clipmind-shell"
-          className={sidebarTransitioning ? "shell-sidebar-transitioning" : ""}
-        >
-          <Panel
-            panelRef={sidebarRef}
-            defaultSize="240px"
-            minSize="200px"
-            maxSize="380px"
-            collapsible
-            collapsedSize="0%"
-            onResize={(size) => setSidebarCollapsed(size.inPixels < 80)}
-          >
-            <GlobalSidebar />
-          </Panel>
-          <PanelResizeHandle className="w-px bg-zinc-200 dark:bg-zinc-800/60 hover:bg-indigo-400 dark:hover:bg-indigo-500 transition-colors" />
-          <Panel minSize="50%">
-            <div className="h-full w-full relative overflow-y-auto">
-              {children}
-            </div>
-          </Panel>
-        </PanelGroup>
-      </div>
+    <div
+      className="h-screen w-screen overflow-hidden text-zinc-900 dark:text-zinc-200 font-sans tracking-wide transition-colors duration-200 flex"
+      style={{ backgroundColor: 'var(--color-workspace-bg)' }}
+    >
+      <Sidebar hasUpdate={hasUpdate} onCheckUpdate={handleCheckUpdate} />
+      <main className="flex-1 min-w-0 h-full overflow-y-auto">
+        {children}
+      </main>
       <UpdateBanner status={update.status} onInstall={update.install} />
+      <ToastHost />
     </div>
   );
 }

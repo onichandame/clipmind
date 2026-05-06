@@ -24,7 +24,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950 px-6">
+    <div className="flex h-screen w-screen items-center justify-center bg-zinc-50 dark:bg-zinc-900 px-6 transition-colors duration-200">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-8 shadow-sm">
         <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">登录 ClipMind</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">用你的邮箱继续创作。</p>

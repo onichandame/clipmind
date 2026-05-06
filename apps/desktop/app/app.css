@@ -4,12 +4,19 @@
 /* [架构师决断]: 覆写 Tailwind v4 的默认 dark 变体触发机制为基于 HTML 标签的 class */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Sidebar collapse/expand animation. Targets the outer [data-panel] div
-   (the one with flex-basis sizing) which Panel's className prop can't reach. */
-.shell-sidebar-transitioning > [data-panel]:first-of-type {
-  transition: flex-basis 220ms cubic-bezier(0.32, 0.72, 0, 1),
-              flex-grow 220ms cubic-bezier(0.32, 0.72, 0, 1),
-              flex-shrink 220ms cubic-bezier(0.32, 0.72, 0, 1);
+/* Sidebar / workspace surface tokens.
+   Light: sidebar 偏暖浅灰、workspace 比 sidebar 亮，整体退后 → 内容凸出。
+   Dark:  sidebar 比 workspace 深，方向反转 → 仍是 sidebar 退后。
+   组件用 style={{ backgroundColor: 'var(--color-...)' }} 引用，禁止硬编码具体值。 */
+:root {
+  --color-sidebar-bg: #F5F4F0;
+  --color-workspace-bg: #FFFFFF;
+  --color-surface-elevated: #FAFAF7;
+}
+.dark {
+  --color-sidebar-bg: #0E0E0E;
+  --color-workspace-bg: #1F1F1F;
+  --color-surface-elevated: #2A2A2A;
 }
 
 /* Right panel slide-in/out animation in the project workspace. Animates both

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Film, Lightbulb, MessageCircle, Send, Sparkles } from 'lucide-react';
+import { Film, Lightbulb, Send, Sparkles } from 'lucide-react';
 import { env } from '../env';
 import { authFetch, getCachedUser, type AuthUser } from '../lib/auth';
 
@@ -19,21 +19,12 @@ const MODE_CARDS: Array<{ id: Mode; title: string; subtitle: string; icon: any; 
   },
   {
     id: 'idea',
-    title: '我有想法',
+    title: '探索灵感',
     subtitle: '从灵感或热点出发，AI 帮你规划拍摄大纲',
     icon: Lightbulb,
     tone: 'text-indigo-600 dark:text-indigo-400',
     bg: 'bg-indigo-50 dark:bg-indigo-500/10',
     ring: 'hover:border-indigo-300 dark:hover:border-indigo-500/40',
-  },
-  {
-    id: 'freechat',
-    title: '自由对话',
-    subtitle: '不预设流程，先和 AI 探讨思路与素材',
-    icon: MessageCircle,
-    tone: 'text-amber-600 dark:text-amber-400',
-    bg: 'bg-amber-50 dark:bg-amber-500/10',
-    ring: 'hover:border-amber-300 dark:hover:border-amber-500/40',
   },
 ];
 
@@ -101,7 +92,10 @@ export default function LandingChat() {
   const displayName = user?.email ? user.email.split('@')[0] : 'Creator';
 
   return (
-    <div className="h-full overflow-y-auto bg-indigo-50/40 dark:bg-zinc-950 transition-colors duration-200">
+    <div
+      className="h-full overflow-y-auto transition-colors duration-200"
+      style={{ backgroundColor: 'var(--color-workspace-bg)' }}
+    >
       <div className="max-w-3xl mx-auto px-6 py-12">
         {/* Greeting */}
         <div className="flex items-center gap-4 mb-8">
@@ -119,7 +113,7 @@ export default function LandingChat() {
         </div>
 
         {/* Mode cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
           {MODE_CARDS.map(({ id, title, subtitle, icon: Icon, tone, bg, ring }) => (
             <button
               key={id}

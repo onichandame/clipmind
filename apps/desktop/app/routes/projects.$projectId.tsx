@@ -32,8 +32,8 @@ export default function ProjectWorkspace() {
     }
   }, [projectId, data?.project, setRetrievedClips, setEditingPlans]);
 
-  if (isLoading) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-zinc-500 dark:text-zinc-400 transition-colors"><Loader2 className="w-8 h-8 animate-spin" /></div>;
-  if (error || !data?.project) return <div className="flex h-screen items-center justify-center bg-white dark:bg-zinc-950 text-red-500 font-bold transition-colors">项目不存在</div>;
+  if (isLoading) return <div className="flex h-screen items-center justify-center text-zinc-500 dark:text-zinc-400 transition-colors" style={{ backgroundColor: 'var(--color-workspace-bg)' }}><Loader2 className="w-8 h-8 animate-spin" /></div>;
+  if (error || !data?.project) return <div className="flex h-screen items-center justify-center text-red-500 font-bold transition-colors" style={{ backgroundColor: 'var(--color-workspace-bg)' }}>项目不存在</div>;
 
   return <WorkspaceLayout project={data.project} outline={data.outline} initialMessages={data.initialMessages} />;
 }
