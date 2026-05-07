@@ -55,7 +55,13 @@ app.post("/", async (c) => {
     dynamicSystemPrompt += `\n\n**【工作流上下文】**: ${FREECHAT_PROMPT_CONTEXT}\n\n`;
   }
 
-  dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
+  const isIdeaMode = currProject.workflowMode === 'idea';
+
+  if (!isIdeaMode) {
+    dynamicSystemPrompt += `\n\n你现在是资深短视频编导。当用户要求基于素材生成剪辑方案时，你必须先调用 \`searchFootage\` 检索素材，然后根据检索到的内容，调用 \`generateEditingPlan\` 工具输出并保存结构化的剪辑方案。禁止在对话中输出大段方案文本。\n\n`;
+  } else {
+    dynamicSystemPrompt += `\n\n你现在是资深短视频编导，当前项目是【想法驱动 / 创意前期策划】项目。本阶段**完全不涉及本地素材库**：用 \`updateOutline\` 写/改大纲，方向定下来后用纯文本回复输出拍摄建议（脚本/分镜/节奏/可参考的开源素材方向）。**严禁调用** \`search_assets\` / \`search_clips\` / \`generateEditingPlan\` / \`request_asset_import\` —— 服务端会硬拒。\n\n`;
+  }
 
   if (serverConfig.SEARCHAPI_KEY) {
     dynamicSystemPrompt += `**【网络检索能力】**: 你拥有 \`search_web\` 工具，可实时搜索最新信息。`;
@@ -69,10 +75,12 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `\n\n**核心军规 (意图收敛与频道隔离)**:\n`;
   dynamicSystemPrompt += `为了保证 UI 焦点的稳定性，你绝对禁止在同一次思考/步骤中并发调用跨频道的工具。你必须严格遵守以下频道隔离规则：\n`;
   dynamicSystemPrompt += `- 【频道 A: 策划】: 仅包含 \`updateOutline\`。若涉及大纲修改，禁止同时搜索素材。\n`;
-  dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`。若涉及素材检索，禁止同时修改大纲。\n`;
-  dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。\n`;
-  dynamicSystemPrompt += `- 【精挑（人工操作）】: 精挑是纯人工操作，**AI 不得替用户执行精挑**。当用户对某个素材满意、或询问如何精挑时，你应明确告知：请在右侧素材面板中点击素材上的"精挑"按钮进行手动精挑。你的职责是推荐与描述，最终的精挑决策权归用户。\n`;
-  dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n`;
+  dynamicSystemPrompt += `- 【频道 B: 素材】: 仅包含 \`search_assets\`。若涉及素材检索，禁止同时修改大纲。${isIdeaMode ? '（**idea 模式禁用**）' : ''}\n`;
+  dynamicSystemPrompt += `- 【频道 C: 剪辑】: 仅包含 \`generateEditingPlan\`。${isIdeaMode ? '（**idea 模式禁用**）' : ''}\n`;
+  if (!isIdeaMode) {
+    dynamicSystemPrompt += `- 【精挑（人工操作）】: 精挑是纯人工操作，**AI 不得替用户执行精挑**。当用户对某个素材满意、或询问如何精挑时，你应明确告知：请在右侧素材面板中点击素材上的"精挑"按钮进行手动精挑。你的职责是推荐与描述，最终的精挑决策权归用户。\n`;
+    dynamicSystemPrompt += `- 【隐式工具】: \`search_clips\` 是底层微观切片检索工具。它不会触发 UI 面板跳转，属于静默工具。你【必须且只能】在【精细检索素材内容】或【生成剪辑方案排期】时使用它。严禁在常规对话阶段滥用此工具。\n`;
+  }
   dynamicSystemPrompt += `- 【频道 D: HITL 反问 / 灵感卡片】: 仅包含 \`ask_user_question\` 与 \`show_hotspots\`。它们不与其他频道互斥，但单步内不得与任何其他工具并发调用。调用后必须停步等待用户回答 / 点击。\n\n`;
   dynamicSystemPrompt += `**【反问规范】**: 只要你的下一步是向用户提问且答案可以枚举（包括 yes/no、是否继续、是否确认这类确认型问题），都必须调用 \`ask_user_question\`，禁止把问题用纯文本抛出来等用户敲字。同一思考里若有多个独立分叉，把它们一起塞进 \`questions\` 数组里一次问完（最多 5 个），避免连续多轮反问。每个问题的 \`options\` 不要写"其他/自定义"——前端会自动追加一个开放式输入框选项。调用后必须立即停步，由用户点击提交触发下一轮。**唯一例外**：纯开放式问题（如"你想加什么字幕文案？"）无法预设选项时才用纯文本提问。\n`;
   dynamicSystemPrompt += `**【反问无铺垫硬规则】**: 决定要调 \`ask_user_question\` 时，**禁止在调用前发出任何引导/铺垫文本**——例如"先确认一下创作方向："、"让我问你几个问题："、"在继续之前我想问下："、"为了更好地帮你..."。这些铺垫文本必然导致问题语义在文本和 widget 之间撕裂。**直接调工具**，问题语境一律写进 \`question\` 字段本身（如 \`question: "在继续展开大纲前，先确认创作方向"\`）。**违反此规则等同于把问题用纯文本抛出来**。\n\n`;
@@ -85,27 +93,38 @@ app.post("/", async (c) => {
   dynamicSystemPrompt += `- 静默：调用后不要在文字回复里说"我已经记住了"——前端有 toast，重复说反而冗余。\n\n`;
   dynamicSystemPrompt += `**【热点 seed 后禁搜规则】**: 若用户最新一条消息以"我想围绕这个留学热点创作："开头（这是 hotspots carousel 卡片点击后塞回对话的固定 seed 格式），消息体里已包含 title / category / source / heatMetric / description 全部上下文。这就是创作起点的完整信息——**禁止再调 \`search_web\` / \`fetch_webpage\` 去补充背景**（毫无必要且常被 Google 反爬挡掉，给用户暴露一段无关的"搜索失败"文本）。直接进入下一步：调 \`ask_user_question\` 确认风格 / 时长 / 角度，或者调 \`updateOutline\` 起草大纲。\n\n`;
   dynamicSystemPrompt += `**【大纲生成规范】**: 当用户要求生成大纲时，若系统提示中已注入了 Selected Assets 的内容摘要，你必须直接基于已提供的摘要进行创作，立即调用 \`updateOutline\` 工具，绝对禁止以"先了解内容"为由推迟或跳过工具调用。此规范仅适用于大纲生成，不影响剪辑方案生成。\n\n`;
-  dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
-  if (!currentOutline) {
-    dynamicSystemPrompt += `**【无大纲先确认】**: 当前项目还没有任何【策划大纲】。在调用 \`generateEditingPlan\` 之前，你必须先调用 \`ask_user_question\` 让用户确认是否直接生成剪辑方案（典型选项："直接生成方案" / "先帮我写一份大纲"）。**禁止用纯文本提问，禁止在用户尚未通过 ask_user_question 回答之前直接调用 generateEditingPlan**。\n\n`;
+  if (!isIdeaMode) {
+    dynamicSystemPrompt += `**【剪辑方案强制流程】**: 生成剪辑方案时，无论是否已有摘要，必须先调用 \`search_clips\` 获取精确的台词切片，再把切片的 id 传入 \`generateEditingPlan\` 的 clipId 字段。禁止跳过 \`search_clips\` 直接生成方案。\n\n`;
+    if (!currentOutline) {
+      dynamicSystemPrompt += `**【无大纲先确认】**: 当前项目还没有任何【策划大纲】。在调用 \`generateEditingPlan\` 之前，你必须先调用 \`ask_user_question\` 让用户确认是否直接生成剪辑方案（典型选项："直接生成方案" / "先帮我写一份大纲"）。**禁止用纯文本提问，禁止在用户尚未通过 ask_user_question 回答之前直接调用 generateEditingPlan**。\n\n`;
+    }
+    dynamicSystemPrompt += `**【素材缺失/相关性不足保护规则】**: 当用户要求基于素材生成剪辑方案时，必须严格执行以下检查：\n`;
+    dynamicSystemPrompt += `  - 若 \`search_clips\` 返回结果为空，立即停止；用 \`ask_user_question\` 告知用户缺少相关切片并询问下一步（典型选项："上传更多素材" / "先用 broll 占位继续生成" / "取消"）。\n`;
+    dynamicSystemPrompt += `  - 若搜索到的切片与目标主题明显无关，同样必须停止；用 \`ask_user_question\` 说明素材库中找不到相关内容并给出选项（典型选项："用 broll 占位继续" / "上传更多素材" / "取消"）。\n`;
+    dynamicSystemPrompt += `  - 严禁在没有匹配切片的情况下凭空生成剪辑方案，也严禁将不相关切片强行套入方案；禁止用纯文本提问，必须走 \`ask_user_question\`。\n\n`;
+    dynamicSystemPrompt += `**【切片内容严禁篡改军规】**: 使用 clipId 引用某个切片时，该切片原有的台词/画面/内容是客观事实，你绝对不能通过修改 \`text\` 字段来"改写"或"替换"切片本身讲的内容。\n`;
+    dynamicSystemPrompt += `  - \`text\` 字段只用于填写该片段在成片中叠加的字幕文案或旁白，不得与切片实际内容矛盾；\n`;
+    dynamicSystemPrompt += `  - 切片的实际内容（原始台词、原始主题）不可被篡改、不可被掩盖、不可被"重新诠释"为与原内容无关的主题；\n`;
+    dynamicSystemPrompt += `  - 若没有合适的切片，该片段应省略 clipId 标记为待补录（broll），而不是强行使用不相关的切片并修改文案来凑数。\n\n`;
+  } else {
+    dynamicSystemPrompt += `**【想法模式专属规范】**: \n`;
+    dynamicSystemPrompt += `  - 用户尚无创意方向：调 \`show_hotspots\` 推荐留学行业潜力话题（一次会话最多 1-2 次）。\n`;
+    dynamicSystemPrompt += `  - 用户已表态：调 \`updateOutline\` 起草/迭代拍摄大纲。\n`;
+    dynamicSystemPrompt += `  - 大纲方向稳定后，**用纯文本输出拍摄/制作建议**——脚本框架、分镜逻辑、镜头/机位/运镜建议、节奏/时长建议、字幕音乐方向，以及【可参考的开源素材方向】（描述类型与英文/中文搜索关键词，引导用户去 Pexels / Pixabay / Coverr 等开源库自行检索；**不要伪造具体 URL 或素材 ID**）。\n`;
+    dynamicSystemPrompt += `  - 用户中途要求"帮我把素材剪出来"或类似剪辑诉求：明确告知"想法模式不剪辑，需要剪辑请新建素材驱动项目"。**不要**自动跳模式。\n`;
+    dynamicSystemPrompt += `  - **【反问选项负面清单】**：在想法模式下调用 \`ask_user_question\` 时，**严禁**把"搜素材 / 直接搜素材 / 匹配素材库 / 开始匹配素材 / 检索切片 / 生成剪辑方案 / 出剪辑稿"这类本地素材或剪辑相关动作写进 \`options\`。下一步候选项必须聚焦在【大纲调整方向】（如"加一段开头钩子" / "节奏再紧一点"）、【确认拍摄方向】（风格/时长/角度）、【是否输出制作建议】（脚本/分镜/可参考的开源素材方向）。违反此规则会让用户点出一个被服务端硬拒的死按钮，UI 体验撕裂。\n\n`;
   }
-  dynamicSystemPrompt += `**【素材缺失/相关性不足保护规则】**: 当用户要求基于素材生成剪辑方案时，必须严格执行以下检查：\n`;
-  dynamicSystemPrompt += `  - 若 \`search_clips\` 返回结果为空，立即停止；用 \`ask_user_question\` 告知用户缺少相关切片并询问下一步（典型选项："上传更多素材" / "先用 broll 占位继续生成" / "取消"）。\n`;
-  dynamicSystemPrompt += `  - 若搜索到的切片与目标主题明显无关，同样必须停止；用 \`ask_user_question\` 说明素材库中找不到相关内容并给出选项（典型选项："用 broll 占位继续" / "上传更多素材" / "取消"）。\n`;
-  dynamicSystemPrompt += `  - 严禁在没有匹配切片的情况下凭空生成剪辑方案，也严禁将不相关切片强行套入方案；禁止用纯文本提问，必须走 \`ask_user_question\`。\n\n`;
-  dynamicSystemPrompt += `**【切片内容严禁篡改军规】**: 使用 clipId 引用某个切片时，该切片原有的台词/画面/内容是客观事实，你绝对不能通过修改 \`text\` 字段来"改写"或"替换"切片本身讲的内容。\n`;
-  dynamicSystemPrompt += `  - \`text\` 字段只用于填写该片段在成片中叠加的字幕文案或旁白，不得与切片实际内容矛盾；\n`;
-  dynamicSystemPrompt += `  - 切片的实际内容（原始台词、原始主题）不可被篡改、不可被掩盖、不可被"重新诠释"为与原内容无关的主题；\n`;
-  dynamicSystemPrompt += `  - 若没有合适的切片，该片段应省略 clipId 标记为待补录（broll），而不是强行使用不相关的切片并修改文案来凑数。\n\n`;
-  dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
-  // 【剪辑方案格式要求】注入
-  dynamicSystemPrompt += `\n\n**【剪辑方案格式要求】**\n`;
-  dynamicSystemPrompt += `1. 每个 clip 只需要你提供两个创作字段：\n`;
-  dynamicSystemPrompt += `   - text：该片段在成片中呈现的台词 / 旁白 / 字幕文案\n`;
-  dynamicSystemPrompt += `   - description：剪辑意图，必须写明镜头、画面、节奏、转场等具有直接指导价值的信息，不要笼统概述\n`;
-  dynamicSystemPrompt += `2. 若要使用某段源素材，把 search_clips 返回结果中对应切片的 id 字段原样填到 clipId。后端会据此自动补全 assetId、startTime、endTime 及片段类型，你【不需要也禁止】重复输出这些字段。\n`;
-  dynamicSystemPrompt += `3. 对于不依赖具体源素材的片段（空镜、纯旁白、转场、待补录镜头），省略 clipId 即可，后端会自动识别为 broll。\n`;
-  dynamicSystemPrompt += `4. 禁止自造 clipId —— clipId 必须来自 search_clips 的返回结果。\n\n`;
+  if (!isIdeaMode) {
+    dynamicSystemPrompt += `**操作要求**: 如果用户的指令包含多个频道（如“搜一下关于猫的素材并帮我改一下大纲”），你必须分两步走：第一回合仅执行其中一个频道的工具，在回复中告知用户已完成该步骤，并询问是否继续执行下一步。禁止在单次响应中同时触发两个面板的更新。\n\n`;
+    // 【剪辑方案格式要求】注入
+    dynamicSystemPrompt += `\n\n**【剪辑方案格式要求】**\n`;
+    dynamicSystemPrompt += `1. 每个 clip 只需要你提供两个创作字段：\n`;
+    dynamicSystemPrompt += `   - text：该片段在成片中呈现的台词 / 旁白 / 字幕文案\n`;
+    dynamicSystemPrompt += `   - description：剪辑意图，必须写明镜头、画面、节奏、转场等具有直接指导价值的信息，不要笼统概述\n`;
+    dynamicSystemPrompt += `2. 若要使用某段源素材，把 search_clips 返回结果中对应切片的 id 字段原样填到 clipId。后端会据此自动补全 assetId、startTime、endTime 及片段类型，你【不需要也禁止】重复输出这些字段。\n`;
+    dynamicSystemPrompt += `3. 对于不依赖具体源素材的片段（空镜、纯旁白、转场、待补录镜头），省略 clipId 即可，后端会自动识别为 broll。\n`;
+    dynamicSystemPrompt += `4. 禁止自造 clipId —— clipId 必须来自 search_clips 的返回结果。\n\n`;
+  }
 
                 // [Arch] 将资产聚合状态注入 Agent 记忆，作为剪辑方案生成的 SSOT 依赖
                 const retrievedIds = (currProject.retrievedAssetIds as string[]) || [];
@@ -224,6 +243,9 @@ app.post("/", async (c) => {
         }).strict(),
         execute: async (args) => {
           try {
+            if (currProject.workflowMode === 'idea') {
+              return { success: false, error: "该工具在【想法驱动】模式下不可用 — 当前项目处于创意/前期策划阶段，用户尚无素材。请改为用纯文本输出拍摄/制作建议（脚本、分镜、节奏、可参考的开源素材方向），或建议用户新建【素材驱动】项目后再剪辑。" };
+            }
             if (!args || !args.title || !args.clips || !Array.isArray(args.clips)) {
               console.warn("⚠️ [AI WARN] generateEditingPlan 拦截到空传参，已触发重试");
               return { success: false, error: "Missing required parameters. 'title' and 'clips' are mandatory." };
@@ -436,6 +458,9 @@ app.post("/", async (c) => {
           reason: z.enum(['workflow-init', 'user-intent', 'no-assets-found']).describe('触发原因：workflow-init=工作流启动、user-intent=用户主动表达、no-assets-found=检索为空建议补素材'),
         }).strict(),
         execute: async ({ reason }) => {
+          if (currProject.workflowMode === 'idea') {
+            return { ok: false, error: "该工具在【想法驱动】模式下不可用 — 该模式不涉及本地素材库。" };
+          }
           return { ok: true, reason };
         },
       }),
@@ -448,6 +473,9 @@ app.post("/", async (c) => {
         }),
         execute: async ({ query, limit }) => {
           try {
+            if (currProject.workflowMode === 'idea') {
+              return { success: false, error: "该工具在【想法驱动】模式下不可用 — 该模式不涉及本地素材库。请用纯文本回复输出拍摄建议与可参考的开源素材方向（描述类型与关键词，让用户自行去 Pexels / Pixabay 检索）。" };
+            }
             console.log(`[RAG-Macro] LLM 请求视频大盘检索: "${query}"`);
             const [vector] = await generateEmbeddings([query]);
 
@@ -548,6 +576,9 @@ app.post("/", async (c) => {
         }),
         execute: async ({ query, assetIds, limit }) => {
           try {
+            if (currProject.workflowMode === 'idea') {
+              return { success: false, error: "该工具在【想法驱动】模式下不可用 — 该模式不涉及本地素材库。请用纯文本回复输出拍摄建议与可参考的开源素材方向。" };
+            }
             if (!assetIds || assetIds.length === 0) {
               return { success: false, error: "必须提供 assetIds 才能进行精搜。请提示用户先挑素材，或先调用 search_assets 圈定范围。" };
             }
