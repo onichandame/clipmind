@@ -26,6 +26,7 @@ import { authFetch, logout } from '../lib/auth';
 import { env } from '../env';
 import { useLayoutStore } from '../store/useLayoutStore';
 import { DropdownMenu, type DropdownMenuItem } from './DropdownMenu';
+import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { toast } from './Toast';
 
 type Mode = 'material' | 'idea' | 'freechat';
@@ -59,6 +60,7 @@ export function Sidebar({ hasUpdate, onCheckUpdate }: SidebarProps) {
 
   const activeId = location.pathname.startsWith('/projects/') ? location.pathname.split('/')[2] : null;
   const isLibrary = location.pathname.startsWith('/library');
+  const isHome = location.pathname === '/';
   const widthClass = expanded ? 'w-[260px]' : 'w-14';
 
   useEffect(() => {
@@ -89,7 +91,7 @@ export function Sidebar({ hasUpdate, onCheckUpdate }: SidebarProps) {
 
       <NavRow
         expanded={expanded}
-        active={false}
+        active={isHome}
         icon={<Plus className="w-4 h-4" />}
         label="新建项目"
         onClick={() => navigate('/')}
@@ -335,6 +337,7 @@ function ProjectRow({
 }) {
   const Icon = (project.workflowMode && MODE_ICON[project.workflowMode]) || MessageCircle;
   const [editing, setEditing] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -410,7 +413,7 @@ function ProjectRow({
       danger: true,
       // TODO: backend has no soft-delete; once `projects.deletedAt` lands,
       // change this to delete + undo toast instead of hard-DELETE.
-      onClick: () => deleteMutation.mutate(),
+      onClick: () => setConfirmingDelete(true),
     },
   ];
 
@@ -436,40 +439,51 @@ function ProjectRow({
   }
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onClick();
-        }
-      }}
-      className={`group flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left cursor-pointer transition-colors ${stateClass}`}
-      title={project.title}
-    >
-      <Icon className="w-3.5 h-3.5 flex-shrink-0 opacity-70" />
-      <span className="text-[13px] truncate min-w-0 flex-1">{project.title || '未命名'}</span>
-      <DropdownMenu
-        items={items}
-        align="right"
-        width={144}
-        trigger={({ onClick: triggerClick, ref, open }) => (
-          <button
-            ref={ref}
-            type="button"
-            onClick={triggerClick}
-            className={`flex-shrink-0 p-1 rounded-md cursor-pointer text-zinc-400 dark:text-zinc-500 hover:bg-black/10 dark:hover:bg-white/10 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors ${
-              open || isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
-            }`}
-            title="更多"
-          >
-            <MoreHorizontal className="w-3.5 h-3.5" />
-          </button>
-        )}
-      />
-    </div>
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+        className={`group flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left cursor-pointer transition-colors ${stateClass}`}
+        title={project.title}
+      >
+        <Icon className="w-3.5 h-3.5 flex-shrink-0 opacity-70" />
+        <span className="text-[13px] truncate min-w-0 flex-1">{project.title || '未命名'}</span>
+        <DropdownMenu
+          items={items}
+          align="right"
+          width={144}
+          trigger={({ onClick: triggerClick, ref, open }) => (
+            <button
+              ref={ref}
+              type="button"
+              onClick={triggerClick}
+              className={`flex-shrink-0 p-1 rounded-md cursor-pointer text-zinc-400 dark:text-zinc-500 hover:bg-black/10 dark:hover:bg-white/10 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors ${
+                open || isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
+              }`}
+              title="更多"
+            >
+              <MoreHorizontal className="w-3.5 h-3.5" />
+            </button>
+          )}
+        />
+      </div>
+      {confirmingDelete && (
+        <DeleteConfirmModal
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => {
+            setConfirmingDelete(false);
+            deleteMutation.mutate();
+          }}
+        />
+      )}
+    </>
   );
 }
 

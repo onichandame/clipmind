@@ -33,7 +33,7 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-zinc-50 dark:bg-zinc-900 px-6 transition-colors duration-200">
+    <div className="flex h-screen w-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950 px-6 transition-colors duration-200">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-8 shadow-sm">
         <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">注册 ClipMind</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">创建账号，开启 AI 视频创作。</p>

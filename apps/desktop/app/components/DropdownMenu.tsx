@@ -45,10 +45,15 @@ export function DropdownMenu({ items, trigger, align = 'right', width = 160 }: D
     // The sidebar's history list is its own scroll container; close on any
     // scroll so the fixed-position menu doesn't drift away from the trigger.
     const onScroll = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScroll, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
     };
   }, [open]);

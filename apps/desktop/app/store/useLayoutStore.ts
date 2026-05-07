@@ -25,12 +25,6 @@ export const useLayoutStore = create<LayoutState>()(
     {
       name: 'clipmind:layout',
       storage: layoutStorage,
-      // Bump version after dropping the dual-rail era's `navRailExpanded` /
-      // `assistantPanelOpen` fields. The new sidebar architecture is too
-      // different from the old one to migrate field-by-field — flatten any
-      // legacy persisted blob (or a missing one) to the new default.
-      version: 2,
-      migrate: () => ({ sidebarExpanded: true }),
       partialize: (state) => ({ sidebarExpanded: state.sidebarExpanded }),
     },
   ),
