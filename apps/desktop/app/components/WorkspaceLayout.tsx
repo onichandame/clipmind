@@ -15,6 +15,7 @@ interface Project {
   id: string;
   title: string;
   createdAt: string | Date;
+  workflowMode?: 'material' | 'idea' | 'freechat' | null;
   retrievedClips?: any[];
   editingPlans?: any[];
 }
@@ -37,6 +38,7 @@ export function WorkspaceLayout({ project, outline, initialMessages = [] }: Work
   });
 
   const outlineContent = useCanvasStore((s) => s.projects[project.id]?.outlineContent || "");
+  const setActiveMode = useCanvasStore((s) => s.setActiveMode);
   const hasClips = (project.retrievedClips?.length ?? 0) > 0;
   const hasPlans = (project.editingPlans?.length ?? 0) > 0;
   const hasOutline = !!outline || outlineContent.trim().length > 0;
@@ -69,6 +71,14 @@ export function WorkspaceLayout({ project, outline, initialMessages = [] }: Work
     return () => window.clearTimeout(t);
   }, [showRightPanel]);
 
+  useEffect(() => {
+    if (project.workflowMode === 'idea') {
+      setActiveMode('outline');
+    } else {
+      setActiveMode(hasPlans ? 'plan' : 'outline');
+    }
+  }, [project.id, project.workflowMode, hasPlans, setActiveMode]);
+
   return (
     <div className="h-full w-full overflow-hidden">
       <PanelGroup
@@ -89,7 +99,7 @@ export function WorkspaceLayout({ project, outline, initialMessages = [] }: Work
           collapsible
           collapsedSize="0%"
         >
-          {showRightPanel && <RightPanel projectId={project.id} outline={outline} />}
+          {showRightPanel && <RightPanel projectId={project.id} outline={outline} workflowMode={project.workflowMode ?? null} />}
         </Panel>
       </PanelGroup>
     </div>

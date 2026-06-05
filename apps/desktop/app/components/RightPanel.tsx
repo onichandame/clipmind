@@ -14,6 +14,7 @@ interface OutlineData { contentMd: string; version: number; }
 interface RightPanelProps {
   projectId: string;
   outline: OutlineData | null;
+  workflowMode?: 'material' | 'idea' | 'freechat' | null;
 }
 
 type TabId = 'outline' | 'plan';
@@ -23,17 +24,22 @@ const TABS: Array<{ id: TabId; label: string; icon: any }> = [
   { id: 'plan', label: '剪辑方案', icon: ListChecks },
 ];
 
-export function RightPanel({ projectId, outline }: RightPanelProps) {
+export function RightPanel({ projectId, outline, workflowMode }: RightPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('outline');
+  const tabs = workflowMode === 'idea' ? TABS.filter((tab) => tab.id !== 'plan') : TABS;
   const setOutlineContent = useCanvasStore((s) => s.setOutlineContent);
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
   // Chat tool calls flip the canvas activeMode (outline/plan); mirror that into the tab.
   // 'footage' is no longer a tab — it falls through to the current tab.
   const activeMode = useCanvasStore((s) => s.activeMode);
   useEffect(() => {
+    if (workflowMode === 'idea') {
+      setActiveTab('outline');
+      return;
+    }
     if (activeMode === 'outline') setActiveTab('outline');
     else if (activeMode === 'plan') setActiveTab('plan');
-  }, [activeMode]);
+  }, [activeMode, workflowMode]);
 
   const { data: projectData } = useQuery({
     queryKey: ['project', projectId],
@@ -50,8 +56,8 @@ export function RightPanel({ projectId, outline }: RightPanelProps) {
   // Auto-route to plan tab whenever a new plan lands.
   const lastPlansLen = useCanvasStore((s) => s.projects[projectId]?.editingPlans?.length || 0);
   useEffect(() => {
-    if (lastPlansLen > 0) setActiveTab('plan');
-  }, [lastPlansLen]);
+    if (workflowMode !== 'idea' && lastPlansLen > 0) setActiveTab('plan');
+  }, [lastPlansLen, workflowMode]);
 
   const editor = useEditor({
     extensions: [StarterKit, Markdown.configure({ html: false })],
@@ -82,7 +88,7 @@ export function RightPanel({ projectId, outline }: RightPanelProps) {
     <div className="flex flex-col h-full bg-white dark:bg-zinc-950">
       {/* Tabs */}
       <div className="flex items-center border-b border-zinc-200 dark:border-zinc-800 px-3">
-        {TABS.map(({ id, label, icon: Icon }) => (
+        {tabs.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             onClick={() => setActiveTab(id)}
