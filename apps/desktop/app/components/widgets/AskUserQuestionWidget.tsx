@@ -4,7 +4,6 @@ import type { WidgetProps } from './registry';
 
 interface Option {
   label: string;
-  value: string;
   description?: string;
 }
 
@@ -13,16 +12,16 @@ interface Question {
   options: Option[];
 }
 
-type Selection = { kind: 'preset'; value: string } | { kind: 'custom'; value: string };
+type Selection = { kind: 'preset'; label: string } | { kind: 'custom'; label: string };
 
 const CUSTOM_OPTION_LABEL = '其他（自己说）';
 
 function packAnswer(questions: Question[], selections: Map<number, Selection>): string {
   if (questions.length === 1) {
-    return selections.get(0)?.value.trim() ?? '';
+    return selections.get(0)?.label.trim() ?? '';
   }
   return questions
-    .map((q, i) => `[问题 ${i + 1}] ${q.question}\n回答：${selections.get(i)?.value.trim() ?? ''}`)
+    .map((q, i) => `[问题 ${i + 1}] ${q.question}\n回答：${selections.get(i)?.label.trim() ?? ''}`)
     .join('\n\n');
 }
 
@@ -70,13 +69,13 @@ export function AskUserQuestionWidget({ part, onSubmit, answer }: WidgetProps) {
   const headerTitle = questions.length === 1 ? questions[0].question : `帮我确认 ${questions.length} 件事`;
   const allAnswered = questions.every((_, i) => {
     const sel = selections.get(i);
-    return sel && sel.value.trim().length > 0;
+    return sel && sel.label.trim().length > 0;
   });
 
-  const handlePickPreset = (qIdx: number, value: string) => {
+  const handlePickPreset = (qIdx: number, label: string) => {
     if (isAnswered) return;
     const next = new Map(selections);
-    next.set(qIdx, { kind: 'preset', value });
+    next.set(qIdx, { kind: 'preset', label });
     setSelections(next);
   };
 
@@ -84,7 +83,7 @@ export function AskUserQuestionWidget({ part, onSubmit, answer }: WidgetProps) {
     if (isAnswered) return;
     const draft = customDrafts.get(qIdx) ?? '';
     const next = new Map(selections);
-    next.set(qIdx, { kind: 'custom', value: draft });
+    next.set(qIdx, { kind: 'custom', label: draft });
     setSelections(next);
   };
 
@@ -94,7 +93,7 @@ export function AskUserQuestionWidget({ part, onSubmit, answer }: WidgetProps) {
     drafts.set(qIdx, text);
     setCustomDrafts(drafts);
     const next = new Map(selections);
-    next.set(qIdx, { kind: 'custom', value: text });
+    next.set(qIdx, { kind: 'custom', label: text });
     setSelections(next);
   };
 
@@ -125,11 +124,11 @@ export function AskUserQuestionWidget({ part, onSubmit, answer }: WidgetProps) {
           const isMulti = questions.length > 1;
           const sel = selections.get(qIdx);
           const parsedThis = parsedAnswers?.get(qIdx);
-          // In answered mode, find which option matches the parsed answer (if any).
-          const matchedOptionValue = isAnswered && parsedThis
-            ? q.options.find((o) => o.value === parsedThis)?.value ?? null
+          // In answered mode, find which option label matches the parsed answer (if any).
+          const matchedOptionLabel = isAnswered && parsedThis
+            ? q.options.find((o) => o.label === parsedThis)?.label ?? null
             : null;
-          const showUnmatchedAnswer = isAnswered && parsedThis && !matchedOptionValue;
+          const showUnmatchedAnswer = isAnswered && parsedThis && !matchedOptionLabel;
           const showFallbackAnswer = isAnswered && !parsedThis;
 
           const options = q.options ?? [];
@@ -144,16 +143,16 @@ export function AskUserQuestionWidget({ part, onSubmit, answer }: WidgetProps) {
                 </div>
               )}
               <div className="space-y-1.5">
-                {options.map((opt) => {
-                  const isPicked = !isAnswered && sel?.kind === 'preset' && sel.value === opt.value;
-                  const isAnsweredMatch = isAnswered && matchedOptionValue === opt.value;
+                {options.map((opt, optIdx) => {
+                  const isPicked = !isAnswered && sel?.kind === 'preset' && sel.label === opt.label;
+                  const isAnsweredMatch = isAnswered && matchedOptionLabel === opt.label;
                   const dim = isAnswered && !isAnsweredMatch;
                   return (
                     <button
-                      key={opt.value}
+                      key={`${opt.label}-${optIdx}`}
                       type="button"
                       disabled={isAnswered}
-                      onClick={() => handlePickPreset(qIdx, opt.value)}
+                      onClick={() => handlePickPreset(qIdx, opt.label)}
                       className={`w-full text-left rounded-xl border px-3 py-2 transition-all ${
                         isAnswered ? 'cursor-default' : 'cursor-pointer'
                       } ${
