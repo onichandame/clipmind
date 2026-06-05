@@ -1,10 +1,49 @@
 import { generateText } from "ai";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { mediaFiles } from "@clipmind/db";
+import { assetChunks, mediaFiles } from "@clipmind/db";
 import { createAIModel } from "../utils/ai";
 import { generateEmbeddings } from "../utils/embeddings";
-import { upsertVectors, QDRANT_CHUNKS_COLLECTION, QDRANT_SUMMARY_COLLECTION } from "../utils/qdrant";
+import { deleteVectorsByAssetId, upsertVectors, QDRANT_CHUNKS_COLLECTION, QDRANT_SUMMARY_COLLECTION } from "../utils/qdrant";
+
+export const EMPTY_TRANSCRIPT_SUMMARY = '未识别到有效语音内容，可作为无口播或环境声素材使用。';
+
+async function upsertSummaryVector(assetId: string, summary: string) {
+  const [summaryVector] = await generateEmbeddings([summary]);
+  const summaryPoint = {
+    id: assetId,
+    vector: summaryVector,
+    payload: {
+      assetId,
+      text: summary,
+      type: 'summary'
+    }
+  };
+
+  await upsertVectors([summaryPoint], QDRANT_SUMMARY_COLLECTION);
+}
+
+export async function completeAssetWithoutTranscript(mediaFileId: string, summary = EMPTY_TRANSCRIPT_SUMMARY) {
+  const assetId = mediaFileId;
+  try {
+    await deleteVectorsByAssetId(assetId, QDRANT_CHUNKS_COLLECTION);
+  } catch (error) {
+    await db.update(mediaFiles).set({ status: 'error', asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
+    throw error;
+  }
+
+  await db.delete(assetChunks).where(eq(assetChunks.mediaFileId, mediaFileId));
+
+  await db.update(mediaFiles).set({
+    status: 'ready',
+    asrStatus: 'completed',
+    summary,
+  }).where(eq(mediaFiles.id, mediaFileId));
+
+  upsertSummaryVector(assetId, summary)
+    .then(() => console.log(`[Processor] ✅ 空转写资产 ${assetId} 的 fallback summary 已推入 Qdrant。`))
+    .catch(error => console.error(`[Processor] 空转写资产 ${assetId} fallback summary 向量化失败:`, error));
+}
 
 /**
  * 资产后处理中枢：处理 ASR 切片，生成 LLM 总结，并分别推入 Qdrant。
@@ -17,6 +56,8 @@ export async function processAssetPostASR(mediaFileId: string, chunks: any[]) {
     // ============================================
     // 阶段 1: 建立微观片段的向量索引 (Chunks)
     // ============================================
+    await deleteVectorsByAssetId(assetId, QDRANT_CHUNKS_COLLECTION);
+
     const texts = chunks.map(c => c.transcriptText);
     const chunkVectors = await generateEmbeddings(texts);
     
@@ -57,18 +98,7 @@ export async function processAssetPostASR(mediaFileId: string, chunks: any[]) {
     // ============================================
     // 阶段 3: 将宏观总结向量化并推入 Qdrant (Summary)
     // ============================================
-    const [summaryVector] = await generateEmbeddings([summary]);
-    const summaryPoint = {
-      id: crypto.randomUUID(), // 此处用 UUID 作为 PointID，通过 Payload 绑定 assetId
-      vector: summaryVector,
-      payload: {
-        assetId,
-        text: summary,
-        type: 'summary'
-      }
-    };
-    
-    await upsertVectors([summaryPoint], QDRANT_SUMMARY_COLLECTION);
+    await upsertSummaryVector(assetId, summary);
     console.log(`[Processor] ✅ 资产总结向量已推入 Qdrant (${QDRANT_SUMMARY_COLLECTION})。`);
 
     // ============================================

@@ -39,7 +39,7 @@ export async function ensureCollectionExists(collectionName: string = QDRANT_CHU
 export async function deleteVectorsByAssetId(assetId: string, collectionName: string = QDRANT_CHUNKS_COLLECTION) {
   const config = getQdrantConfig();
 
-  const res = await fetch(`${config.url}/collections/${collectionName}/points/delete`, {
+  const res = await fetch(`${config.url}/collections/${collectionName}/points/delete?wait=true`, {
     method: 'POST',
     headers: config.headers,
     body: JSON.stringify({
@@ -50,6 +50,10 @@ export async function deleteVectorsByAssetId(assetId: string, collectionName: st
       }
     })
   });
+
+  if (res.status === 404) {
+    return;
+  }
 
   if (!res.ok) {
     throw new Error(`Qdrant Delete failed: ${await res.text()}`);
