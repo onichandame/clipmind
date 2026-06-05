@@ -2,7 +2,7 @@
 
 export interface Asset {
   id: string;               // project_assets.id
-  mediaFileId: string;      // media_files.id (also used to look up per-device local path in Rust SQLite)
+  mediaFileId: string;      // media_files.id; local identity is sha256
   filename: string;
   sha256: string;           // mirror of media_files.fileHash; used for strict relink verification
   backupStatus?: 'local_only' | 'uploading' | 'backed_up' | 'stale' | 'failed' | null;
@@ -11,8 +11,11 @@ export interface Asset {
   videoOssUrl?: string | null;
   fileSize: number;
   duration: number;
-  status: 'ready' | 'processing' | 'error';
-  asrStatus?: 'pending' | 'processing' | 'completed' | 'failed' | 'skipped' | null;
+  status: 'ready' | 'processing' | 'failed';
+  transcriptKind?: 'speech' | 'empty' | 'skipped' | null;
+  processingStage?: 'upload' | 'thumbnail' | 'asr' | 'embedding' | 'qdrant' | 'processing' | null;
+  failureStage?: 'upload' | 'thumbnail' | 'asr' | 'embedding' | 'qdrant' | 'processing' | null;
+  failureReason?: string | null;
   createdAt: string;
   summary?: string | null;
 }
@@ -24,10 +27,16 @@ export type AnalysisStage =
   | 'analysis_failed'
   | 'upload_failed';
 
-export function getAnalysisStage(asset: Pick<Asset, 'status' | 'asrStatus' | 'summary'>): AnalysisStage {
-  if (asset.status === 'error') return 'upload_failed';
+export function getAnalysisStage(asset: Pick<Asset, 'status' | 'transcriptKind' | 'failureStage' | 'summary'>): AnalysisStage {
+  if (asset.status === 'failed') {
+    return asset.failureStage === 'asr'
+      || asset.failureStage === 'embedding'
+      || asset.failureStage === 'qdrant'
+      || asset.failureStage === 'processing'
+      ? 'analysis_failed'
+      : 'upload_failed';
+  }
   if (asset.status !== 'ready') return 'uploading';
-  if (asset.asrStatus === 'failed') return 'analysis_failed';
-  if (asset.asrStatus === 'completed' && asset.summary) return 'analyzed';
+  if (asset.transcriptKind && asset.summary) return 'analyzed';
   return 'analyzing';
 }

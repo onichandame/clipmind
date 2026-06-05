@@ -5,8 +5,9 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
@@ -98,6 +99,8 @@ async fn backup_video_to_cloud(
     media_file_id: String,
     local_path: String,
     filename: String,
+    expected_sha256: String,
+    expected_size: i64,
     server_url: String,
     session_token: String,
 ) -> Result<(), String> {
@@ -106,6 +109,28 @@ async fn backup_video_to_cloud(
     }
     let client = Client::new();
 
+    let actual_hash = compute_sha256(&local_path).await?;
+    if actual_hash != expected_sha256 {
+        return Err(format!(
+            "{} backup hash_mismatch: 本地文件与素材哈希不一致 (expected {} got {})",
+            env_tag(),
+            expected_sha256,
+            actual_hash,
+        ));
+    }
+    let actual_size = tokio::fs::metadata(&local_path)
+        .await
+        .map_err(|e| format!("{} 读取备份源文件大小失败: {}", env_tag(), e))?
+        .len() as i64;
+    if expected_size >= 0 && actual_size != expected_size {
+        return Err(format!(
+            "{} backup size_mismatch: 本地文件大小与素材记录不一致 (expected {} got {})",
+            env_tag(),
+            expected_size,
+            actual_size,
+        ));
+    }
+
     // 1. 先把 uploading 持久化到服务端，让其它会话/设备立刻看到「正在备份」。
     notify_backup_status(&client, &server_url, &session_token, &media_file_id, "uploading").await?;
 
@@ -113,6 +138,7 @@ async fn backup_video_to_cloud(
     let upload_result = upload_file_and_notify_with_progress(
         &app, &client, &server_url, &session_token,
         &media_file_id, "video-backup", &local_path, &filename,
+        Some(&expected_sha256), Some(expected_size),
     ).await;
 
     // 3. 失败时回写 failed（best-effort，吞错以不掩盖原始错误）。成功时由 oss-callback 写 backed_up。
@@ -261,7 +287,6 @@ async fn download_asset_to_local(
     let target_str = target.to_string_lossy().to_string();
     local_db::upsert(
         pool.inner(),
-        &media_file_id,
         &target_str,
         actual_size as i64,
         &expected_sha256,
@@ -331,23 +356,20 @@ impl ProcessingManager {
 
 // ============== Server contract structs ==============
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AssetCreatePayload {
-    project_id: String,
-    file_hash: String,
-    filename: String,
-    file_size: u64,
-    duration: Option<i32>,
-    asr_status: Option<String>,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AssetCreateResponse {
+struct AssetFinalizeResponse {
     asset_id: String,       // project_assets.id
     media_file_id: String,  // media_files.id
     already_processed: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachPayload<'a> {
+    project_id: &'a str,
+    file_hash: &'a str,
+    filename: &'a str,
 }
 
 #[derive(Serialize)]
@@ -362,10 +384,43 @@ struct PreflightPayload<'a> {
 #[serde(rename_all = "camelCase")]
 struct PreflightResponse {
     dedup_hit: bool,
-    asset_id: Option<String>,
     media_file_id: Option<String>,
     #[allow(dead_code)]
     already_processed: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportTokenRequest<'a> {
+    file_hash: &'a str,
+    has_audio: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportUploadPart {
+    upload_url: String,
+    content_type: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportTokenResponse {
+    finalize_token: String,
+    thumbnail: ImportUploadPart,
+    audio: Option<ImportUploadPart>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FinalizePayload<'a> {
+    project_id: &'a str,
+    file_hash: &'a str,
+    filename: &'a str,
+    file_size: u64,
+    duration: Option<i32>,
+    has_audio: bool,
+    finalize_token: &'a str,
 }
 
 #[derive(Serialize)]
@@ -392,6 +447,8 @@ struct UploadTokenResponse {
     object_key: String,
     /// Present when already_uploaded == false.
     content_type: Option<String>,
+    #[serde(default)]
+    upload_headers: HashMap<String, String>,
     /// Present when already_uploaded == false.
     callback_token: Option<String>,
 }
@@ -466,11 +523,15 @@ async fn upload_file_and_notify(
 
     let stream = FramedRead::new(file, BytesCodec::new());
     let body = reqwest::Body::wrap_stream(stream);
-    let put_res = client
+    let mut put_req = client
         .put(&upload_url)
         .header(CONTENT_LENGTH, size)
         .header(CONTENT_TYPE, &content_type)
-        .body(body)
+        .body(body);
+    for (key, value) in &token_res.upload_headers {
+        put_req = put_req.header(key, value);
+    }
+    let put_res = put_req
         .send()
         .await
         .map_err(|e| format!("{} {} 直传网络错误: {}", env_tag(), kind, e))?;
@@ -511,6 +572,45 @@ async fn upload_file_and_notify(
     Ok(())
 }
 
+async fn upload_file_to_signed_url(
+    client: &Client,
+    kind: &str,
+    file_path: &str,
+    upload_url: &str,
+    content_type: &str,
+) -> Result<(), String> {
+    let file = tokio::fs::File::open(file_path)
+        .await
+        .map_err(|e| format!("{} 无法打开 {} ({}): {}", env_tag(), kind, file_path, e))?;
+    let size = file
+        .metadata()
+        .await
+        .map_err(|e| format!("{} 读取 {} 元数据失败: {}", env_tag(), kind, e))?
+        .len();
+    let stream = FramedRead::new(file, BytesCodec::new());
+    let body = reqwest::Body::wrap_stream(stream);
+    let put_res = client
+        .put(upload_url)
+        .header(CONTENT_LENGTH, size)
+        .header(CONTENT_TYPE, content_type)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("{} {} 临时直传网络错误: {}", env_tag(), kind, e))?;
+    if !put_res.status().is_success() {
+        let status = put_res.status();
+        let err_text = put_res.text().await.unwrap_or_default();
+        return Err(format!(
+            "{} {} 临时直传被 OSS 拒绝! 状态码: {}, 错误信息: {}",
+            env_tag(),
+            kind,
+            status,
+            err_text
+        ));
+    }
+    Ok(())
+}
+
 // 视频原片上传专用变体：在 PUT body 上挂一层进度计数器，每 ≥500ms 通过 Tauri event
 // 把字节数发给前端做进度条。audio/thumbnail 不需要这条路径（小文件、不在 UI 主轴）。
 async fn upload_file_and_notify_with_progress(
@@ -522,6 +622,8 @@ async fn upload_file_and_notify_with_progress(
     kind: &str,
     file_path: &str,
     filename_for_token: &str,
+    expected_sha256: Option<&str>,
+    expected_size: Option<i64>,
 ) -> Result<(), String> {
     use futures_util::StreamExt;
 
@@ -533,6 +635,14 @@ async fn upload_file_and_notify_with_progress(
         .await
         .map_err(|e| format!("{} 读取 {} 元数据失败: {}", env_tag(), kind, e))?
         .len();
+    if let Some(expected) = expected_size {
+        if expected >= 0 && size as i64 != expected {
+            return Err(format!(
+                "{} {} size_mismatch before upload: expected {} got {}",
+                env_tag(), kind, expected, size
+            ));
+        }
+    }
 
     let token_req = UploadTokenRequest {
         kind,
@@ -594,8 +704,15 @@ async fn upload_file_and_notify_with_progress(
     let asset_id_owned = media_file_id.to_string();
     let mut sent: u64 = 0;
     let mut last_emit = Instant::now();
+    let streamed_hasher = expected_sha256.map(|_| Arc::new(Mutex::new(Sha256::new())));
+    let streamed_hasher_for_stream = streamed_hasher.clone();
     let stream = FramedRead::new(file, BytesCodec::new()).map(move |chunk| {
         if let Ok(ref bytes) = chunk {
+            if let Some(hasher) = &streamed_hasher_for_stream {
+                if let Ok(mut guard) = hasher.lock() {
+                    guard.update(bytes);
+                }
+            }
             sent += bytes.len() as u64;
             let done = sent >= size;
             if last_emit.elapsed().as_millis() >= 500 || done {
@@ -614,11 +731,15 @@ async fn upload_file_and_notify_with_progress(
     });
     let body = reqwest::Body::wrap_stream(stream);
 
-    let put_res = client
+    let mut put_req = client
         .put(&upload_url)
         .header(CONTENT_LENGTH, size)
         .header(CONTENT_TYPE, &content_type)
-        .body(body)
+        .body(body);
+    for (key, value) in &token_res.upload_headers {
+        put_req = put_req.header(key, value);
+    }
+    let put_res = put_req
         .send()
         .await
         .map_err(|e| format!("{} {} 直传网络错误: {}", env_tag(), kind, e))?;
@@ -632,6 +753,21 @@ async fn upload_file_and_notify_with_progress(
             status,
             err_text
         ));
+    }
+
+    if let (Some(expected), Some(hasher)) = (expected_sha256, streamed_hasher) {
+        let actual = hasher
+            .lock()
+            .map_err(|_| format!("{} {} streamed hash lock poisoned", env_tag(), kind))?
+            .clone()
+            .finalize();
+        let actual_hex = format!("{:x}", actual);
+        if actual_hex != expected {
+            return Err(format!(
+                "{} {} hash_mismatch after upload: expected {} got {}",
+                env_tag(), kind, expected, actual_hex
+            ));
+        }
     }
 
     let cb_payload = OssCallbackPayload {
@@ -725,16 +861,39 @@ async fn process_video_asset(
             .await
             .map_err(|e| format!("{} preflight 响应解析失败: {}", env_tag(), e))?;
         if preflight_resp.dedup_hit {
-            let asset_id = preflight_resp.asset_id.ok_or_else(||
-                format!("{} preflight 命中但缺少 assetId", env_tag()))?;
             let media_file_id = preflight_resp.media_file_id.ok_or_else(||
                 format!("{} preflight 命中但缺少 mediaFileId", env_tag()))?;
+            let attach_payload = AttachPayload {
+                project_id: &project_id,
+                file_hash: &file_hash,
+                filename: &filename,
+            };
+            let attach_res = preflight_client
+                .post(format!("{}/api/assets/attach", server_url))
+                .bearer_auth(&session_token)
+                .json(&attach_payload)
+                .send()
+                .await
+                .map_err(|e| format!("{} attach 网络错误: {}", env_tag(), e))?;
+            if !attach_res.status().is_success() {
+                let status = attach_res.status();
+                let err_text = attach_res.text().await.unwrap_or_default();
+                return Err(format!(
+                    "{} attach 被服务器拒绝! 状态码: {}, 错误: {}",
+                    env_tag(),
+                    status,
+                    err_text
+                ));
+            }
+            let attach_resp: AssetFinalizeResponse = attach_res
+                .json()
+                .await
+                .map_err(|e| format!("{} attach 响应解析失败: {}", env_tag(), e))?;
             // Bind this device's local copy to the deduped media_file. Backend
             // doesn't carry per-device paths anymore; this is the source of truth.
             let pool = app.state::<SqlitePool>();
             if let Err(e) = local_db::upsert(
                 pool.inner(),
-                &media_file_id,
                 &local_path,
                 file_size_bytes as i64,
                 &file_hash,
@@ -747,8 +906,8 @@ async fn process_video_asset(
                 "upload-progress",
                 serde_json::json!({ "id": &job_id, "progress": 100 }),
             );
-            println!("[Job {}] preflight 命中，跳过 FFmpeg 与上传。asset_id={}", job_id, asset_id);
-            return Ok(asset_id);
+            println!("[Job {}] preflight 命中，跳过 FFmpeg 与上传。asset_id={}, media_file_id={}", job_id, attach_resp.asset_id, media_file_id);
+            return Ok(attach_resp.asset_id);
         }
     }
 
@@ -902,74 +1061,48 @@ async fn process_video_asset(
     );
     drop(_permit);
 
-    // ===== 预登记资产行（preflight 已确认是新文件，这里只是创建 media_files + project_assets）=====
+    // ===== 上传临时音频/缩略图，再由服务端 finalize 原子创建/复用 global media_files =====
     let has_audio = matches!(
         tokio::fs::metadata(&temp_audio).await,
         Ok(m) if m.len() > 0
     );
-    let asr_status_hint = if has_audio { "pending" } else { "skipped" }.to_string();
 
-    let create_client = Client::new();
-    let create_payload = AssetCreatePayload {
-        project_id: project_id.clone(),
-        file_hash: file_hash.clone(),
-        filename: filename.clone(),
-        file_size: file_size_bytes,
-        duration: Some(extracted_duration as i32),
-        asr_status: Some(asr_status_hint),
+    let has_thumb = matches!(
+        tokio::fs::metadata(&temp_thumb).await,
+        Ok(m) if m.len() > 0
+    );
+    if !has_thumb {
+        let _ = fs::remove_file(&temp_audio);
+        let _ = fs::remove_file(&temp_thumb);
+        return Err(format!("{} 缩略图截帧失败，无法导入素材", env_tag()));
+    }
+
+    let client = Client::new();
+    let token_req = ImportTokenRequest {
+        file_hash: &file_hash,
+        has_audio,
     };
-    let create_res = create_client
-        .post(format!("{}/api/assets", server_url))
+    let token_res = client
+        .post(format!("{}/api/assets/import-token", server_url))
         .bearer_auth(&session_token)
-        .json(&create_payload)
+        .json(&token_req)
         .send()
         .await
-        .map_err(|e| format!("{} 资产预登记网络错误: {}", env_tag(), e))?;
-    if !create_res.status().is_success() {
-        let status = create_res.status();
-        let err_text = create_res.text().await.unwrap_or_default();
+        .map_err(|e| format!("{} import-token 网络错误: {}", env_tag(), e))?;
+    if !token_res.status().is_success() {
+        let status = token_res.status();
+        let err_text = token_res.text().await.unwrap_or_default();
         return Err(format!(
-            "{} 资产预登记被服务器拒绝! 状态码: {}, 错误: {}",
+            "{} import-token 被服务器拒绝! 状态码: {}, 错误: {}",
             env_tag(),
             status,
             err_text
         ));
     }
-    let create_resp: AssetCreateResponse = create_res
+    let token_resp: ImportTokenResponse = token_res
         .json()
         .await
-        .map_err(|e| format!("{} 资产预登记响应解析失败: {}", env_tag(), e))?;
-
-    // Persist the local-path → media_file_id mapping. Backend no longer
-    // carries this; the local SQLite store is the source of truth.
-    {
-        let pool = app.state::<SqlitePool>();
-        if let Err(e) = local_db::upsert(
-            pool.inner(),
-            &create_resp.media_file_id,
-            &local_path,
-            file_size_bytes as i64,
-            &file_hash,
-        )
-        .await
-        {
-            eprintln!("[local_db] post-create upsert 失败: {}", e);
-        }
-    }
-
-    // Race fallback: preflight missed, but a concurrent upload of the same hash
-    // won the ER_DUP_ENTRY race and finished processing before we got here.
-    // Skip our redundant audio/thumbnail upload.
-    if create_resp.already_processed {
-        let _ = app_clone.emit(
-            "upload-progress",
-            serde_json::json!({ "id": &job_id, "progress": 100 }),
-        );
-        let _ = fs::remove_file(&temp_audio);
-        let _ = fs::remove_file(&temp_thumb);
-        println!("[Job {}] 并发去重命中，跳过上传。asset_id={}", job_id, create_resp.asset_id);
-        return Ok(create_resp.asset_id);
-    }
+        .map_err(|e| format!("{} import-token 响应解析失败: {}", env_tag(), e))?;
 
     // 立即让前端从"压缩中"翻到"上传中"
     let _ = app_clone.emit(
@@ -977,91 +1110,92 @@ async fn process_video_asset(
         serde_json::json!({ "id": &job_id, "progress": 10 }),
     );
 
-    let project_asset_id_for_return = create_resp.asset_id.clone();
-    let media_file_id_for_spawn = create_resp.media_file_id.clone();
-    let job_id_clone = job_id.clone();
-    let temp_audio_clone = temp_audio.clone();
-    let temp_thumb_clone = temp_thumb.clone();
-    let server_url_clone = server_url.clone();
-    let session_token_clone = session_token.clone();
-    let has_audio_for_spawn = has_audio;
+    upload_file_to_signed_url(
+        &client,
+        "thumbnail",
+        &temp_thumb,
+        &token_resp.thumbnail.upload_url,
+        &token_resp.thumbnail.content_type,
+    )
+    .await?;
+    let _ = app_clone.emit(
+        "upload-progress",
+        serde_json::json!({ "id": &job_id, "progress": 50 }),
+    );
 
-    // 后台并发上传 audio + thumbnail（视频原片留本地，无需上传）
-    tokio::spawn(async move {
-        let client = Client::new();
-        let job_id_for_err = job_id_clone.clone();
+    if has_audio {
+        let audio = token_resp.audio.as_ref().ok_or_else(|| {
+            format!("{} import-token 缺少 audio 上传信息", env_tag())
+        })?;
+        upload_file_to_signed_url(
+            &client,
+            "audio",
+            &temp_audio,
+            &audio.upload_url,
+            &audio.content_type,
+        )
+        .await?;
+    }
 
-        let async_flow: Result<(), String> = async {
-            let has_audio = has_audio_for_spawn;
-            let has_thumb = matches!(
-                tokio::fs::metadata(&temp_thumb_clone).await,
-                Ok(m) if m.len() > 0
-            );
+    let finalize_payload = FinalizePayload {
+        project_id: &project_id,
+        file_hash: &file_hash,
+        filename: &filename,
+        file_size: file_size_bytes,
+        duration: Some(extracted_duration as i32),
+        has_audio,
+        finalize_token: &token_resp.finalize_token,
+    };
+    let finalize_res = client
+        .post(format!("{}/api/assets/finalize", server_url))
+        .bearer_auth(&session_token)
+        .json(&finalize_payload)
+        .send()
+        .await
+        .map_err(|e| format!("{} finalize 网络错误: {}", env_tag(), e))?;
+    if !finalize_res.status().is_success() {
+        let status = finalize_res.status();
+        let err_text = finalize_res.text().await.unwrap_or_default();
+        let _ = fs::remove_file(&temp_audio);
+        let _ = fs::remove_file(&temp_thumb);
+        return Err(format!(
+            "{} finalize 被服务器拒绝! 状态码: {}, 错误: {}",
+            env_tag(),
+            status,
+            err_text
+        ));
+    }
+    let finalize_resp: AssetFinalizeResponse = finalize_res
+        .json()
+        .await
+        .map_err(|e| format!("{} finalize 响应解析失败: {}", env_tag(), e))?;
 
-            if has_thumb {
-                upload_file_and_notify(
-                    &client,
-                    &server_url_clone,
-                    &session_token_clone,
-                    &media_file_id_for_spawn,
-                    "thumbnail",
-                    &temp_thumb_clone,
-                    "thumb.jpg",
-                )
-                .await?;
-                let _ = app_clone.emit(
-                    "upload-progress",
-                    serde_json::json!({ "id": &job_id_clone, "progress": 50 }),
-                );
-                println!("[Probe-Upload] 缩略图上传成功");
-            } else {
-                println!("[Probe-Upload] 无缩略图，跳过");
-            }
-
-            if has_audio {
-                upload_file_and_notify(
-                    &client,
-                    &server_url_clone,
-                    &session_token_clone,
-                    &media_file_id_for_spawn,
-                    "audio",
-                    &temp_audio_clone,
-                    "audio.aac",
-                )
-                .await?;
-                println!("[Probe-Upload] 音频轨道上传成功");
-            } else {
-                println!("[Probe-Upload] 源文件无音频流，跳过音频上传");
-            }
-
-            let _ = app_clone.emit(
-                "upload-progress",
-                serde_json::json!({ "id": &job_id_clone, "progress": 100 }),
-            );
-            Ok(())
+    {
+        let pool = app.state::<SqlitePool>();
+        if let Err(e) = local_db::upsert(
+            pool.inner(),
+            &local_path,
+            file_size_bytes as i64,
+            &file_hash,
+        )
+        .await
+        {
+            eprintln!("[local_db] finalize upsert 失败: {}", e);
         }
-        .await;
+    }
 
-        if let Err(err) = async_flow {
-            eprintln!("[Probe-Error] Cloud upload pipeline failed: {}", err);
-            let _ = app_clone.emit(
-                "upload-error",
-                serde_json::json!({ "id": job_id_for_err, "message": err }),
-            );
-        } else {
-            println!("[Probe-Upload] 整个上传任务成功结束。");
-        }
-
-        // 清理临时音频/缩略图（视频原片留在用户目录）
-        let _ = fs::remove_file(&temp_audio_clone);
-        let _ = fs::remove_file(&temp_thumb_clone);
-    });
-
-    Ok(project_asset_id_for_return)
+    let _ = app_clone.emit(
+        "upload-progress",
+        serde_json::json!({ "id": &job_id, "progress": 100 }),
+    );
+    let _ = fs::remove_file(&temp_audio);
+    let _ = fs::remove_file(&temp_thumb);
+    println!("[Job {}] 导入 finalize 完成。asset_id={}, media_file_id={}, already_processed={}", job_id, finalize_resp.asset_id, finalize_resp.media_file_id, finalize_resp.already_processed);
+    Ok(finalize_resp.asset_id)
 }
 
 // ===================================================================
-// Local asset DB commands — per-device SQLite, keyed by media_file_id.
+// Local asset DB commands — per-device SQLite, keyed by SHA-256.
 //
 // Backend MySQL no longer carries (local_path, origin_device_id) because the
 // same media_file may live at different paths on each of a user's devices.
@@ -1072,9 +1206,9 @@ async fn process_video_asset(
 #[tauri::command]
 async fn local_assets_get(
     pool: State<'_, SqlitePool>,
-    media_file_id: String,
+    sha256: String,
 ) -> Result<Option<local_db::LocalAsset>, String> {
-    local_db::get(pool.inner(), &media_file_id)
+    local_db::get(pool.inner(), &sha256)
         .await
         .map_err(|e| format!("local_assets_get failed: {e}"))
 }
@@ -1082,9 +1216,9 @@ async fn local_assets_get(
 #[tauri::command]
 async fn local_assets_get_many(
     pool: State<'_, SqlitePool>,
-    media_file_ids: Vec<String>,
+    hashes: Vec<String>,
 ) -> Result<std::collections::HashMap<String, local_db::LocalAsset>, String> {
-    local_db::get_many(pool.inner(), &media_file_ids)
+    local_db::get_many(pool.inner(), &hashes)
         .await
         .map_err(|e| format!("local_assets_get_many failed: {e}"))
 }
@@ -1092,12 +1226,11 @@ async fn local_assets_get_many(
 #[tauri::command]
 async fn local_assets_set(
     pool: State<'_, SqlitePool>,
-    media_file_id: String,
     local_path: String,
     file_size: i64,
     sha256: String,
 ) -> Result<local_db::LocalAsset, String> {
-    local_db::upsert(pool.inner(), &media_file_id, &local_path, file_size, &sha256)
+    local_db::upsert(pool.inner(), &local_path, file_size, &sha256)
         .await
         .map_err(|e| format!("local_assets_set failed: {e}"))
 }
@@ -1105,9 +1238,9 @@ async fn local_assets_set(
 #[tauri::command]
 async fn local_assets_delete(
     pool: State<'_, SqlitePool>,
-    media_file_id: String,
+    sha256: String,
 ) -> Result<(), String> {
-    local_db::delete(pool.inner(), &media_file_id)
+    local_db::delete(pool.inner(), &sha256)
         .await
         .map_err(|e| format!("local_assets_delete failed: {e}"))
 }
@@ -1118,7 +1251,6 @@ async fn local_assets_delete(
 #[tauri::command]
 async fn local_assets_relink(
     pool: State<'_, SqlitePool>,
-    media_file_id: String,
     expected_sha256: String,
     new_path: String,
 ) -> Result<local_db::LocalAsset, String> {
@@ -1130,7 +1262,7 @@ async fn local_assets_relink(
     if actual != expected_sha256 {
         return Err("hash_mismatch: 选中的文件不是这个素材原片".to_string());
     }
-    local_db::upsert(pool.inner(), &media_file_id, &new_path, size, &actual)
+    local_db::upsert(pool.inner(), &new_path, size, &actual)
         .await
         .map_err(|e| format!("local_assets_relink upsert failed: {e}"))
 }

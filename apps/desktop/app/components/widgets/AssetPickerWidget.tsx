@@ -82,9 +82,8 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
     s.uploadJobs.filter((j) => j.status === 'queued' || j.status === 'compressing' || j.status === 'uploading').length,
   );
 
-  // 仍然只展示已上传的素材（status='ready' 即缩略图就绪），但内容分析未完成 / 失败的会被
-  // 标灰并禁用选择；这样用户既能"看到"自己已上传的全部素材，又不会误以为它们已可被检索。
-  const visibleAssets = assets.filter((a) => a.status === 'ready').slice(0, MAX_VISIBLE);
+  // 展示全部已登记素材；处理/失败态可见但不可选，避免失败重试时素材从 UI 消失。
+  const visibleAssets = assets.slice(0, MAX_VISIBLE);
   const total = assets.length;
   const analyzingCount = assets.filter((a) => getAnalysisStage(a) === 'analyzing').length;
 
@@ -137,7 +136,11 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
                 ? asset.filename
                 : stage === 'analyzing'
                   ? `${asset.filename}\n\nAI 内容分析中，完成前无法被选入素材篮`
-                  : `${asset.filename}\n\n内容分析失败，此素材不可用于检索`;
+                  : stage === 'uploading'
+                    ? `${asset.filename}\n\n素材处理中，完成前无法被选入素材篮`
+                    : stage === 'upload_failed'
+                      ? `${asset.filename}\n\n素材处理失败，可以重新导入同一文件重试`
+                      : `${asset.filename}\n\n内容分析失败，此素材不可用于检索`;
               return (
                 <div
                   key={asset.id}
@@ -185,6 +188,12 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
                       <div className="absolute inset-0 bg-black/65 flex flex-col items-center justify-center text-white gap-1 px-1.5 text-center">
                         <AlertCircle className="w-3.5 h-3.5 text-rose-300" />
                         <span className="text-[10px] font-medium leading-tight">分析失败</span>
+                      </div>
+                    )}
+                    {stage === 'upload_failed' && (
+                      <div className="absolute inset-0 bg-black/65 flex flex-col items-center justify-center text-white gap-1 px-1.5 text-center">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-300" />
+                        <span className="text-[10px] font-medium leading-tight">处理失败</span>
                       </div>
                     )}
                     {isSelected && (

@@ -25,7 +25,10 @@ interface LibraryItem {
   fileSize: number;
   duration: number | null;
   status: Asset['status'];
-  asrStatus: Asset['asrStatus'];
+  transcriptKind: Asset['transcriptKind'];
+  processingStage: Asset['processingStage'];
+  failureStage: Asset['failureStage'];
+  failureReason: Asset['failureReason'];
   summary: string | null;
   createdAt: string;
   variants: LibraryVariant[];
@@ -73,7 +76,10 @@ function libraryItemToAsset(item: LibraryItem): Asset {
     fileSize: item.fileSize,
     duration: item.duration ?? 0,
     status: item.status,
-    asrStatus: item.asrStatus,
+    transcriptKind: item.transcriptKind,
+    processingStage: item.processingStage,
+    failureStage: item.failureStage,
+    failureReason: item.failureReason,
     createdAt: item.createdAt,
     summary: item.summary,
   };
@@ -102,11 +108,11 @@ export default function LibraryPage() {
     () => (selectedId ? items.find((i) => i.mediaFileId === selectedId) ?? null : null),
     [items, selectedId],
   );
-  const mediaFileIds = useMemo(() => items.map((i) => i.mediaFileId), [items]);
+  const hashes = useMemo(() => items.map((i) => i.sha256), [items]);
   // Page-level batch lookup: ask Rust once which of these media_files have a
   // local copy on this device. Card-level rendering uses this map to flag
   // local availability without per-card IPC chatter.
-  const { data: localMap } = useLocalAssets(mediaFileIds);
+  const { data: localMap } = useLocalAssets(hashes);
 
   return (
     <div
@@ -151,7 +157,7 @@ export default function LibraryPage() {
               <LibraryCard
                 key={item.mediaFileId}
                 item={item}
-                hasLocal={!!localMap?.[item.mediaFileId]}
+                hasLocal={!!localMap?.[item.sha256]}
                 onOpen={() => setSelectedId(item.mediaFileId)}
                 onProjectClick={(projectId) => navigate(`/projects/${projectId}`)}
               />
@@ -183,7 +189,8 @@ function LibraryCard({
 }) {
   const stage = getAnalysisStage({
     status: item.status,
-    asrStatus: item.asrStatus,
+    transcriptKind: item.transcriptKind,
+    failureStage: item.failureStage,
     summary: item.summary,
   });
 

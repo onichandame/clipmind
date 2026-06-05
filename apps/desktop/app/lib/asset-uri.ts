@@ -102,7 +102,7 @@ function useLocalServerInfo(): LocalFileServerInfo | null {
 
 // ============================================================================
 // Local asset DB (per-device SQLite owned by Rust). Tells us whether this
-// device has a copy of a given media_file and where it is on disk.
+// device has a copy of a given original-video SHA-256 and where it is on disk.
 // ============================================================================
 
 export interface LocalAsset {
@@ -112,27 +112,27 @@ export interface LocalAsset {
   updatedAt: number;
 }
 
-export function useLocalAsset(mediaFileId: string | null | undefined) {
+export function useLocalAsset(sha256: string | null | undefined) {
   return useQuery({
-    queryKey: ['local-assets', mediaFileId ?? '__null'],
-    enabled: !!mediaFileId,
+    queryKey: ['local-assets', sha256 ?? '__null'],
+    enabled: !!sha256,
     queryFn: async (): Promise<LocalAsset | null> => {
-      if (!mediaFileId) return null;
-      const result = await invoke<LocalAsset | null>('local_assets_get', { mediaFileId });
+      if (!sha256) return null;
+      const result = await invoke<LocalAsset | null>('local_assets_get', { sha256 });
       return result ?? null;
     },
     staleTime: 60_000,
   });
 }
 
-export function useLocalAssets(mediaFileIds: string[]) {
+export function useLocalAssets(hashes: string[]) {
   return useQuery({
-    queryKey: ['local-assets', 'batch', [...mediaFileIds].sort()],
-    enabled: mediaFileIds.length > 0,
+    queryKey: ['local-assets', 'batch', [...hashes].sort()],
+    enabled: hashes.length > 0,
     queryFn: async (): Promise<Record<string, LocalAsset>> => {
-      if (mediaFileIds.length === 0) return {};
+      if (hashes.length === 0) return {};
       const result = await invoke<Record<string, LocalAsset>>('local_assets_get_many', {
-        mediaFileIds,
+        hashes,
       });
       return result ?? {};
     },
@@ -143,6 +143,7 @@ export function useLocalAssets(mediaFileIds: string[]) {
 export interface AssetLike {
   id?: string;
   mediaFileId?: string | null;
+  sha256?: string | null;
   backupStatus?: string | null;
   videoOssUrl?: string | null;
   videoUrl?: string | null;
@@ -159,7 +160,7 @@ export interface AssetUri {
 // cloud URL when the asset is backed up. Otherwise unavailable.
 //
 // `localPath` of null means "we don't have a local copy" — pass it from
-// useLocalAsset(asset.mediaFileId).
+// useLocalAsset(asset.sha256).
 export function resolveAssetUri(
   asset: AssetLike,
   localPath: string | null,
@@ -181,6 +182,6 @@ export function resolveAssetUri(
 
 export function useAssetUri(asset: AssetLike): AssetUri {
   const localServer = useLocalServerInfo();
-  const local = useLocalAsset(asset?.mediaFileId ?? null);
+  const local = useLocalAsset(asset?.sha256 ?? null);
   return resolveAssetUri(asset, local.data?.localPath ?? null, localServer);
 }

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Film, X, CloudUpload, CloudOff, CloudDownload, HardDrive, Cloud, AlertTriangle, Activity, CheckCircle2, AlertCircle } from "lucide-react";
+import { Film, X, CloudUpload, CloudDownload, HardDrive, Cloud, AlertTriangle, Activity, CheckCircle2, AlertCircle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getAnalysisStage, type Asset } from "../lib/asset-types";
 import { useAssetUri, useLocalAsset } from "../lib/asset-uri";
-import { authFetch, getCachedUser } from "../lib/auth";
+import { getCachedUser } from "../lib/auth";
 import { env } from "../env";
 
 const BACKUP_LABEL: Record<string, { text: string; tone: string }> = {
@@ -16,11 +16,14 @@ const BACKUP_LABEL: Record<string, { text: string; tone: string }> = {
 
 export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: () => void }) {
   const playable = useAssetUri(asset);
-  const { data: localAsset } = useLocalAsset(asset.mediaFileId);
+  const { data: localAsset } = useLocalAsset(asset.sha256);
+  const [forceCloudPlayback, setForceCloudPlayback] = useState(false);
+  const effectivePlayable = forceCloudPlayback && asset.videoOssUrl
+    ? { kind: 'cloud' as const, uri: asset.videoOssUrl }
+    : playable;
   const queryClient = useQueryClient();
   const backupStatus = asset.backupStatus || 'local_only';
   const [busy, setBusy] = useState(false);
-  const [unsyncBusy, setUnsyncBusy] = useState(false);
   const [backupProgress, setBackupProgress] = useState<number | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
@@ -37,6 +40,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
 
   useEffect(() => {
     setVideoFailed(false);
+    setForceCloudPlayback(false);
   }, [playable.uri]);
 
   // Subscribe to Rust-emitted backup progress only while a backup is in flight
@@ -93,6 +97,8 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
         mediaFileId: asset.mediaFileId,
         localPath: localAsset.localPath,
         filename: asset.filename,
+        expectedSha256: asset.sha256,
+        expectedSize: asset.fileSize,
         serverUrl: env.VITE_API_BASE_URL,
         sessionToken: getToken() || '',
       });
@@ -106,33 +112,6 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
       // optimistically setting local state.
       queryClient.invalidateQueries({ queryKey: ['library'] });
       queryClient.invalidateQueries({ queryKey: ['assets'], exact: false });
-    }
-  };
-
-  // 解除云端备份。Server 端会做跨用户引用计数：本用户清掉自己的 videoOssKey/backupStatus 后，
-  // 只有当所有用户都对该 hash 取消引用时才真正删 OSS 对象。
-  const handleUnbackup = async () => {
-    if (unsyncBusy) return;
-    if (!confirm('确认解除云端备份？\n\n此设备本地副本不会受影响。如果同一文件被其他用户备份过，云端对象会保留；只有最后一个用户解除时才会真正删除。')) {
-      return;
-    }
-    setUnsyncBusy(true);
-    try {
-      const res = await authFetch(
-        `${env.VITE_API_BASE_URL}/api/assets/${asset.mediaFileId}/unbackup`,
-        { method: 'POST' },
-      );
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status} ${text}`);
-      }
-      queryClient.invalidateQueries({ queryKey: ['library'] });
-      queryClient.invalidateQueries({ queryKey: ['assets'], exact: false });
-    } catch (e: any) {
-      console.error('[Unbackup] failed:', e);
-      alert('解除云端备份失败，请稍后重试。');
-    } finally {
-      setUnsyncBusy(false);
     }
   };
 
@@ -186,7 +165,6 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('local_assets_relink', {
-        mediaFileId: asset.mediaFileId,
         expectedSha256: asset.sha256,
         newPath: picked,
       });
@@ -216,23 +194,27 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
       >
         {/* Video / Thumbnail */}
         <div className="aspect-video bg-zinc-100 dark:bg-zinc-800 relative flex items-center justify-center overflow-hidden rounded-t-xl">
-          {playable.uri && !videoFailed ? (
+          {effectivePlayable.uri && !videoFailed ? (
             <video
-              src={playable.uri}
+              src={effectivePlayable.uri}
               poster={asset.thumbnailUrl || undefined}
               controls
               preload="metadata"
               onError={(e) => {
                 const v = e.currentTarget;
                 console.warn('[AssetDetailModal] video load failed', {
-                  uri: playable.uri,
-                  kind: playable.kind,
+                  uri: effectivePlayable.uri,
+                  kind: effectivePlayable.kind,
                   errorCode: v.error?.code,
                   errorMessage: v.error?.message,
                 });
+                if (effectivePlayable.kind === 'local' && asset.backupStatus === 'backed_up' && asset.videoOssUrl) {
+                  setForceCloudPlayback(true);
+                  return;
+                }
                 setVideoFailed(true);
               }}
-              className={`w-full h-full object-contain ${playable.kind === 'unavailable' ? 'grayscale' : ''}`}
+              className={`w-full h-full object-contain ${effectivePlayable.kind === 'unavailable' ? 'grayscale' : ''}`}
             />
           ) : asset.thumbnailUrl ? (
             <>
@@ -279,8 +261,8 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
 
           <div className="flex items-center gap-3 text-sm">
             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
-              {playable.kind === 'local' ? <HardDrive className="w-3.5 h-3.5" /> : <Cloud className="w-3.5 h-3.5" />}
-              {playable.kind === 'local' ? '本地播放' : playable.kind === 'cloud' ? '云端播放' : '不可用'}
+              {effectivePlayable.kind === 'local' ? <HardDrive className="w-3.5 h-3.5" /> : <Cloud className="w-3.5 h-3.5" />}
+              {effectivePlayable.kind === 'local' ? '本地播放' : effectivePlayable.kind === 'cloud' ? '云端播放' : '不可用'}
             </span>
             <span className={`text-xs font-medium ${statusMeta.tone}`}>{statusMeta.text}</span>
           </div>
@@ -353,14 +335,6 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
                   )}
                 </div>
               )}
-              <button
-                onClick={handleUnbackup}
-                disabled={unsyncBusy}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:border-rose-300 dark:hover:border-rose-500/40 hover:text-rose-600 dark:hover:text-rose-400 disabled:opacity-50 text-sm font-medium text-zinc-700 dark:text-zinc-300 transition-colors"
-              >
-                <CloudOff className="w-4 h-4" />
-                {unsyncBusy ? '解除中…' : '解除云端备份'}
-              </button>
             </div>
           )}
 
