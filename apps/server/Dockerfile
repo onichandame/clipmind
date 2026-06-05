@@ -4,7 +4,7 @@
 FROM node:20-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
 # ==========================================
 # Stage 2: Deployer (仅抽离依赖，不执行耗时编译)
