@@ -271,7 +271,12 @@ app.post("/", async (c) => {
                   eq(projectAssets.mediaFileId, assetChunks.mediaFileId),
                   eq(projectAssets.projectId, projectId)
                 ))
-                .where(and(inArray(assetChunks.id, clipIds), eq(mediaFiles.userId, user.id)))
+                .where(and(
+                  inArray(assetChunks.id, clipIds),
+                  eq(projectAssets.userId, user.id),
+                  eq(mediaFiles.status, 'ready'),
+                  eq(assetChunks.asrTaskId, mediaFiles.asrTaskId)
+                ))
               : [];
             const chunkMap = new Map(chunks.map(c => [c.id, c]));
 
@@ -479,9 +484,28 @@ app.post("/", async (c) => {
             console.log(`[RAG-Macro] LLM 请求视频大盘检索: "${query}"`);
             const [vector] = await generateEmbeddings([query]);
 
-            // 强制路由至 summary collection
-            const { searchVectors, QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
-            const results = await searchVectors(vector, limit, QDRANT_SUMMARY_COLLECTION);
+            const ownedReadyAssets = await db.select({
+              id: projectAssets.id,
+              mediaFileId: projectAssets.mediaFileId,
+              filename: projectAssets.filename,
+            })
+              .from(projectAssets)
+              .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+              .where(and(
+                eq(projectAssets.projectId, projectId),
+                eq(projectAssets.userId, user.id),
+                eq(mediaFiles.status, 'ready')
+              ));
+
+            if (ownedReadyAssets.length === 0) {
+              await db.update(projects).set({ retrievedAssetIds: [] }).where(and(eq(projects.id, projectId), eq(projects.userId, user.id)));
+              return { success: true, assets: [] };
+            }
+
+            // 强制路由至 summary collection, and prefilter Qdrant to owned ready media.
+            const { searchVectorsInCollectionWithAssetFilter, QDRANT_SUMMARY_COLLECTION } = await import("../utils/qdrant");
+            const ownedMediaFileIds = ownedReadyAssets.map(a => a.mediaFileId);
+            const results = await searchVectorsInCollectionWithAssetFilter(vector, ownedMediaFileIds, limit, QDRANT_SUMMARY_COLLECTION);
 
             const rawAssets = results.map((r: any) => ({
               score: r.score,
@@ -489,30 +513,17 @@ app.post("/", async (c) => {
               summary: r.payload.text
             }));
 
-            // Qdrant returns mediaFileId in payload.assetId — translate to project_assets.id
-            const rawMediaFileIds = rawAssets.map(a => a.assetId);
-            const ownedPAs = rawMediaFileIds.length > 0
-              ? await db.select({
-                  id: projectAssets.id,
-                  mediaFileId: projectAssets.mediaFileId,
-                  filename: projectAssets.filename,
-                }).from(projectAssets)
-                  .where(and(
-                    inArray(projectAssets.mediaFileId, rawMediaFileIds),
-                    eq(projectAssets.projectId, projectId),
-                    eq(projectAssets.userId, user.id)
-                  ))
-              : [];
-            const existingIdSet = new Set(ownedPAs.map(a => a.mediaFileId));
-            const mediaFileToPAId = new Map(ownedPAs.map(a => [a.mediaFileId, a.id]));
-            const filenameMap = new Map(ownedPAs.map(a => [a.mediaFileId, a.filename]));
+            const existingIdSet = new Set(ownedReadyAssets.map(a => a.mediaFileId));
+            const mediaFileToPAId = new Map(ownedReadyAssets.map(a => [a.mediaFileId, a.id]));
+            const filenameMap = new Map(ownedReadyAssets.map(a => [a.mediaFileId, a.filename]));
             const assetsFound = rawAssets
               .filter(a => existingIdSet.has(a.assetId))
               .map(a => ({
                 ...a,
                 assetId: mediaFileToPAId.get(a.assetId) ?? a.assetId, // return project_assets.id
                 filename: filenameMap.get(a.assetId) ?? '',
-              }));
+              }))
+              .slice(0, limit);
 
             const hitAssetIds = assetsFound.map(a => a.assetId); // project_assets.id values
             await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(and(eq(projects.id, projectId), eq(projects.userId, user.id)));
@@ -589,10 +600,12 @@ app.post("/", async (c) => {
             const ownedRows = await db
               .select({ id: projectAssets.id, mediaFileId: projectAssets.mediaFileId, filename: projectAssets.filename })
               .from(projectAssets)
+              .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
               .where(and(
                 inArray(projectAssets.id, assetIds),
                 eq(projectAssets.projectId, projectId),
-                eq(projectAssets.userId, user.id)
+                eq(projectAssets.userId, user.id),
+                eq(mediaFiles.status, 'ready')
               ));
             if (ownedRows.length === 0) {
               return { success: true, clips: [] };
@@ -610,7 +623,7 @@ app.post("/", async (c) => {
             const clips = qdrantResults.map((p: any) => {
               const mfId = p.payload?.assetId; // mediaFileId in Qdrant payload
               return {
-                id: p.id,
+                id: p.payload?.chunkId ?? p.id,
                 score: p.score,
                 assetId: mediaIdToPAId.get(mfId) ?? mfId, // expose project_assets.id to LLM
                 filename: mediaIdToFilename.get(mfId) ?? '',

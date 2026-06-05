@@ -315,7 +315,7 @@ app.get('/:id', async (c) => {
               clip.mediaFileId = paRecord.mediaFileId;
               clip.sha256 = paRecord.sha256;
               clip.thumbnailUrl = signAssetViewUrl(paRecord.thumbnailOssKey);
-              if (paRecord.videoOssKey) {
+              if (paRecord.backupStatus === 'backed_up' && paRecord.videoOssKey) {
                 clip.videoUrl = signAssetDownloadUrl(paRecord.videoOssKey, paRecord.filename);
               }
             }
@@ -362,7 +362,9 @@ app.get('/:id', async (c) => {
           clip.backupStatus = asset.backupStatus;
           clip.mediaFileId = asset.mediaFileId;
           clip.sha256 = asset.sha256;
-          clip.videoUrl = asset.videoOssKey ? signAssetDownloadUrl(asset.videoOssKey, asset.filename) : null;
+          clip.videoUrl = asset.backupStatus === 'backed_up' && asset.videoOssKey
+            ? signAssetDownloadUrl(asset.videoOssKey, asset.filename)
+            : null;
         }
       }
     }

@@ -141,3 +141,42 @@ export async function searchVectorsWithFilter(queryVector: number[], assetIds: s
   const data = await res.json();
   return data.result || [];
 }
+
+export async function searchVectorsInCollectionWithAssetFilter(
+  queryVector: number[],
+  assetIds: string[],
+  topK: number = 20,
+  collectionName: string = QDRANT_CHUNKS_COLLECTION,
+) {
+  const config = getQdrantConfig();
+  const limit = Math.min(topK, 20);
+
+  if (assetIds.length === 0) return [];
+
+  const scoreThreshold = collectionName === QDRANT_SUMMARY_COLLECTION
+    ? ASSET_SCORE_THRESHOLD
+    : CLIP_SCORE_THRESHOLD;
+
+  const res = await fetch(`${config.url}/collections/${collectionName}/points/search`, {
+    method: 'POST',
+    headers: config.headers,
+    body: JSON.stringify({
+      vector: queryVector,
+      limit,
+      filter: {
+        must: [
+          { key: "assetId", match: { any: assetIds } }
+        ]
+      },
+      score_threshold: scoreThreshold,
+      with_payload: true
+    })
+  });
+
+  if (!res.ok) {
+    throw new Error(`Qdrant Filter Search failed: ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  return data.result || [];
+}

@@ -5,6 +5,7 @@ import { serverConfig } from "../env";
 // @ts-ignore
 import Core from '@alicloud/pop-core';
 import { signAssetViewUrl } from "./oss";
+import { signAsrCallbackToken } from "./asr-callback-token";
 
 /**
  * 提交阿里云录音文件识别任务 (FileTrans)
@@ -40,16 +41,24 @@ export async function submitAliyunAsrTask(mediaFileId: string, audioOssUrl: stri
     }
     console.log(`[DEBUG: Aliyun-ASR] 1.5. 成功签发 OSS 临时访问链接: ${signedAudioUrl.split('?')[0]}?Expires=...`);
 
+    const callbackUrl = new URL(`${serverConfig.PUBLIC_WEBHOOK_DOMAIN}/api/asr-callback`);
+    callbackUrl.searchParams.set('mediaFileId', mediaFileId);
+    callbackUrl.searchParams.set('token', signAsrCallbackToken(mediaFileId));
+
     const task = {
       appkey: appKey,
       file_link: signedAudioUrl,
       version: "4.0",
       enable_words: false,
       enable_callback: true,
-      callback_url: `${serverConfig.PUBLIC_WEBHOOK_DOMAIN}/api/asr-callback`
+      callback_url: callbackUrl.toString()
     };
 
-    console.log(`[DEBUG: Aliyun-ASR] 2. 组装的发往阿里云的 Task Payload:`, JSON.stringify(task));
+    console.log(`[DEBUG: Aliyun-ASR] 2. 组装的发往阿里云的 Task Payload:`, JSON.stringify({
+      ...task,
+      file_link: signedAudioUrl.split('?')[0] + '?Expires=...',
+      callback_url: `${serverConfig.PUBLIC_WEBHOOK_DOMAIN}/api/asr-callback?mediaFileId=${mediaFileId}&token=...`,
+    }));
 
     const response: any = await client.request(
       'SubmitTask',
@@ -66,12 +75,22 @@ export async function submitAliyunAsrTask(mediaFileId: string, audioOssUrl: stri
     const taskId = response.TaskId;
 
     await db.update(mediaFiles)
-      .set({ asrTaskId: taskId, asrStatus: 'processing' })
+      .set({
+        asrTaskId: taskId,
+        processingStage: 'asr',
+        failureStage: null,
+        failureReason: null,
+      })
       .where(eq(mediaFiles.id, mediaFileId));
 
     console.log(`✅ [ASR Pipeline] 任务提交成功, 真实 TaskId: ${taskId}`);
   } catch (error) {
-    await db.update(mediaFiles).set({ asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
+    await db.update(mediaFiles).set({
+      status: 'failed',
+      processingStage: null,
+      failureStage: 'asr',
+      failureReason: String(error),
+    }).where(eq(mediaFiles.id, mediaFileId));
     console.error(`❌ [ASR Pipeline] 任务提交失败:`, error);
   }
 }

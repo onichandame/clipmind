@@ -1,15 +1,174 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { mediaFiles, projectAssets, projects } from "@clipmind/db";
-import { desc, eq, and, inArray, isNotNull, ne } from "drizzle-orm";
+import { desc, eq, and, ne, sql } from "drizzle-orm";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { db } from "../db";
-import { signAssetViewUrl, signAssetDownloadUrl, deleteAsset } from "../utils/oss";
+import { signAssetViewUrl, signUploadUrl, copyAsset, deleteAssets, headAsset } from "../utils/oss";
 import { deleteVectorsByAssetId, QDRANT_SUMMARY_COLLECTION } from "../utils/qdrant";
 import { requireAuth } from "../middleware/auth";
+import { serverConfig } from "../env";
+import { submitAliyunAsrTask } from "../utils/aliyun-asr";
+import { completeAssetWithoutTranscript } from "../logic/asset-processor";
+import { withFileHashLock } from "../utils/import-locks";
 
 const app = new Hono();
 
 app.use('*', requireAuth);
+
+const IMPORT_TOKEN_TTL_SECONDS = 60 * 60;
+const IMPORT_TOKEN_VERSION = 1;
+
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/i);
+
+type ImportFinalizePayload = {
+  v: number;
+  userId: string;
+  fileHash: string;
+  hasAudio: boolean;
+  audioTempKey?: string;
+  thumbnailTempKey: string;
+  iat: number;
+  nonce: string;
+};
+
+function signImportFinalizePayload(payload: ImportFinalizePayload) {
+  const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = createHmac('sha256', serverConfig.WEBHOOK_HMAC_SECRET).update(`import:${body}`).digest('base64url');
+  return `${body}.${sig}`;
+}
+
+function verifyImportFinalizeToken(token: string): ImportFinalizePayload | null {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  const [body, sig] = token.split('.');
+  if (!body || !sig) return null;
+  const expected = createHmac('sha256', serverConfig.WEBHOOK_HMAC_SECRET).update(`import:${body}`).digest('base64url');
+  const a = Buffer.from(sig, 'base64url');
+  const b = Buffer.from(expected, 'base64url');
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as ImportFinalizePayload;
+    const now = Math.floor(Date.now() / 1000);
+    if (parsed.v !== IMPORT_TOKEN_VERSION) return null;
+    if (now - parsed.iat > IMPORT_TOKEN_TTL_SECONDS || parsed.iat - now > 60) return null;
+    if (!sha256Schema.safeParse(parsed.fileHash).success) return null;
+    if (typeof parsed.userId !== 'string' || typeof parsed.thumbnailTempKey !== 'string') return null;
+    if (typeof parsed.hasAudio !== 'boolean') return null;
+    if (parsed.hasAudio && typeof parsed.audioTempKey !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isReusableProcessingMedia(row: {
+  status: string | null;
+  thumbnailOssKey?: string | null;
+  processingStage?: string | null;
+  asrTaskId?: string | null;
+}) {
+  if (row.status !== 'processing') return false;
+  if (!row.thumbnailOssKey) return false;
+  return (row.processingStage === 'asr' || row.processingStage === 'embedding') && !!row.asrTaskId;
+}
+
+function isReusableExistingMedia(row: {
+  status: string | null;
+  thumbnailOssKey?: string | null;
+  processingStage?: string | null;
+  asrTaskId?: string | null;
+}) {
+  return row.status === 'ready' || isReusableProcessingMedia(row);
+}
+
+async function ensureProjectOwned(projectId: string, userId: string) {
+  const [project] = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
+    .limit(1);
+  return !!project;
+}
+
+async function createProjectAsset(projectId: string, userId: string, mediaFileId: string, filename: string) {
+  return db.transaction(async (tx) => {
+    // Lock the owning project row until commit; this serializes concurrent
+    // project_asset creation for the same project without deleting historical
+    // duplicate rows that saved JSON may still reference.
+    await tx.execute(sql`SELECT id FROM projects WHERE id = ${projectId} AND user_id = ${userId} FOR UPDATE`);
+
+      const [existing] = await tx
+        .select({ id: projectAssets.id })
+        .from(projectAssets)
+        .where(and(
+          eq(projectAssets.projectId, projectId),
+          eq(projectAssets.userId, userId),
+          eq(projectAssets.mediaFileId, mediaFileId),
+        ))
+        .limit(1);
+      if (existing) return existing.id;
+
+      const projectAssetId = crypto.randomUUID();
+      try {
+        await tx.insert(projectAssets).values({
+          id: projectAssetId,
+          projectId,
+          userId,
+          mediaFileId,
+          filename,
+        });
+      } catch (error: any) {
+        const msg = String(error?.code || error?.message || '');
+        if (!msg.includes('ER_DUP_ENTRY') && !msg.includes('Duplicate')) throw error;
+        const [winner] = await tx
+          .select({ id: projectAssets.id })
+          .from(projectAssets)
+          .where(and(
+            eq(projectAssets.projectId, projectId),
+            eq(projectAssets.userId, userId),
+            eq(projectAssets.mediaFileId, mediaFileId),
+          ))
+          .limit(1);
+        if (!winner) throw error;
+        return winner.id;
+      }
+      return projectAssetId;
+  });
+}
+
+async function userOwnsMedia(userId: string, mediaFileId: string) {
+  const [row] = await db
+    .select({ id: projectAssets.id })
+    .from(projectAssets)
+    .where(and(eq(projectAssets.userId, userId), eq(projectAssets.mediaFileId, mediaFileId)))
+    .limit(1);
+  return !!row;
+}
+
+async function assertTempArtifactsExist(token: ImportFinalizePayload) {
+  const thumbHeaders = await headAsset(token.thumbnailTempKey);
+  const thumbSize = Number(thumbHeaders['content-length'] ?? 0);
+  if (!Number.isFinite(thumbSize) || thumbSize <= 0 || thumbSize > 10 * 1024 * 1024) {
+    throw new Error('Invalid thumbnail temp object size');
+  }
+  if (token.hasAudio) {
+    if (!token.audioTempKey) throw new Error('finalize token missing audio temp key');
+    const audioHeaders = await headAsset(token.audioTempKey);
+    const audioSize = Number(audioHeaders['content-length'] ?? 0);
+    if (!Number.isFinite(audioSize) || audioSize <= 0 || audioSize > 200 * 1024 * 1024) {
+      throw new Error('Invalid audio temp object size');
+    }
+  }
+}
+
+async function markMediaFailed(mediaFileId: string, failureStage: string, error: unknown) {
+  await db.update(mediaFiles).set({
+    status: 'failed',
+    processingStage: null,
+    failureStage,
+    failureReason: error instanceof Error ? error.message : String(error),
+  }).where(eq(mediaFiles.id, mediaFileId));
+}
 
 // GET /api/assets/library — list all of the user's underlying media files
 // (deduped by file hash) along with which projects use each one. Used by the
@@ -34,7 +193,10 @@ app.get("/library", async (c) => {
         fileSize: mediaFiles.fileSize,
         duration: mediaFiles.duration,
         status: mediaFiles.status,
-        asrStatus: mediaFiles.asrStatus,
+        transcriptKind: mediaFiles.transcriptKind,
+        processingStage: mediaFiles.processingStage,
+        failureStage: mediaFiles.failureStage,
+        failureReason: mediaFiles.failureReason,
         summary: mediaFiles.summary,
         audioOssKey: mediaFiles.audioOssKey,
         thumbnailOssKey: mediaFiles.thumbnailOssKey,
@@ -67,7 +229,10 @@ app.get("/library", async (c) => {
       fileSize: number;
       duration: number | null;
       status: string;
-      asrStatus: string | null;
+      transcriptKind: string | null;
+      processingStage: string | null;
+      failureStage: string | null;
+      failureReason: string | null;
       summary: string | null;
       createdAt: Date;
       variants: Variant[];
@@ -83,12 +248,15 @@ app.get("/library", async (c) => {
           sha256: r.fileHash,
           audioOssUrl: r.audioOssKey ? signAssetViewUrl(r.audioOssKey) : null,
           thumbnailUrl: r.thumbnailOssKey ? signAssetViewUrl(r.thumbnailOssKey) : null,
-          videoOssUrl: r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
+          videoOssUrl: r.backupStatus === 'backed_up' && r.videoOssKey ? signAssetViewUrl(r.videoOssKey) : null,
           backupStatus: r.backupStatus ?? 'local_only',
           fileSize: r.fileSize,
           duration: r.duration ?? null,
           status: r.status ?? 'processing',
-          asrStatus: r.asrStatus ?? null,
+          transcriptKind: r.transcriptKind ?? null,
+          processingStage: r.processingStage ?? null,
+          failureStage: r.failureStage ?? null,
+          failureReason: r.failureReason ?? null,
           summary: r.summary ?? null,
           createdAt: r.createdAt,
           variants: [],
@@ -129,7 +297,10 @@ app.get("/", async (c) => {
         fileSize: mediaFiles.fileSize,
         duration: mediaFiles.duration,
         status: mediaFiles.status,
-        asrStatus: mediaFiles.asrStatus,
+        transcriptKind: mediaFiles.transcriptKind,
+        processingStage: mediaFiles.processingStage,
+        failureStage: mediaFiles.failureStage,
+        failureReason: mediaFiles.failureReason,
         summary: mediaFiles.summary,
         audioOssKey: mediaFiles.audioOssKey,
         thumbnailOssKey: mediaFiles.thumbnailOssKey,
@@ -143,7 +314,7 @@ app.get("/", async (c) => {
 
     const mapped = rows.map(row => ({
       ...row,
-      videoOssUrl: row.videoOssKey ? signAssetViewUrl(row.videoOssKey) : null,
+      videoOssUrl: row.backupStatus === 'backed_up' && row.videoOssKey ? signAssetViewUrl(row.videoOssKey) : null,
       audioOssUrl: row.audioOssKey ? signAssetViewUrl(row.audioOssKey) : null,
       thumbnailUrl: row.thumbnailOssKey ? signAssetViewUrl(row.thumbnailOssKey) : null,
     }));
@@ -155,122 +326,258 @@ app.get("/", async (c) => {
   }
 });
 
-// POST /api/assets/preflight — hash-only dedup check before FFmpeg.
-// Hit: creates project_assets pointing at the existing media_files row, returns
-//   { dedupHit: true, assetId, mediaFileId, alreadyProcessed }.
-//   Caller skips FFmpeg + uploads entirely.
-// Miss: returns { dedupHit: false }. Caller must proceed to FFmpeg, then POST /api/assets.
+// POST /api/assets/preflight — read-only hash check before FFmpeg.
+// Failed rows deliberately return dedupHit=false so the desktop retries processing
+// against the same global media_files row during finalize.
 app.post("/preflight", async (c) => {
   const user = c.get('user');
   try {
     const body = await c.req.json();
-    const { projectId, fileHash, filename } = body || {};
-    if (!projectId || !fileHash || !filename) {
-      return c.json({ error: 'projectId, fileHash, filename required' }, 400);
+    const parsed = z.object({
+      projectId: z.string().uuid(),
+      fileHash: sha256Schema,
+      filename: z.string().min(1).max(255),
+    }).safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+    }
+    const { projectId, fileHash } = parsed.data;
+    if (!(await ensureProjectOwned(projectId, user.id))) {
+      return c.json({ error: 'Project not found' }, 404);
     }
 
     const [existing] = await db
       .select()
       .from(mediaFiles)
-      .where(and(eq(mediaFiles.userId, user.id), eq(mediaFiles.fileHash, fileHash)))
+      .where(eq(mediaFiles.fileHash, fileHash))
       .limit(1);
 
     if (!existing) {
       return c.json({ dedupHit: false });
     }
 
-    const projectAssetId = crypto.randomUUID();
-    await db.insert(projectAssets).values({
-      id: projectAssetId,
-      projectId,
-      userId: user.id,
+    const alreadyOwned = await userOwnsMedia(user.id, existing.id);
+    return c.json({
+      dedupHit: alreadyOwned && isReusableExistingMedia(existing),
       mediaFileId: existing.id,
-      filename,
+      status: existing.status,
+      alreadyProcessed: existing.status === 'ready',
     });
-
-    const alreadyProcessed = existing.status === 'ready'
-      && (existing.asrStatus === 'completed' || existing.asrStatus === 'skipped');
-    return c.json({ dedupHit: true, assetId: projectAssetId, mediaFileId: existing.id, alreadyProcessed });
   } catch (error) {
     console.error('❌ 资产 preflight 失败:', error);
     return c.json({ error: 'Database Error' }, 500);
   }
 });
 
-// POST /api/assets — pre-register + dedup by fileHash
-// Returns { assetId, mediaFileId, alreadyProcessed }
-app.post("/", async (c) => {
+const attachSchema = z.object({
+  projectId: z.string().uuid(),
+  fileHash: sha256Schema,
+  filename: z.string().min(1).max(255),
+});
+
+// POST /api/assets/attach — attach an existing ready/processing global media row to a project.
+app.post("/attach", async (c) => {
   const user = c.get('user');
   try {
     const body = await c.req.json();
-    const { projectId, fileHash, filename, fileSize, duration, asrStatus } = body || {};
-
-    if (!projectId || !fileHash || !filename || typeof fileSize !== 'number') {
-      return c.json({ error: 'projectId, fileHash, filename, fileSize required' }, 400);
+    const parsed = attachSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+    const { projectId, fileHash, filename } = parsed.data;
+    if (!(await ensureProjectOwned(projectId, user.id))) {
+      return c.json({ error: 'Project not found' }, 404);
     }
 
-    const allowedAsr = new Set(['pending', 'skipped']);
-    const initialAsrStatus = allowedAsr.has(asrStatus) ? asrStatus : 'pending';
-
-    // 1. Dedup check: same user + same file hash
     const [existing] = await db
       .select()
       .from(mediaFiles)
-      .where(and(eq(mediaFiles.userId, user.id), eq(mediaFiles.fileHash, fileHash)))
+      .where(eq(mediaFiles.fileHash, fileHash))
       .limit(1);
+    if (!existing || !(await userOwnsMedia(user.id, existing.id)) || !isReusableExistingMedia(existing)) {
+      return c.json({ error: 'No attachable media for hash' }, 404);
+    }
+    const assetId = await createProjectAsset(projectId, user.id, existing.id, filename);
+    return c.json({ assetId, mediaFileId: existing.id, alreadyProcessed: existing.status === 'ready' });
+  } catch (error) {
+    console.error('❌ 资产 attach 失败:', error);
+    return c.json({ error: 'Database Error' }, 500);
+  }
+});
 
-    let mediaFileId: string;
-    let alreadyProcessed = false;
+const importTokenSchema = z.object({
+  fileHash: sha256Schema,
+  hasAudio: z.boolean(),
+});
 
-    if (existing) {
-      mediaFileId = existing.id;
-      alreadyProcessed = existing.status === 'ready' && existing.asrStatus === 'completed';
-    } else {
-      // New file: create media_files row
-      mediaFileId = crypto.randomUUID();
-      try {
-        await db.insert(mediaFiles).values({
-          id: mediaFileId,
-          userId: user.id,
-          fileHash,
-          fileSize,
-          duration: duration ?? null,
+app.post('/import-token', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => null);
+  const parsed = importTokenSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+  const { fileHash, hasAudio } = parsed.data;
+  const nonce = randomBytes(12).toString('base64url');
+  const tempPrefix = `assets/tmp/import/${user.id}/${fileHash}/${nonce}`;
+  const thumbnailTempKey = `${tempPrefix}/thumb.jpg`;
+  const audioTempKey = hasAudio ? `${tempPrefix}/audio.aac` : undefined;
+  const payload: ImportFinalizePayload = {
+    v: IMPORT_TOKEN_VERSION,
+    userId: user.id,
+    fileHash,
+    hasAudio,
+    audioTempKey,
+    thumbnailTempKey,
+    iat: Math.floor(Date.now() / 1000),
+    nonce,
+  };
+
+  return c.json({
+    finalizeToken: signImportFinalizePayload(payload),
+    thumbnail: {
+      uploadUrl: signUploadUrl(thumbnailTempKey, 'image/jpeg'),
+      objectKey: thumbnailTempKey,
+      contentType: 'image/jpeg',
+    },
+    audio: audioTempKey ? {
+      uploadUrl: signUploadUrl(audioTempKey, 'audio/aac'),
+      objectKey: audioTempKey,
+      contentType: 'audio/aac',
+    } : null,
+  });
+});
+
+const finalizeSchema = z.object({
+  projectId: z.string().uuid(),
+  fileHash: sha256Schema,
+  filename: z.string().min(1).max(255),
+  fileSize: z.number().int().nonnegative(),
+  duration: z.number().int().nonnegative().nullable().optional(),
+  hasAudio: z.boolean(),
+  finalizeToken: z.string().min(1),
+});
+
+app.post('/finalize', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => null);
+  const parsed = finalizeSchema.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
+  const input = parsed.data;
+  if (!(await ensureProjectOwned(input.projectId, user.id))) {
+    return c.json({ error: 'Project not found' }, 404);
+  }
+  const token = verifyImportFinalizeToken(input.finalizeToken);
+  if (!token || token.userId !== user.id || token.fileHash !== input.fileHash || token.hasAudio !== input.hasAudio) {
+    return c.json({ error: 'Invalid finalize token' }, 401);
+  }
+
+  try {
+    await assertTempArtifactsExist(token);
+    const result = await withFileHashLock(input.fileHash, async () => {
+      const [existing] = await db.select().from(mediaFiles).where(eq(mediaFiles.fileHash, input.fileHash)).limit(1);
+      if (existing && isReusableExistingMedia(existing)) {
+        const alreadyOwned = await userOwnsMedia(user.id, existing.id);
+        const assetId = await createProjectAsset(input.projectId, user.id, existing.id, input.filename);
+        deleteAssets([token.thumbnailTempKey, token.audioTempKey]).catch((e) => console.error('[assets/finalize] temp cleanup failed:', e));
+        return { assetId, mediaFileId: existing.id, alreadyProcessed: existing.status === 'ready' };
+      }
+
+      let mediaFileId = existing?.id ?? crypto.randomUUID();
+      if (existing) {
+        await db.update(mediaFiles).set({
+          fileSize: input.fileSize,
+          duration: input.duration ?? null,
           status: 'processing',
-          asrStatus: initialAsrStatus,
-        });
-      } catch (e: any) {
-        const msg = String(e?.code || e?.message || '');
-        if (msg.includes('ER_DUP_ENTRY') || msg.includes('Duplicate')) {
-          // Lost the race — another concurrent upload won; re-select
-          const [winner] = await db
-            .select()
-            .from(mediaFiles)
-            .where(and(eq(mediaFiles.userId, user.id), eq(mediaFiles.fileHash, fileHash)))
-            .limit(1);
+          asrTaskId: null,
+          transcriptKind: null,
+          processingStage: 'thumbnail',
+          failureStage: null,
+          failureReason: null,
+          summary: null,
+          audioOssKey: null,
+          thumbnailOssKey: null,
+        }).where(eq(mediaFiles.id, mediaFileId));
+      } else {
+        try {
+          await db.insert(mediaFiles).values({
+            id: mediaFileId,
+            fileHash: input.fileHash,
+            fileSize: input.fileSize,
+            duration: input.duration ?? null,
+            status: 'processing',
+            processingStage: 'thumbnail',
+            backupStatus: 'local_only',
+          });
+        } catch (e: any) {
+          const msg = String(e?.code || e?.message || '');
+          if (!msg.includes('ER_DUP_ENTRY') && !msg.includes('Duplicate')) throw e;
+          const [winner] = await db.select().from(mediaFiles).where(eq(mediaFiles.fileHash, input.fileHash)).limit(1);
           if (!winner) throw e;
+          if (isReusableExistingMedia(winner)) {
+            const alreadyOwned = await userOwnsMedia(user.id, winner.id);
+            const assetId = await createProjectAsset(input.projectId, user.id, winner.id, input.filename);
+            deleteAssets([token.thumbnailTempKey, token.audioTempKey]).catch((err) => console.error('[assets/finalize] temp cleanup failed:', err));
+            return { assetId, mediaFileId: winner.id, alreadyProcessed: winner.status === 'ready' };
+          }
           mediaFileId = winner.id;
-          alreadyProcessed = winner.status === 'ready' && winner.asrStatus === 'completed';
-        } else {
-          throw e;
+          await db.update(mediaFiles).set({
+            fileSize: input.fileSize,
+            duration: input.duration ?? null,
+            status: 'processing',
+            asrTaskId: null,
+            transcriptKind: null,
+            processingStage: 'thumbnail',
+            failureStage: null,
+            failureReason: null,
+            summary: null,
+            audioOssKey: null,
+            thumbnailOssKey: null,
+          }).where(eq(mediaFiles.id, mediaFileId));
         }
       }
-    }
 
-    // 2. Create project_assets row (always, even for dedup)
-    const projectAssetId = crypto.randomUUID();
-    await db.insert(projectAssets).values({
-      id: projectAssetId,
-      projectId,
-      userId: user.id,
-      mediaFileId,
-      filename,
+      const assetId = await createProjectAsset(input.projectId, user.id, mediaFileId, input.filename);
+      const thumbnailOssKey = `assets/${mediaFileId}/thumb.jpg`;
+      const audioOssKey = `assets/${mediaFileId}/audio.aac`;
+
+      try {
+        await assertTempArtifactsExist(token);
+        try {
+          await copyAsset(thumbnailOssKey, token.thumbnailTempKey);
+        } catch (error) {
+          await markMediaFailed(mediaFileId, 'thumbnail', error);
+          throw error;
+        }
+        await db.update(mediaFiles).set({ thumbnailOssKey, processingStage: input.hasAudio ? 'upload' : 'processing' }).where(eq(mediaFiles.id, mediaFileId));
+
+        if (input.hasAudio) {
+          if (!token.audioTempKey) throw new Error('finalize token missing audio temp key');
+          try {
+            await copyAsset(audioOssKey, token.audioTempKey);
+          } catch (error) {
+            await markMediaFailed(mediaFileId, 'upload', error);
+            throw error;
+          }
+          await db.update(mediaFiles).set({ audioOssKey, processingStage: 'asr' }).where(eq(mediaFiles.id, mediaFileId));
+          await submitAliyunAsrTask(mediaFileId, audioOssKey);
+        } else {
+          await completeAssetWithoutTranscript(mediaFileId, undefined, 'skipped');
+        }
+      } catch (error) {
+        throw error;
+      } finally {
+        deleteAssets([token.thumbnailTempKey, token.audioTempKey]).catch((e) => console.error('[assets/finalize] temp cleanup failed:', e));
+      }
+
+      return { assetId, mediaFileId, alreadyProcessed: false };
     });
 
-    return c.json({ assetId: projectAssetId, mediaFileId, alreadyProcessed });
+    return c.json(result);
   } catch (error) {
-    console.error('❌ 资产预登记失败:', error);
-    return c.json({ error: 'Database Insert Error' }, 500);
+    console.error('❌ 资产 finalize 失败:', error);
+    return c.json({ error: 'Finalize failed' }, 500);
   }
+});
+
+app.post('/', async (c) => {
+  return c.json({ error: 'Legacy asset create path is closed; use /api/assets/finalize' }, 410);
 });
 
 // Note: the legacy `POST /api/assets/:id/relink` endpoint has been removed.
@@ -278,7 +585,7 @@ app.post("/", async (c) => {
 // (apps/desktop/src-tauri/src/local_db.rs); the desktop calls
 // `local_assets_relink` directly via Tauri IPC.
 
-// DELETE /api/assets/:id — delete project_asset; clean up media_file if last reference for this user
+// DELETE /api/assets/:id — delete project_asset; clean up global media_file only when no refs remain
 app.delete("/:id", async (c) => {
   const user = c.get('user');
   try {
@@ -302,7 +609,7 @@ app.delete("/:id", async (c) => {
       const remaining = await tx
         .select({ id: projectAssets.id })
         .from(projectAssets)
-        .where(and(eq(projectAssets.mediaFileId, pa.mediaFileId), eq(projectAssets.userId, user.id)))
+        .where(eq(projectAssets.mediaFileId, pa.mediaFileId))
         .limit(1);
 
       const isLastReference = remaining.length === 0;
@@ -346,10 +653,21 @@ app.post('/:mediaFileId/backup-status', async (c) => {
     return c.json({ error: 'Invalid', issues: parsed.error.issues }, 400);
   }
 
+  const [owned] = await db
+    .select({ backupStatus: mediaFiles.backupStatus })
+    .from(projectAssets)
+    .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+    .where(and(eq(projectAssets.mediaFileId, mediaFileId), eq(projectAssets.userId, user.id)))
+    .limit(1);
+  if (!owned) return c.json({ error: 'Not found' }, 404);
+  if (owned.backupStatus === 'backed_up') {
+    return c.json({ success: true });
+  }
+
   const result = await db
     .update(mediaFiles)
     .set({ backupStatus: parsed.data.status })
-    .where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.userId, user.id)));
+    .where(and(eq(mediaFiles.id, mediaFileId), ne(mediaFiles.backupStatus, 'backed_up')));
 
   // mysql2 returns [ResultSetHeader, undefined]; affectedRows surfaces on header
   const affected = (result as any)?.[0]?.affectedRows ?? 0;
@@ -359,68 +677,22 @@ app.post('/:mediaFileId/backup-status', async (c) => {
   return c.json({ success: true });
 });
 
-// POST /api/assets/:mediaFileId/unbackup —— 用户主动取消云备份。
-//
-// 跨用户引用计数：video-backup 的 OSS object key 是 hash-derived (assets/by-hash/{sha256}.{ext})，
-// 多个用户备份同一份内容时共享一个 OSS 对象。本 endpoint 先清掉本用户的 videoOssKey/backupStatus，
-// 再扫一遍是否还有其它用户在同一 fileHash 上保留 videoOssKey；都没有时才真正删 OSS。
-//
-// 失败模式：DB 永远先一致地清理；若 OSS DELETE 因网络/权限失败，留下 orphan 由后续 sweep 回收，
-// 不让 endpoint 整体失败（用户 UI 已经按 local_only 显示）。
+// POST /api/assets/:mediaFileId/unbackup —— disabled for global media_files.
+// Backup state is now per-content, not per-user; clearing it here would remove
+// cloud availability for every project/user attached to the same hash.
 app.post('/:mediaFileId/unbackup', async (c) => {
   const user = c.get('user');
   const mediaFileId = c.req.param('mediaFileId');
+  const [owned] = await db
+    .select({ mediaFileId: projectAssets.mediaFileId })
+    .from(projectAssets)
+    .where(and(eq(projectAssets.mediaFileId, mediaFileId), eq(projectAssets.userId, user.id)))
+    .limit(1);
 
-  const result = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .select({
-        fileHash: mediaFiles.fileHash,
-        videoOssKey: mediaFiles.videoOssKey,
-      })
-      .from(mediaFiles)
-      .where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.userId, user.id)))
-      .limit(1);
-    if (!row) return { found: false as const };
-
-    await tx
-      .update(mediaFiles)
-      .set({ videoOssKey: null, backupStatus: 'local_only' })
-      .where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.userId, user.id)));
-
-    // 是否还有其它 media_files 行在同一 hash 上挂着 videoOssKey
-    const stillReferenced = await tx
-      .select({ id: mediaFiles.id })
-      .from(mediaFiles)
-      .where(and(
-        eq(mediaFiles.fileHash, row.fileHash),
-        isNotNull(mediaFiles.videoOssKey),
-        ne(mediaFiles.id, mediaFileId),
-      ))
-      .limit(1);
-
-    return {
-      found: true as const,
-      isLastReferrer: row.videoOssKey != null && stillReferenced.length === 0,
-      ossKey: row.videoOssKey,
-    };
-  });
-
-  if (!result.found) {
+  if (!owned) {
     return c.json({ error: 'Not found' }, 404);
   }
-
-  let ossDeleted = false;
-  if (result.isLastReferrer && result.ossKey) {
-    try {
-      await deleteAsset(result.ossKey);
-      ossDeleted = true;
-    } catch (e) {
-      // DB is already consistent; orphaned object can be swept later.
-      console.error('[unbackup] OSS delete failed, leaving orphan:', result.ossKey, e);
-    }
-  }
-
-  return c.json({ success: true, ossDeleted });
+  return c.json({ success: true, disabled: true, ossDeleted: false });
 });
 
 export default app;

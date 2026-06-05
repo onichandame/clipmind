@@ -1,10 +1,12 @@
 import { Hono } from "hono";
 import { mediaFiles, assetChunks } from "@clipmind/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { db } from "../db";
 import { completeAssetWithoutTranscript, processAssetPostASR } from "../logic/asset-processor";
 import { deleteVectorsByAssetId, QDRANT_CHUNKS_COLLECTION } from "../utils/qdrant";
+import { withFileHashLock } from "../utils/import-locks";
+import { verifyAsrCallbackToken } from "../utils/asr-callback-token";
 
 const app = new Hono();
 
@@ -28,6 +30,43 @@ function hasValidSentenceShape(sentence: any) {
     && sentence.EndTime > sentence.BeginTime;
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function findMediaByAsrTaskId(taskId: string) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [record] = await db
+      .select({ id: mediaFiles.id, fileHash: mediaFiles.fileHash, status: mediaFiles.status, asrTaskId: mediaFiles.asrTaskId })
+      .from(mediaFiles)
+      .where(eq(mediaFiles.asrTaskId, taskId))
+      .limit(1);
+    if (record) return record;
+    if (attempt < 2) await sleep(500);
+  }
+  return null;
+}
+
+async function claimAsrEmbeddingStage(mediaFileId: string, taskId: string) {
+  const result = await db.update(mediaFiles)
+    .set({ processingStage: 'embedding' })
+    .where(and(
+      eq(mediaFiles.id, mediaFileId),
+      eq(mediaFiles.asrTaskId, taskId),
+      eq(mediaFiles.status, 'processing'),
+      eq(mediaFiles.processingStage, 'asr'),
+    ));
+  const affected = (result as any)?.[0]?.affectedRows ?? 0;
+  return affected > 0;
+}
+
+async function failCurrentAsrTask(mediaFileId: string, taskId: string, failureReason: string) {
+  await db.update(mediaFiles).set({
+    status: 'failed',
+    processingStage: null,
+    failureStage: 'asr',
+    failureReason,
+  }).where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.asrTaskId, taskId)));
+}
+
 app.post("/", async (c) => {
   try {
     console.log("\n******************************************");
@@ -39,14 +78,16 @@ app.post("/", async (c) => {
     const taskId = body.TaskId;
     const statusCode = body.StatusCode;
     const result = body.Result;
+    const mediaFileIdFromQuery = c.req.query('mediaFileId');
+    const callbackToken = c.req.query('token');
 
     if (!taskId) {
       console.error('❌ ASR Webhook 缺少 TaskId，忽略该回调以避免重试死循环');
       return new Response(JSON.stringify({ success: true, msg: 'Missing TaskId ignored' }), { status: 200 });
     }
 
-    // 1. 反查 media_files 中的 asrTaskId
-    const [mfRecord] = await db.select({ id: mediaFiles.id, asrStatus: mediaFiles.asrStatus }).from(mediaFiles).where(eq(mediaFiles.asrTaskId, taskId)).limit(1);
+    // 1. 反查 media_files 中的 asrTaskId。阿里云可能在 submitter 写库前回调，做一次短重试。
+    const mfRecord = await findMediaByAsrTaskId(taskId);
     if (!mfRecord) {
       console.error(`❌ Webhook 找不到对应的 TaskId: ${taskId}`);
       return new Response(JSON.stringify({ success: true, msg: "Task ignored" }), { status: 200 });
@@ -54,22 +95,38 @@ app.post("/", async (c) => {
 
     const mediaFileId = mfRecord.id;
 
-    if (mfRecord.asrStatus === 'completed') {
+    if (!mediaFileIdFromQuery || mediaFileIdFromQuery !== mediaFileId || !verifyAsrCallbackToken(callbackToken, mediaFileId)) {
+      console.error(`❌ ASR Webhook callback token 校验失败: ${taskId}`);
+      return new Response(JSON.stringify({ success: true, msg: 'Invalid callback token ignored' }), { status: 200 });
+    }
+
+    if (mfRecord.status === 'ready') {
       console.log(`ℹ️ ASR 回调重复送达，媒体文件 ${mediaFileId} 已完成，直接忽略。`);
       return new Response(JSON.stringify({ success: true, msg: 'Duplicate ignored' }), { status: 200 });
     }
+
+    return await withFileHashLock(mfRecord.fileHash, async () => {
+      const freshRecord = await findMediaByAsrTaskId(taskId);
+      if (!freshRecord || freshRecord.id !== mediaFileId) {
+        console.log(`ℹ️ ASR stale callback ignored after lock: ${taskId}`);
+        return new Response(JSON.stringify({ success: true, msg: 'Stale ignored' }), { status: 200 });
+      }
+      if (freshRecord.status === 'ready') {
+        console.log(`ℹ️ ASR duplicate callback ignored after lock: ${taskId}`);
+        return new Response(JSON.stringify({ success: true, msg: 'Duplicate ignored' }), { status: 200 });
+      }
 
     if (statusCode === ASR_SUCCESS) {
       const sentences = result?.Sentences;
 
       if (!Array.isArray(sentences)) {
-        await db.update(mediaFiles).set({ asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
+        await failCurrentAsrTask(mediaFileId, taskId, 'ASR success callback missing Sentences array');
         console.error(`❌ ASR 成功回调缺少合法 Sentences 数组: ${taskId}`);
       } else {
         const hasMalformedSentence = sentences.some((sentence: any) => !hasValidSentenceShape(sentence));
 
         if (hasMalformedSentence) {
-          await db.update(mediaFiles).set({ asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
+          await failCurrentAsrTask(mediaFileId, taskId, 'ASR success callback contained malformed sentence');
           console.error(`❌ ASR 成功回调包含结构不合法的句子: ${taskId}`);
         } else {
           const textSentences = sentences.filter((sentence: any) => sentence.Text.trim().length > 0);
@@ -80,32 +137,41 @@ app.post("/", async (c) => {
               mediaFileId,
               startTime: sentence.BeginTime,
               endTime: sentence.EndTime,
-              transcriptText: sentence.Text
+              transcriptText: sentence.Text,
+              asrTaskId: taskId,
             }));
 
+            if (!(await claimAsrEmbeddingStage(mediaFileId, taskId))) {
+              console.log(`ℹ️ ASR stale/duplicate callback ignored before chunk write: ${taskId}`);
+              return new Response(JSON.stringify({ success: true, msg: 'Stale ignored' }), { status: 200 });
+            }
             try {
               await deleteVectorsByAssetId(mediaFileId, QDRANT_CHUNKS_COLLECTION);
             } catch (error) {
-              await db.update(mediaFiles).set({ status: 'error', asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
+              await db.update(mediaFiles).set({
+                status: 'failed',
+                processingStage: null,
+                failureStage: 'qdrant',
+                failureReason: String(error),
+              }).where(and(eq(mediaFiles.id, mediaFileId), eq(mediaFiles.asrTaskId, taskId)));
               throw error;
             }
             await db.delete(assetChunks).where(eq(assetChunks.mediaFileId, mediaFileId));
             await db.insert(assetChunks).values(chunksToInsert);
-            await db.update(mediaFiles).set({ asrStatus: 'completed' }).where(eq(mediaFiles.id, mediaFileId));
             console.log(`✅ ASR 切片落盘成功：媒体文件 ${mediaFileId}，共生成 ${chunksToInsert.length} 条 RAG 索引片段。`);
 
             processAssetPostASR(mediaFileId, chunksToInsert).catch(console.error);
           } else {
-            await completeAssetWithoutTranscript(mediaFileId);
+            await completeAssetWithoutTranscript(mediaFileId, undefined, 'empty', taskId);
             console.log(`✅ ASR 成功但无有效句子：媒体文件 ${mediaFileId} 按空转写完成导入。`);
           }
         }
       }
     } else if (statusCode === ASR_SUCCESS_WITH_NO_VALID_FRAGMENT) {
-      await completeAssetWithoutTranscript(mediaFileId);
+      await completeAssetWithoutTranscript(mediaFileId, undefined, 'empty', taskId);
       console.log(`✅ ASR 无有效语音片段：媒体文件 ${mediaFileId} 按空转写完成导入。`);
     } else {
-      await db.update(mediaFiles).set({ status: 'error', asrStatus: 'failed' }).where(eq(mediaFiles.id, mediaFileId));
+      await failCurrentAsrTask(mediaFileId, taskId, `ASR failed with status code ${statusCode}`);
       console.error(`❌ ASR 任务底层失败: ${taskId}, 状态码: ${statusCode}`);
     }
 
@@ -113,6 +179,7 @@ app.post("/", async (c) => {
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
+    });
     });
 
   } catch (error) {

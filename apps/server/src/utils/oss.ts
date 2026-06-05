@@ -50,11 +50,12 @@ export function signAssetDownloadUrl(
 /**
  * 签发前端直传 PUT URL (HTTPS)。明确 Content-Type 防止预签名与请求不一致导致 403。
  */
-export function signUploadUrl(objectKey: string, contentType: string): string {
+export function signUploadUrl(objectKey: string, contentType: string, headers: Record<string, string> = {}): string {
   return ossClient.signatureUrl(objectKey, {
     expires: UPLOAD_EXPIRES_SECONDS,
     method: 'PUT',
     'Content-Type': contentType,
+    ...headers,
     secure: true,
   });
 }
@@ -65,4 +66,18 @@ export function signUploadUrl(objectKey: string, contentType: string): string {
  */
 export async function deleteAsset(objectKey: string): Promise<void> {
   await ossClient.delete(objectKey);
+}
+
+/** Server-side OSS copy. Used to promote temp import artifacts into canonical media keys. */
+export async function copyAsset(targetKey: string, sourceKey: string): Promise<void> {
+  await ossClient.copy(targetKey, sourceKey);
+}
+
+export async function deleteAssets(objectKeys: Array<string | null | undefined>): Promise<void> {
+  await Promise.allSettled(objectKeys.filter(Boolean).map((key) => ossClient.delete(key as string)));
+}
+
+export async function headAsset(objectKey: string): Promise<Record<string, string>> {
+  const result = await ossClient.head(objectKey);
+  return (result as any)?.res?.headers ?? {};
 }

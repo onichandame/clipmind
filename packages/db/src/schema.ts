@@ -1,5 +1,5 @@
 // app/db/schema.ts
-import { mysqlTable, varchar, text, int, timestamp, json, boolean, index } from 'drizzle-orm/mysql-core';
+import { mysqlTable, varchar, text, int, bigint, timestamp, json, boolean, index, uniqueIndex } from 'drizzle-orm/mysql-core';
 
 // ==========================================
 // 模块 0：用户与会话 (Identity Layer)
@@ -44,12 +44,9 @@ export const sessions = mysqlTable('sessions', {
 //   project_assets — 每个项目独立的资产引用（UI/用户看到的 assetId 来自此表）
 // ==========================================
 
-// 底层：去重处理单元。同一用户上传相同文件到不同项目时，此表只有一行。
+// 底层：全局去重处理单元。同一 SHA-256 原片在全库只处理一次；授权只来自 project_assets。
 export const mediaFiles = mysqlTable('media_files', {
   id: varchar('id', { length: 36 }).primaryKey(),
-  userId: varchar('user_id', { length: 36 })
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
   fileHash: varchar('file_hash', { length: 64 }).notNull(), // SHA-256 hex of original video
   audioOssKey: varchar('audio_oss_key', { length: 1024 }), // 音频强制上云用于 ASR
   thumbnailOssKey: varchar('thumbnail_oss_key', { length: 1024 }), // 缩略图强制上云用于跨设备
@@ -57,17 +54,19 @@ export const mediaFiles = mysqlTable('media_files', {
   videoOssKey: varchar('video_oss_key', { length: 1024 }),
   // 云备份生命周期：local_only | uploading | backed_up | failed (stale 当前未触发)
   backupStatus: varchar('backup_status', { length: 20 }).default('local_only').notNull(),
-  fileSize: int('file_size').notNull(),
+  fileSize: bigint('file_size', { mode: 'number' }).notNull(),
   duration: int('duration'),
-  status: varchar('status', { length: 20 }).default('processing'), // processing | ready | error
+  status: varchar('status', { length: 20 }).default('processing').notNull(), // processing | ready | failed
   asrTaskId: varchar('asr_task_id', { length: 128 }),
-  asrStatus: varchar('asr_status', { length: 20 }).default('pending'), // pending | processing | completed | failed | skipped
+  transcriptKind: varchar('transcript_kind', { length: 20 }), // speech | empty | skipped | null while processing/failed
+  processingStage: varchar('processing_stage', { length: 20 }), // upload | thumbnail | asr | embedding | qdrant | processing | null
+  failureStage: varchar('failure_stage', { length: 20 }), // upload | thumbnail | asr | embedding | qdrant | processing | null
+  failureReason: text('failure_reason'),
   summary: text('summary'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
-  userIdx: index('idx_media_files_user').on(t.userId),
-  // 同一用户同一文件只处理一次
-  userHashUnique: index('idx_media_files_user_hash').on(t.userId, t.fileHash),
+  fileHashUnique: uniqueIndex('idx_media_files_file_hash_unique').on(t.fileHash),
+  asrTaskUnique: uniqueIndex('idx_media_files_asr_task_id_unique').on(t.asrTaskId),
 }));
 
 // 项目层：每个项目有独立的资产列表，多个项目可指向同一 media_file。
@@ -81,7 +80,7 @@ export const projectAssets = mysqlTable('project_assets', {
     .references(() => users.id, { onDelete: 'cascade' }),
   mediaFileId: varchar('media_file_id', { length: 36 })
     .notNull()
-    .references(() => mediaFiles.id, { onDelete: 'cascade' }),
+    .references(() => mediaFiles.id, { onDelete: 'restrict' }),
   filename: varchar('filename', { length: 255 }).notNull(),
   // 注意：localPath / originDeviceId 已迁移至桌面端 SQLite (apps/desktop/src-tauri/src/local_db.rs)。
   // 视频备份 (videoOssKey / backupStatus) 已上提至 media_files —— per-content 一份，跨项目共享。
@@ -101,8 +100,10 @@ export const assetChunks = mysqlTable('asset_chunks', {
   startTime: int('start_time').notNull(),
   endTime: int('end_time').notNull(),
   transcriptText: text('transcript_text').notNull(),
+  asrTaskId: varchar('asr_task_id', { length: 128 }),
 }, (t) => ({
   mediaFileIdx: index('idx_asset_chunks_media_file').on(t.mediaFileId),
+  asrTaskIdx: index('idx_asset_chunks_asr_task_id').on(t.asrTaskId),
 }));
 
 // ==========================================

@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { eq, and, ne, isNotNull } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import { db } from '../db';
-import { mediaFiles } from '@clipmind/db/schema';
-import { signUploadUrl } from '../utils/oss';
+import { mediaFiles, projectAssets } from '@clipmind/db/schema';
+import { headAsset, signUploadUrl } from '../utils/oss';
 import { signWebhookPayload, newNonce } from '../utils/auth';
 import { requireAuth } from '../middleware/auth';
 
@@ -32,6 +32,13 @@ const KIND_CONTENT_TYPE: Record<z.infer<typeof tokenSchema>['kind'], (filename: 
   },
 };
 
+function isMissingOssObject(error: unknown) {
+  const anyError = error as any;
+  return anyError?.status === 404
+    || anyError?.code === 'NoSuchKey'
+    || String(anyError?.message || '').includes('NoSuchKey');
+}
+
 app.post('/', async (c) => {
   const user = c.get('user');
   const body = await c.req.json().catch(() => null);
@@ -41,13 +48,21 @@ app.post('/', async (c) => {
   }
   const { kind, assetId, filename } = parsed.data;
 
-  // All three kinds (audio / thumbnail / video-backup) are now keyed by media_files.id
-  // — backup state moved to media_files (per-content), so we can do a single ownership check.
-  // We also pull fileHash so video-backup can use a content-addressed key (cross-user dedup).
+  if (kind !== 'video-backup') {
+    return c.json({ error: 'Legacy import upload-token path is closed; use /api/assets/import-token' }, 410);
+  }
+
+  // media_files is global; user ownership is proven by at least one project_assets ref.
   const [owned] = await db
-    .select({ id: mediaFiles.id, fileHash: mediaFiles.fileHash })
-    .from(mediaFiles)
-    .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, user.id)))
+    .select({
+      id: mediaFiles.id,
+      fileHash: mediaFiles.fileHash,
+      videoOssKey: mediaFiles.videoOssKey,
+      backupStatus: mediaFiles.backupStatus,
+    })
+    .from(projectAssets)
+    .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+    .where(and(eq(projectAssets.mediaFileId, assetId), eq(projectAssets.userId, user.id)))
     .limit(1);
   if (!owned) {
     return c.json({ error: 'Asset not found' }, 404);
@@ -55,40 +70,59 @@ app.post('/', async (c) => {
 
   const ext = (filename.split('.').pop() || '').toLowerCase();
 
-  // video-backup: cross-user content dedup. Before issuing a presigned PUT URL,
-  // check whether *another* user already holds an OSS reference for this hash.
-  // If yes, copy that user's videoOssKey onto this user's row and flip
-  // backupStatus='backed_up' synchronously — the client will skip the PUT
-  // entirely. We trust the existing row's videoOssKey rather than recomputing
-  // from filename, so .mov-vs-.mp4-extension users converge on whichever key
-  // was first uploaded.
-  if (kind === 'video-backup') {
-    const [shared] = await db
-      .select({ videoOssKey: mediaFiles.videoOssKey })
-      .from(mediaFiles)
-      .where(and(
-        eq(mediaFiles.fileHash, owned.fileHash),
-        isNotNull(mediaFiles.videoOssKey),
-        ne(mediaFiles.id, assetId),
-      ))
-      .limit(1);
-
-    if (shared && shared.videoOssKey) {
-      await db
-        .update(mediaFiles)
-        .set({ videoOssKey: shared.videoOssKey, backupStatus: 'backed_up' })
-        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, user.id)));
-      return c.json({ alreadyUploaded: true, objectKey: shared.videoOssKey });
+  if (owned.videoOssKey) {
+    try {
+      const headers = await headAsset(owned.videoOssKey);
+      const storedSha256 = headers['x-oss-meta-sha256'];
+      if (storedSha256 === owned.fileHash) {
+        await db
+          .update(mediaFiles)
+          .set({ backupStatus: 'backed_up' })
+          .where(eq(mediaFiles.id, assetId));
+        return c.json({ alreadyUploaded: true, objectKey: owned.videoOssKey });
+      }
+      if (owned.backupStatus === 'backed_up') {
+        return c.json({ error: 'Existing backup metadata mismatch' }, 409);
+      }
+      console.warn('[upload-token] video backup metadata mismatch, forcing reupload:', owned.videoOssKey);
+    } catch (error) {
+      if (owned.backupStatus === 'backed_up') {
+        if (!isMissingOssObject(error)) {
+          return c.json({ error: 'Existing backup verification failed, retry later' }, 503);
+        }
+        const missingResult = await db
+          .update(mediaFiles)
+          .set({ videoOssKey: null, backupStatus: 'failed' })
+          .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.backupStatus, 'backed_up')));
+        const missingAffected = (missingResult as any)?.[0]?.affectedRows ?? 0;
+        if (missingAffected === 0) {
+          return c.json({ error: 'Backup state changed, retry' }, 409);
+        }
+      } else {
+        console.warn('[upload-token] video backup HEAD failed, forcing reupload:', owned.videoOssKey, error);
+      }
+    }
+    const clearResult = await db
+      .update(mediaFiles)
+      .set({ videoOssKey: null, backupStatus: 'failed' })
+      .where(and(eq(mediaFiles.id, assetId), ne(mediaFiles.backupStatus, 'backed_up')));
+    const affected = (clearResult as any)?.[0]?.affectedRows ?? 0;
+    if (affected === 0) {
+      const [current] = await db
+        .select({ videoOssKey: mediaFiles.videoOssKey, backupStatus: mediaFiles.backupStatus })
+        .from(mediaFiles)
+        .where(eq(mediaFiles.id, assetId))
+        .limit(1);
+      if (current?.backupStatus === 'backed_up' && current.videoOssKey) {
+        return c.json({ alreadyUploaded: true, objectKey: current.videoOssKey });
+      }
+      return c.json({ error: 'Backup state changed, retry' }, 409);
     }
   }
 
-  // video-backup is content-addressed: every user uploading the same SHA-256
-  // shares one OSS object. Unsync deletes only when the last referrer drops.
-  // audio/thumbnail remain per-mediaFileId (today they're per-user processing artifacts).
-  const objectKey = kind === 'video-backup'
-    ? `assets/by-hash/${owned.fileHash}.${ext || 'mp4'}`
-    : KIND_TO_KEY[kind](assetId, ext);
+  const objectKey = `assets/by-hash/${owned.fileHash}.${ext || 'mp4'}`;
   const contentType = KIND_CONTENT_TYPE[kind](filename);
+  const uploadHeaders = { 'x-oss-meta-sha256': owned.fileHash };
 
   const callbackToken = signWebhookPayload({
     userId: user.id,
@@ -101,9 +135,10 @@ app.post('/', async (c) => {
 
   return c.json({
     alreadyUploaded: false,
-    uploadUrl: signUploadUrl(objectKey, contentType),
+    uploadUrl: signUploadUrl(objectKey, contentType, uploadHeaders),
     objectKey,
     contentType,
+    uploadHeaders,
     callbackToken,
   });
 });

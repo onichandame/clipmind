@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { mediaFiles, webhookNonces } from "@clipmind/db";
+import { mediaFiles, projectAssets, webhookNonces } from "@clipmind/db";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db";
 import { verifyWebhookPayload } from "../utils/auth";
+import { headAsset } from "../utils/oss";
 
 const app = new Hono();
 
@@ -48,31 +49,27 @@ app.post("/", async (c) => {
       throw e;
     }
 
-    // All kinds (audio / thumbnail / video-backup) are keyed by media_files.id —
-    // backup state is per-content, shared across all project_assets that point at this file.
-    if (kind === 'audio') {
-      await db
-        .update(mediaFiles)
-        .set({ audioOssKey: objectKey, asrStatus: 'pending' })
-        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, userId)));
+    if (kind === 'audio' || kind === 'thumbnail') {
+      return c.json({ success: true, ignored: 'legacy import callback closed' });
+    }
 
-      import('../utils/aliyun-asr').then(({ submitAliyunAsrTask }) => {
-        submitAliyunAsrTask(assetId, objectKey).catch(err => {
-          console.error("[OSS-Callback] submitAliyunAsrTask failed:", err);
-        });
-      }).catch(err => {
-        console.error("[OSS-Callback] aliyun-asr import failed:", err);
-      });
-    } else if (kind === 'thumbnail') {
-      await db
-        .update(mediaFiles)
-        .set({ thumbnailOssKey: objectKey, status: 'ready' })
-        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, userId)));
-    } else if (kind === 'video-backup') {
+    if (kind === 'video-backup') {
+      const [owned] = await db
+        .select({ mediaFileId: projectAssets.mediaFileId, fileHash: mediaFiles.fileHash })
+        .from(projectAssets)
+        .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+        .where(and(eq(projectAssets.mediaFileId, assetId), eq(projectAssets.userId, userId)))
+        .limit(1);
+      if (!owned) return c.json({ error: 'Asset not found' }, 404);
+
+      const headers = await headAsset(objectKey);
+      if (headers['x-oss-meta-sha256'] !== owned.fileHash) {
+        return c.json({ error: 'Backup object hash metadata mismatch' }, 409);
+      }
       await db
         .update(mediaFiles)
         .set({ videoOssKey: objectKey, backupStatus: 'backed_up' })
-        .where(and(eq(mediaFiles.id, assetId), eq(mediaFiles.userId, userId)));
+        .where(eq(mediaFiles.id, assetId));
     }
 
     return c.json({ success: true });
