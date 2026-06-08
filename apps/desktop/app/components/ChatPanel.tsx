@@ -1,9 +1,7 @@
 import { env } from '../env';
-import { authFetch, authHeaders } from '../lib/auth';
+import { authFetch } from '../lib/auth';
 import { useRef, useEffect, useState, useMemo, useCallback, memo } from "react";
-import { useNavigate, useRevalidator } from "react-router";
-import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, isToolUIPart } from "ai";
+import { useNavigate } from "react-router";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
@@ -15,10 +13,10 @@ import { EditableProjectTitle } from "./EditableProjectTitle";
 import { DeleteConfirmModal } from "./DeleteConfirmModal";
 import { WIDGET_TOOL_NAMES, SILENT_TOOL_NAMES, widgetRegistry } from "./widgets/registry";
 import { MemoryUpdateToast } from "./MemoryUpdateToast";
+import { isToolPart, useProjectChat } from "../lib/use-project-chat";
 
 interface ChatPanelProps {
   projectId: string;
-  initialMessages?: any[];
 }
 
 const sanitizeSchema = {
@@ -51,10 +49,10 @@ const MessageBubble = memo(function MessageBubble({
   // Tool pills stay visible after the React loop ends as part of the latest
   // message's record — bridges the gap between loop completion and any
   // downstream UI (e.g. right panel sliding in) settling.
-  const hasVisibleTools = !isUser && isLast && !!message?.parts?.some((p: any) => isToolUIPart(p) && !SILENT_TOOL_NAMES.has(p.type));
+  const hasVisibleTools = !isUser && isLast && !!message?.parts?.some((p: any) => isToolPart(p) && !SILENT_TOOL_NAMES.has(p.type));
   // HITL widgets render unconditionally (not gated by isLoading), so a message
   // carrying only a widget part (no text, no streaming pill) is still visible.
-  const hasWidget = !isUser && !!message?.parts?.some((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type));
+  const hasWidget = !isUser && !!message?.parts?.some((p: any) => isToolPart(p) && WIDGET_TOOL_NAMES.has(p.type));
   if (!isUser && !hasCleanText && !hasVisibleTools && !hasWidget && !showInlineThinking) return null;
 
   if (isUser) {
@@ -88,14 +86,14 @@ const MessageBubble = memo(function MessageBubble({
 
         {/* HITL Widgets — persistent in-chat UI cards (asset picker, future confirm buttons, etc.).
             Always render (independent of streaming state) once the tool part is in the message. */}
-        {message?.parts?.filter((p: any) => isToolUIPart(p) && WIDGET_TOOL_NAMES.has(p.type)).map((widgetPart: any, idx: number) => {
+        {message?.parts?.filter((p: any) => isToolPart(p) && WIDGET_TOOL_NAMES.has(p.type)).map((widgetPart: any, idx: number) => {
           const Widget = widgetRegistry[widgetPart.type];
           if (!Widget) return null;
           return <Widget key={`widget-${idx}`} part={widgetPart} projectId={projectId} answer={nextUserText} onSubmit={onWidgetSubmit} />;
         })}
 
         {/* Tool Invocations 状态渲染 — 保留至最近一条 AI 消息上，loop 结束后仍作为历史展示。Widget / 静默工具不在此处渲染。 */}
-        {isLast && message?.parts?.filter((p: any) => isToolUIPart(p) && !WIDGET_TOOL_NAMES.has(p.type) && !SILENT_TOOL_NAMES.has(p.type)).map((toolPart: any, index: number) => {
+        {isLast && message?.parts?.filter((p: any) => isToolPart(p) && !WIDGET_TOOL_NAMES.has(p.type) && !SILENT_TOOL_NAMES.has(p.type)).map((toolPart: any, index: number) => {
           const state = toolPart.state;
           const toolName = toolPart.toolName || toolPart.type;
 
@@ -164,9 +162,8 @@ const MessageBubble = memo(function MessageBubble({
   );
 });
 
-export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
+export function ChatPanel({ projectId }: ChatPanelProps) {
   const setActiveMode = useCanvasStore((s) => s.setActiveMode);
-  const activeMode = useCanvasStore((s) => s.activeMode);
 
   // [Arch] SSOT 防线：标题直接依赖 React Query 缓存，彻底抛弃不同步的 Zustand 快照
   const { data: projectData } = useQuery({
@@ -180,114 +177,51 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   });
   const projectTitle = projectData?.project?.title;
 
-  const currentProject = useCanvasStore((s) => s.projects[projectId]);
   const queryClient = useQueryClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-
-  // 1. Raw UIMessage passthrough — no transformation needed
-  const startingMessages = initialMessages;
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // 2. 规范调用
-  const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
-  const isDirty = useCanvasStore((s) => s.projects[projectId]?.isDirty || false);
   const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
-  const setEditingPlan = useCanvasStore((s) => s.setEditingPlan);
-  const revalidator = useRevalidator();
-  const autoTriggeredRef = useRef<Record<string, boolean>>({});
+  const { messages, sendMessage, status } = useProjectChat(projectId);
 
-  // Refs that always hold the latest value of body deps so the transport's
-  // body factory and the stable widget callback can read them without taking
-  // them as deps (and thus without invalidating memoization on every change).
-  const projectIdRef = useRef(projectId);
-  const outlineContentRef = useRef(outlineContent);
-  const isDirtyRef = useRef(isDirty);
-  useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
-  useEffect(() => { outlineContentRef.current = outlineContent; }, [outlineContent]);
-  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
-
-  const transport = useMemo(
-    () => new DefaultChatTransport({
-      api: `${env.VITE_API_BASE_URL}/api/chat`,
-      headers: () => authHeaders(),
-      body: () => ({
-        projectId: projectIdRef.current,
-        currentOutline: outlineContentRef.current,
-        isDirty: isDirtyRef.current,
-      }),
-    }),
-    [],
-  );
-
-  const { messages, sendMessage, regenerate, status, } = useChat({
-    id: projectId,
-
-
-
-    messages: startingMessages,
-    transport,
-    onData: (data) => {
-      console.log("📥 [网络层探针] 收到 data! :", data.type, JSON.stringify(data.data));
-    },
-    onError: (err) => {
-      console.error("❌ [网络层探针] SDK 底层流解析抛错:", err);
-    },
-    onFinish: (event) => {
-      console.log("🛑 [网络层探针] 触发 onFinish，流被正常解析并结束！", JSON.stringify(event));
-      // [Arch] 强制触发 Router Loader 重新拉取后端数据，实现方案与素材的水合 (Hydration)
-      revalidator.revalidate();
-
-      // [Arch] 动态优先级：提取本次流中最后一个被调用的工具，以决定最终的视图归属
-      const allTools = event.messages.flatMap(m => m.parts?.filter(p => isToolUIPart(p)).map(p => p.type) || []);
-      const lastTool = allTools[allTools.length - 1];
-
-      if (lastTool === 'tool-generateEditingPlan') {
-        setActiveMode("plan");
-      } else if (lastTool === 'tool-search_assets' || lastTool === 'tool-search_clips') {
-        setActiveMode("footage");
-      } else if (lastTool === 'tool-updateOutline') {
-        setActiveMode("outline");
+  const flushOutlineBeforeChat = useCallback(async () => {
+    const state = useCanvasStore.getState().projects[projectId];
+    if (!state?.isDirty) return false;
+    const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}/outline`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentMd: state.outlineContent, expectedVersion: state.outlineVersion }),
+    });
+    if (res.status === 409) {
+      const data = await res.json().catch(() => ({}));
+      if (typeof data?.outline?.contentMd === 'string') {
+        useCanvasStore.getState().setOutlineContent(projectId, data.outline.contentMd, 'system');
+        useCanvasStore.getState().setOutlineVersion(projectId, typeof data.outline.version === 'number' ? data.outline.version : null);
+        useCanvasStore.getState().clearDirtyState(projectId);
       }
-
-      if (lastTool) {
-        queryClient.invalidateQueries({ queryKey: ['project', projectId] });
-      }
-
-      // [Arch] 架构重构：前端落盘已彻底废弃！
-      // 持久化职责已全量收敛至 Hono 后端 chat.ts 的 streamText onFinish 钩子中。
-      // 此处仅做视图层状态流转，阻断 "幽灵覆写"。
-    },
-  });
-
-  // [DEBUG INJECTION] 实时监控大模型的流式分发状态 (放在 useChat 后面)
-  const setOutlineContent = useCanvasStore((s) => s.setOutlineContent);
-  // Track the last contentMd we pushed to the canvas store so we don't fire
-  // redundant setOutlineContent on every streaming token. Without this, each
-  // token re-pushed the same state into Zustand → triggered a ChatPanel
-  // re-render → re-ran this effect → loop. Breaking the loop is what kills
-  // the streaming-time feedback storm.
-  const lastPushedOutlineRef = useRef<string>('');
-  useEffect(() => {
-    if (messages.length > 0) {
-      const last = messages[messages.length - 1];
-
-      // 架构师干预：基于深层探针截获的真实结构，精准提取流式大纲
-      const outlinePart = last?.parts?.filter(p => isToolUIPart(p)).find((p) => p.type === 'tool-updateOutline');
-      if (outlinePart && (outlinePart.state === 'input-streaming' || outlinePart.state === 'input-available')) {
-        const input = outlinePart.input as { contentMd: string } | undefined;
-        if (input?.contentMd && input.contentMd !== lastPushedOutlineRef.current) {
-          lastPushedOutlineRef.current = input.contentMd;
-          setOutlineContent(projectId, input.contentMd, "agent");
-          if (useCanvasStore.getState().activeMode !== "outline") setActiveMode("outline");
-        }
-      }
+      throw new Error('Outline conflict');
     }
-  }, [messages, status, setOutlineContent, setActiveMode, projectId]);
+    if (!res.ok) throw new Error('Failed to save outline');
+    const data = await res.json().catch(() => ({}));
+    if (typeof data?.version === 'number') useCanvasStore.getState().setOutlineVersion(projectId, data.version);
+    return true;
+  }, [projectId]);
 
-  // [Arch] 已移除旧版的 "监听剪辑方案生成结果并推送至独立视图" 的 useEffect
-  // 原因：该操作在流式输出中会导致极端的高频状态同步（Render Thrashing），引发死循环。
-  // 当前架构已将持久化收敛至后端，前端仅需等待重新拉取即可。
-  // (旧版拦截 ToolCall 处理 RAG 数据的反模式代码已彻底移除)
+  useEffect(() => {
+    if (status !== 'ready' || messages.length === 0) return;
+    const lastAssistant = [...messages].reverse().find((m: any) => m?.role === 'assistant');
+    const allTools = lastAssistant?.parts?.filter((p: any) => isToolPart(p)).map((p: any) => p.type) || [];
+    const lastTool = allTools[allTools.length - 1];
+    if (lastTool === 'tool-generateEditingPlan') {
+      setActiveMode("plan");
+    } else if (lastTool === 'tool-search_assets' || lastTool === 'tool-search_clips') {
+      setActiveMode("footage");
+    } else if (lastTool === 'tool-updateOutline') {
+      setActiveMode("outline");
+    }
+    if (lastTool) queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+  }, [messages, status, projectId, queryClient, setActiveMode]);
 
   // [Long-term memory] 监听 tool-update_user_memory 静默工具的 output-available 事件，
   // 弹出无交互 toast。toolCallId 去重防止重渲染重复触发；历史消息（刷新加载）也会进
@@ -322,26 +256,12 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     }
   }, [messages]);
 
-  // 切项目时由 WorkspaceLayout 的 key={project.id} 触发重挂载，useChat 会以新 startingMessages 重置。
+  // 切项目时由 WorkspaceLayout 的 key={project.id} 触发重挂载；聊天历史由 SSE snapshot 水合。
   // 此处只负责挂载初始化：清空该项目残留的 canvas 状态。
   useEffect(() => {
     useCanvasStore.getState().setOutlineContent(projectId, "", "system");
     useCanvasStore.getState().clearDirtyState(projectId);
   }, [projectId]);
-
-  // 热点创作自动触发：仅当会话恰好只有一条 user 消息时（热点播种场景），
-  // 立即触发 AI 回复，无需用户手动发送。
-  useEffect(() => {
-    if (
-      !autoTriggeredRef.current[projectId] &&
-      messages.length === 1 &&
-      messages[0]?.role === 'user' &&
-      status === 'ready'
-    ) {
-      autoTriggeredRef.current[projectId] = true;
-      regenerate({ body: { projectId, currentOutline: outlineContent, isDirty } });
-    }
-  }, [messages.length, status, projectId]);
 
   // 4. 自动滚动到底部 (防抖动与白屏崩溃防线)
   useEffect(() => {
@@ -360,17 +280,18 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const sendMessageRef = useRef(sendMessage);
   useEffect(() => { sendMessageRef.current = sendMessage; }, [sendMessage]);
   const handleWidgetSubmit = useCallback((msg: string) => {
-    sendMessageRef.current(
-      { text: msg },
-      {
-        body: {
-          projectId: projectIdRef.current,
-          currentOutline: outlineContentRef.current,
-          isDirty: isDirtyRef.current,
-        },
-      },
-    );
-  }, []);
+    void (async () => {
+      try {
+        setSubmitError(null);
+        const outlineEdited = await flushOutlineBeforeChat();
+        await sendMessageRef.current(msg, { outlineEditedSinceLastChat: outlineEdited });
+        if (outlineEdited) useCanvasStore.getState().clearDirtyState(projectId);
+      } catch {
+        setSubmitError('大纲已更新，请确认后再发送。');
+        queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      }
+    })();
+  }, [flushOutlineBeforeChat, projectId, queryClient]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -381,23 +302,28 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
   };
 
-  const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
+    const form = e.currentTarget;
+    const formData = new FormData(form);
     const content = formData.get("content") as string;
     if (content.trim()) {
-      sendMessage(
-        { text: content },
-        { body: { projectId, currentOutline: outlineContent, isDirty } }
-      );
-      if (isDirty) clearDirtyState(projectId);
-      e.currentTarget.reset();
-      // After form.reset(), restore textarea to single-row height.
-      requestAnimationFrame(autoResizeTextarea);
+      try {
+        setSubmitError(null);
+        const outlineEdited = await flushOutlineBeforeChat();
+        await sendMessage(content, { outlineEditedSinceLastChat: outlineEdited });
+        if (outlineEdited) clearDirtyState(projectId);
+        form.reset();
+        // After form.reset(), restore textarea to single-row height.
+        requestAnimationFrame(autoResizeTextarea);
+      } catch {
+        setSubmitError('大纲已更新，请确认后再发送。');
+        queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+      }
     }
   };
 
-  const isLoading = status === "streaming" || status === "submitted";
+  const isLoading = status === "streaming" || status === "submitting" || status === "connecting";
 
   // Filter once and reuse — both for the map below and for derived flags
   // (lastMessage etc.) so indices in the rendered list always agree.
@@ -408,7 +334,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
   const lastAssistantParts = (lastMessage?.role === "assistant" ? lastMessage.parts ?? [] : []) as any[];
   // An active tool call (still receiving input) shows its own spinner — no extra bubble needed.
   const hasActiveToolCall = lastAssistantParts.some(
-    (p: any) => isToolUIPart(p) && !SILENT_TOOL_NAMES.has(p.type) && (p.state === 'input-streaming' || p.state === 'input-available')
+    (p: any) => isToolPart(p) && !SILENT_TOOL_NAMES.has(p.type) && (p.state === 'input-streaming' || p.state === 'input-available')
   );
   // Streaming text is self-evidencing — no extra bubble needed.
   const hasAssistantText = lastAssistantParts.some((p: any) => p.type === 'text' && p.text?.length > 0);
@@ -511,6 +437,7 @@ export function ChatPanel({ projectId, initialMessages = [] }: ChatPanelProps) {
           <div className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1.5 px-2">
             Enter 发送 · Shift+Enter 换行
           </div>
+          {submitError && <div className="text-[11px] text-rose-500 mt-1.5 px-2">{submitError}</div>}
         </form>
       </div>
     </div>

@@ -10,6 +10,7 @@ import { useCanvasStore } from "../store/useCanvasStore";
 // triggers eager evaluation and crashes during SSR pre-render. Use a no-op stub on the server.
 const noopStorage = { getItem: () => null, setItem: () => {} };
 const layoutStorage = typeof window !== 'undefined' ? window.localStorage : noopStorage;
+const PanelGroupAny = PanelGroup as any;
 
 interface Project {
   id: string;
@@ -28,10 +29,9 @@ interface OutlineData {
 interface WorkspaceLayoutProps {
   project: Project;
   outline: OutlineData | null;
-  initialMessages?: any[];
 }
 
-export function WorkspaceLayout({ project, outline, initialMessages = [] }: WorkspaceLayoutProps) {
+export function WorkspaceLayout({ project, outline }: WorkspaceLayoutProps) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: 'clipmind-workspace',
     storage: layoutStorage,
@@ -81,7 +81,7 @@ export function WorkspaceLayout({ project, outline, initialMessages = [] }: Work
 
   return (
     <div className="h-full w-full overflow-hidden">
-      <PanelGroup
+      <PanelGroupAny
         direction="horizontal"
         id="clipmind-workspace"
         defaultLayout={defaultLayout}
@@ -89,7 +89,7 @@ export function WorkspaceLayout({ project, outline, initialMessages = [] }: Work
         className={transitioning ? "workspace-rightpanel-transitioning" : ""}
       >
         <Panel defaultSize="50%" minSize="30%">
-          <ChatPanel key={project.id} projectId={project.id} initialMessages={initialMessages} />
+          <ChatPanel key={project.id} projectId={project.id} />
         </Panel>
         <PanelResizeHandle className="w-px bg-zinc-200 dark:bg-zinc-800/60 hover:bg-indigo-400 dark:hover:bg-indigo-500 transition-colors" />
         <Panel
@@ -101,7 +101,7 @@ export function WorkspaceLayout({ project, outline, initialMessages = [] }: Work
         >
           {showRightPanel && <RightPanel projectId={project.id} outline={outline} workflowMode={project.workflowMode ?? null} />}
         </Panel>
-      </PanelGroup>
+      </PanelGroupAny>
     </div>
   );
 }

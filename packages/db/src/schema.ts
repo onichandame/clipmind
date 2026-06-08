@@ -138,6 +138,7 @@ export const projects = mysqlTable('projects', {
   updatedAt: timestamp('updated_at').defaultNow().onUpdateNow().notNull(),
   workflowMode: varchar('workflow_mode', { length: 20 }), // material | idea | freechat | null
   pinnedAt: timestamp('pinned_at'),
+  chatHistory: json('chat_history').default({ version: 1, revision: 0, uiMessages: [], modelMessages: [] }),
   uiMessages: json('ui_messages').default([]),
   retrievedClips: json('retrieved_clips').default([]),
   retrievedAssetIds: json('retrieved_asset_ids').default([]),

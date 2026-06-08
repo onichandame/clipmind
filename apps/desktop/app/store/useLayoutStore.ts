@@ -24,7 +24,7 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: 'clipmind:layout',
-      storage: layoutStorage,
+      storage: layoutStorage as any,
       partialize: (state) => ({ sidebarExpanded: state.sidebarExpanded }),
     },
   ),

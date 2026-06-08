@@ -17,10 +17,25 @@ const app = new Hono();
 
 app.use('*', requireAuth);
 
-app.post("/", async (c) => {
-  const user = c.get('user');
-  const body = await c.req.json();
-  const { messages, projectId, currentOutline, isDirty } = body as { messages: UIMessage[]; projectId: string; currentOutline?: string; isDirty?: boolean; };
+export async function buildChatStream({
+  user,
+  messages,
+  projectId,
+  currentOutline,
+  isDirty,
+  historyMessages,
+  extraSystemReminder,
+  onFinish,
+}: {
+  user: { id: string; email: string };
+  messages: UIMessage[];
+  projectId: string;
+  currentOutline?: string;
+  isDirty?: boolean;
+  historyMessages?: any[];
+  extraSystemReminder?: string;
+  onFinish?: (args: { response: any; userCoreMessages: any[]; isUserAlreadyLast: boolean }) => Promise<void> | void;
+}) {
 
   // [Arch] SSOT: 在请求起点先行获取项目实体（owner-scoped），作为后续 Prompt 注入与写链路的单一真理源
   const [currProject] = await db
@@ -28,7 +43,17 @@ app.post("/", async (c) => {
     .from(projects)
     .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
     .limit(1);
-  if (!currProject) return c.json({ error: "Project not found" }, 404);
+  if (!currProject) throw new Error('Project not found');
+  let outlineBaseVersion: number | null = null;
+  {
+    const [outlineRow] = await db
+      .select({ contentMd: projectOutlines.contentMd, version: projectOutlines.version })
+      .from(projectOutlines)
+      .where(eq(projectOutlines.projectId, projectId))
+      .limit(1);
+    outlineBaseVersion = outlineRow?.version ?? null;
+    if (!currentOutline) currentOutline = outlineRow?.contentMd;
+  }
 
   // [Long-term memory] 跨项目稳定的用户画像。仅在 chat 路由读取，注入到 system prompt 最前部，
   // 让模型在看到具体项目状态前就已经"认识"用户。空时跳过整段注入，零回填。
@@ -165,16 +190,21 @@ app.post("/", async (c) => {
     dynamicSystemPrompt += `**DON'T DO (聊天区霸屏)**: 严禁在普通的对话回复中直接倾泻数百字的大纲、长篇转录总结或复杂的结构化长文本。这会撑爆聊天气泡，破坏用户的沉浸式体验与视觉焦点。\n\n`;
     dynamicSystemPrompt += `**规范 (极简对话流)**: 在通过工具完成内容写入后，你在对话区的回复必须保持极致克制。仅需提供一句简短的状态通报即可（例如：“大纲已生成并推送到右侧画布，请审阅或修改。”），**绝对禁止**在聊天区重复复述已写入工作区的内容。\n\n`;
   }
+  if (extraSystemReminder) {
+    dynamicSystemPrompt += `\n\n${extraSystemReminder}\n\n`;
+  }
 
   const model = createAIModel();
 
   // [Arch] 读写分离重构 (写链路)：抛弃前端传入的伪造历史，以数据库中的 CoreMessage 为单一真理源
-  const rawHistory: any[] = (currProject.uiMessages as any[]) || [];
+  const rawHistory: any[] = Array.isArray(historyMessages)
+    ? historyMessages
+    : ((currProject.chatHistory as any)?.modelMessages as any[]) || [];
 
   // 清洗防线：确保从数据库读出的历史记录严格符合 CoreMessage，防止被早期脏数据污染
   // 同时支持 UIMessage parts 形状（含 HITL widget 的 tool-* 部件）：抽取 text 部分送模型，
   // tool-* widget 部件对模型不可见（无副作用，不需要回灌历史）。
-  const coreHistory = rawHistory.map((msg: any) => {
+  const coreHistory = Array.isArray(historyMessages) ? rawHistory : rawHistory.map((msg: any) => {
     if (msg.role === 'tool') return msg;
     let content: any = '';
     if (typeof msg.content === 'string') {
@@ -347,14 +377,27 @@ app.post("/", async (c) => {
             }
             const safeContent = args.contentMd;
 
+            if (outlineBaseVersion !== null) {
+              const [latestOutline] = await db
+                .select({ version: projectOutlines.version })
+                .from(projectOutlines)
+                .where(eq(projectOutlines.projectId, projectId))
+                .limit(1);
+              if (latestOutline && latestOutline.version !== outlineBaseVersion) {
+                return { success: false, error: '用户刚刚手动修改了大纲。请重新读取最新大纲后再修改。' };
+              }
+            }
+
             // 核心修复：直接使用外部 request.json() 解构出来的真实 projectId，禁止 LLM 瞎猜
             await db.insert(projectOutlines).values({
               id: crypto.randomUUID(),
               projectId: projectId,
-              contentMd: safeContent
+              contentMd: safeContent,
+              version: 1,
             }).onDuplicateKeyUpdate({
-              set: { contentMd: safeContent }
+              set: { contentMd: safeContent, version: sql`${projectOutlines.version} + 1` }
             });
+            outlineBaseVersion = outlineBaseVersion === null ? 1 : outlineBaseVersion + 1;
             return { success: true, message: '大纲已同步至工作区' };
           } catch (dbError) {
             console.error("❌ 数据库写入失败:", dbError);
@@ -657,6 +700,10 @@ app.post("/", async (c) => {
     },
     onFinish: async ({ response }) => {
       try {
+        if (onFinish) {
+          await onFinish({ response, userCoreMessages, isUserAlreadyLast });
+          return;
+        }
         // [Arch] 持久化原则：保留 rawHistory 的原始形状（含 UIMessage parts，例如 HITL widget 的
         // tool-* 部件），不要使用 coreHistory（那是为送模型而做的清洗版本，会丢失 parts）。
         // 否则首轮对话后，seed 消息中的 widget 部件就会从 DB 中消失。
@@ -674,7 +721,12 @@ app.post("/", async (c) => {
   });
 
 
-  return result.toUIMessageStreamResponse();
+  return result;
+
+}
+
+app.post("/", async (c) => {
+  return c.json({ error: 'Deprecated chat endpoint' }, 410);
 
 });
 

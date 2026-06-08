@@ -10,6 +10,7 @@ import chatRoute from './routes/chat';
 import ossCallbackRoute from './routes/oss-callback';
 import asrCallbackRoute from './routes/asr-callback';
 import uploadTokenRoute from './routes/upload-token';
+import projectChatRoute from './routes/project-chat';
 import projectsRoute from './routes/projects';
 import authRoute from './routes/auth';
 
@@ -27,6 +28,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'ClipMind Hono API'
 app.route('/api/auth', authRoute);
 
 // 挂载独立业务路由
+app.route('/api/projects', projectChatRoute);
 app.route('/api/projects', projectsRoute);
 import assetsRoute from './routes/assets';
 import hotspotsAdminRoute from './routes/hotspots-admin';

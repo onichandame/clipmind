@@ -78,6 +78,13 @@
       "when": 1780704000000,
       "tag": "0010_user_media_files",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1780790400000,
+      "tag": "0011_project_chat_history",
+      "breakpoints": true
     }
   ]
 }

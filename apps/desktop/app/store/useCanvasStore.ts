@@ -7,19 +7,21 @@ export interface UploadJob { id: string; filename: string; sourcePath: string; p
 
 interface ProjectState {
   outlineContent: string;
+  outlineVersion: number | null;
   editingPlans: any[];
   isDirty: boolean;
   lastModifiedBy: 'user' | 'agent' | 'system';
-      retrievedClips: any[];
-    }
+  retrievedClips: any[];
+}
 
 const initialProjectState: ProjectState = {
   outlineContent: '',
+  outlineVersion: null,
   editingPlans: [],
   isDirty: false,
   lastModifiedBy: 'system',
-      retrievedClips: [],
-    };
+  retrievedClips: [],
+};
 
 interface CanvasState {
   activeMode: CanvasMode;
@@ -36,9 +38,10 @@ interface CanvasState {
 
   // 动作
   setOutlineContent: (projectId: string, content: string, modifiedBy: 'user' | 'agent' | 'system') => void;
+  setOutlineVersion: (projectId: string, version: number | null) => void;
   setEditingPlans: (projectId: string, plans: any[]) => void;
+  setRetrievedClips: (projectId: string, clips: any[]) => void;
   clearDirtyState: (projectId: string) => void;
-  setSelectedBasket: (projectId: any, basket: any[]) => void
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
@@ -73,6 +76,16 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     };
   }),
 
+  setOutlineVersion: (projectId, version) => set((state) => {
+    const pState = state.projects[projectId] || { ...initialProjectState };
+    return {
+      projects: {
+        ...state.projects,
+        [projectId]: { ...pState, outlineVersion: version }
+      }
+    };
+  }),
+
   setEditingPlans: (projectId, plans) => set((state) => {
     console.log(`📍 [PROBE 3 - STORE] Zustand 接收到更新! Project: ${projectId}, Plans数量: ${plans?.length}`);
     const pState = state.projects[projectId] || { ...initialProjectState };
@@ -91,10 +104,10 @@ export const useCanvasStore = create<CanvasState>((set) => ({
     };
   }),
 
-  setRetrievedClips: (projectId, clips) => set((state) => {
+  setRetrievedClips: (projectId: string, clips: any[]) => set((state) => {
     const pState = state.projects[projectId] || { ...initialProjectState };
     return {
-          projects: { ...state.projects, [projectId]: { ...pState, retrievedClips: clips } }
-        };
-      })
-    }));
+      projects: { ...state.projects, [projectId]: { ...pState, retrievedClips: clips } }
+    };
+  })
+}));

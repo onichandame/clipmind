@@ -5,10 +5,35 @@ import { desc, eq, inArray, and, sql } from 'drizzle-orm';
 import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
 import { requireAuth } from '../middleware/auth';
+import { createChatHistory } from '../chat/history';
 
 const app = new Hono();
 
 app.use('*', requireAuth);
+
+function toInitialModelMessage(message: any) {
+  const role = message?.role;
+  if (role !== 'user' && role !== 'assistant' && role !== 'system') return null;
+  const text = typeof message.content === 'string'
+    ? message.content
+    : Array.isArray(message.parts)
+      ? message.parts
+        .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+        .map((part: any) => part.text)
+        .join('')
+      : '';
+  if (!text.trim()) return null;
+  return { role, content: text };
+}
+
+function toStoredUiMessage(message: any) {
+  if (Array.isArray(message?.parts)) {
+    return { ...message, id: message.id || crypto.randomUUID() };
+  }
+  const role = message?.role === 'user' || message?.role === 'system' ? message.role : 'assistant';
+  const text = typeof message?.content === 'string' ? message.content : '';
+  return { id: message?.id || crypto.randomUUID(), role, parts: [{ type: 'text', text }] };
+}
 
 // idea 模式首条消息：text followup + 留学热点 carousel widget。
 // 复用 material 模式 request_asset_import 的 seed 套路 —— 用 AI SDK 标准 tool-* part
@@ -165,12 +190,14 @@ app.post('/', async (c) => {
     };
     const fallbackTitle = workflowMode ? defaultTitleByMode[workflowMode] : '未命名大纲';
 
+    const storedInitialMessages = initialMessages.map(toStoredUiMessage);
+
     await db.insert(projects).values({
       id: newId,
       userId: user.id,
       title: body?.title?.trim() || (seedMessage ? seedMessage.slice(0, 40) : fallbackTitle),
       workflowMode,
-      uiMessages: initialMessages,
+      chatHistory: createChatHistory(storedInitialMessages, storedInitialMessages.map(toInitialModelMessage).filter(Boolean)),
     });
 
     return c.json({ success: true, id: newId });
@@ -199,88 +226,25 @@ app.get('/:id', async (c) => {
   const id = c.req.param('id');
   try {
     const projectRes = await db
-      .select()
+      .select({
+        id: projects.id,
+        userId: projects.userId,
+        title: projects.title,
+        createdAt: projects.createdAt,
+        updatedAt: projects.updatedAt,
+        workflowMode: projects.workflowMode,
+        pinnedAt: projects.pinnedAt,
+        retrievedClips: projects.retrievedClips,
+        retrievedAssetIds: projects.retrievedAssetIds,
+        selectedAssetIds: projects.selectedAssetIds,
+        editingPlans: projects.editingPlans,
+      })
       .from(projects)
       .where(and(eq(projects.id, id), eq(projects.userId, user.id)));
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
     const planRes = await db.select().from(editingPlans).where(eq(editingPlans.projectId, id)).orderBy(desc(editingPlans.displayOrder), desc(editingPlans.createdAt));
-
-    // [Arch] 读写分离重构 (读链路)：将底层 CoreMessage 动态投影为前端 UIMessage
-    const rawMessages = projectRes[0].uiMessages || [];
-    const initialMessages: any[] = [];
-
-    if (Array.isArray(rawMessages)) {
-      for (const msg of rawMessages) {
-        // [Passthrough] 消息若已是 UIMessage 形状（带 parts 数组），直接保留。
-        // 用于：(a) 项目创建时 seed 的带 HITL widget 部件的助手消息；
-        //       (b) 任何已经是前端规范 parts 形状的入库记录。
-        if (Array.isArray(msg.parts) && msg.parts.length > 0 && !Array.isArray(msg.content)) {
-          initialMessages.push({
-            id: msg.id || crypto.randomUUID(),
-            role: msg.role,
-            content: typeof msg.content === 'string' ? msg.content : '',
-            parts: msg.parts,
-          });
-          continue;
-        }
-        if (msg.role === 'user' || msg.role === 'system') {
-          initialMessages.push({
-            id: msg.id || crypto.randomUUID(),
-            role: msg.role,
-            content: typeof msg.content === 'string' ? msg.content : '',
-            parts: typeof msg.content === 'string' ? [{ type: 'text', text: msg.content }] : msg.content
-          });
-        } else if (msg.role === 'assistant') {
-          let textContent = "";
-          const parts: any[] = [];
-
-          if (typeof msg.content === "string") {
-            textContent = msg.content;
-            parts.push({ type: "text", text: msg.content });
-          } else if (Array.isArray(msg.content)) {
-            for (const part of msg.content) {
-              if (part.type === "text") {
-                textContent += part.text;
-                parts.push(part);
-              } else if (part.type === "tool-call") {
-                // v6 typed tool part shape — tool name encoded in `type`,
-                // tool args carried on `input` (v5's `args` is gone).
-                parts.push({
-                  type: `tool-${part.toolName}`,
-                  toolCallId: part.toolCallId,
-                  state: 'input-available',
-                  input: part.input,
-                });
-              }
-            }
-          }
-          initialMessages.push({
-            id: msg.id || crypto.randomUUID(),
-            role: "assistant",
-            content: textContent,
-            parts: parts
-          });
-        } else if (msg.role === "tool" && Array.isArray(msg.content)) {
-          for (const toolResult of msg.content) {
-            if (toolResult.type === "tool-result") {
-              const targetAssistant = initialMessages.find(m =>
-                m.parts?.some((p: any) => typeof p.type === 'string' && p.type.startsWith('tool-') && p.toolCallId === toolResult.toolCallId)
-              );
-              if (targetAssistant && targetAssistant.parts) {
-                const targetPart = targetAssistant.parts.find((p: any) => typeof p.type === 'string' && p.type.startsWith('tool-') && p.toolCallId === toolResult.toolCallId);
-                if (targetPart) {
-                  targetPart.state = 'output-available';
-                  // v6 ToolResultPart carries the result on `output` (v5's `result` is gone).
-                  targetPart.output = toolResult.output;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
 
     const projectData = projectRes[0] as any;
     projectData.editingPlans = planRes;
@@ -374,7 +338,6 @@ app.get('/:id', async (c) => {
     return c.json({
       project: projectData,
       outline: outlineRes.length > 0 ? outlineRes[0] : null,
-      initialMessages: initialMessages.length > 0 ? initialMessages : [{ id: 'fallback', role: 'assistant', content: ' ', parts: [{ type: 'text', text: ' ' }] }]
     });
   } catch (error) {
     console.error("Failed to fetch project details:", error);
@@ -382,27 +345,9 @@ app.get('/:id', async (c) => {
   }
 });
 
-// 5. 更新项目消息（替换整个 uiMessages 数组）
+// 5. Legacy message overwrite endpoint disabled; chat history now flows through SSE/POST.
 app.put('/:id/messages', async (c) => {
-  const user = c.get('user');
-  const id = c.req.param('id');
-  const body = await c.req.json();
-  const { uiMessages } = body as { uiMessages: unknown[] };
-
-  if (!Array.isArray(uiMessages)) {
-    return c.json({ error: 'uiMessages must be an array' }, 400);
-  }
-
-  try {
-    await db
-      .update(projects)
-      .set({ uiMessages, updatedAt: new Date() })
-      .where(and(eq(projects.id, id), eq(projects.userId, user.id)));
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('Failed to update messages:', error);
-    return c.json({ error: 'Failed to update messages' }, 500);
-  }
+  return c.json({ error: 'Deprecated messages endpoint' }, 410);
 });
 
 app.patch('/:id', async (c) => {
@@ -430,34 +375,6 @@ app.patch('/:id', async (c) => {
     }
     updatePayload.workflowMode = body.workflowMode;
 
-    if (body.workflowMode === 'material' || body.workflowMode === 'idea') {
-      const [current] = await db
-        .select({ uiMessages: projects.uiMessages })
-        .from(projects)
-        .where(and(eq(projects.id, id), eq(projects.userId, user.id)))
-        .limit(1);
-
-      if (current) {
-        const existingMessages = (current.uiMessages as any[]) || [];
-        const followupContent = body.workflowMode === 'material'
-          ? MATERIAL_MODE_FOLLOWUP
-          : IDEA_MODE_FOLLOWUP;
-        // 兼容两种 seed 形状：旧 plain-content 和带 parts 的 widget 消息。
-        const alreadyPresent = existingMessages.some((m: any) => {
-          if (m.role !== 'assistant') return false;
-          if (m.content === followupContent) return true;
-          return Array.isArray(m.parts)
-            && m.parts.some((p: any) => p.type === 'text' && p.text === followupContent);
-        });
-        if (!alreadyPresent) {
-          // idea 模式追加完整 seed（含热点 carousel widget）；material 维持原 plain-text 行为。
-          const followupMessage = body.workflowMode === 'idea'
-            ? await buildIdeaModeSeedMessage()
-            : { role: 'assistant', content: followupContent };
-          updatePayload.uiMessages = [...existingMessages, followupMessage];
-        }
-      }
-    }
   }
 
   if (body.selectedAssetIds !== undefined) {
@@ -488,6 +405,52 @@ app.patch('/:id', async (c) => {
     console.error('Failed to patch project:', error);
     return c.json({ error: 'Failed to update project' }, 500);
   }
+});
+
+app.put('/:id/outline', async (c) => {
+  const user = c.get('user');
+  const projectId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const contentMd = typeof body?.contentMd === 'string' ? body.contentMd : null;
+  if (contentMd === null) return c.json({ error: 'contentMd is required' }, 400);
+  const expectedVersion = Number.isInteger(body?.expectedVersion) ? Number(body.expectedVersion) : null;
+  const [project] = await db.select({ id: projects.id }).from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, user.id))).limit(1);
+  if (!project) return c.json({ error: 'Project not found' }, 404);
+  const [currentOutline] = await db
+    .select({ version: projectOutlines.version, contentMd: projectOutlines.contentMd })
+    .from(projectOutlines)
+    .where(eq(projectOutlines.projectId, projectId))
+    .limit(1);
+  if (expectedVersion !== null && currentOutline && currentOutline.version !== expectedVersion) {
+    return c.json({ error: 'Outline has changed', outline: currentOutline }, 409);
+  }
+  if (expectedVersion !== null && currentOutline) {
+    const result: any = await db.execute(sql`
+      UPDATE ${projectOutlines}
+      SET ${projectOutlines.contentMd} = ${contentMd}, ${projectOutlines.version} = ${projectOutlines.version} + 1
+      WHERE ${projectOutlines.projectId} = ${projectId} AND ${projectOutlines.version} = ${expectedVersion}
+    `);
+    const affectedRows = result?.[0]?.affectedRows ?? result?.rowsAffected ?? 0;
+    if (affectedRows === 0) {
+      const [latestOutline] = await db
+        .select({ version: projectOutlines.version, contentMd: projectOutlines.contentMd })
+        .from(projectOutlines)
+        .where(eq(projectOutlines.projectId, projectId))
+        .limit(1);
+      return c.json({ error: 'Outline has changed', outline: latestOutline ?? currentOutline }, 409);
+    }
+    return c.json({ success: true, version: expectedVersion + 1 });
+  }
+  await db.insert(projectOutlines).values({
+    id: crypto.randomUUID(),
+    projectId,
+    contentMd,
+    version: 1,
+  }).onDuplicateKeyUpdate({
+    set: { contentMd, version: sql`${projectOutlines.version} + 1` },
+  });
+  return c.json({ success: true, version: currentOutline ? currentOutline.version + 1 : 1 });
 });
 
 // DELETE /api/projects/:id/plans/:planId — remove an editing plan from a project

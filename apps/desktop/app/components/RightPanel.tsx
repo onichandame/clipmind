@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
@@ -27,9 +27,16 @@ const TABS: Array<{ id: TabId; label: string; icon: any }> = [
 
 export function RightPanel({ projectId, outline, workflowMode }: RightPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('outline');
+  const queryClient = useQueryClient();
   const tabs = workflowMode === 'idea' ? TABS.filter((tab) => tab.id !== 'plan') : TABS;
   const setOutlineContent = useCanvasStore((s) => s.setOutlineContent);
+  const setOutlineVersion = useCanvasStore((s) => s.setOutlineVersion);
+  const clearDirtyState = useCanvasStore((s) => s.clearDirtyState);
   const outlineContent = useCanvasStore((s) => s.projects[projectId]?.outlineContent || "");
+  const outlineDirty = useCanvasStore((s) => s.projects[projectId]?.isDirty || false);
+  const outlineVersion = useCanvasStore((s) => s.projects[projectId]?.outlineVersion ?? null);
+  const outlineVersionRef = useRef<number | null>(outlineVersion);
+  useEffect(() => { outlineVersionRef.current = outlineVersion; }, [outlineVersion]);
   // Chat tool calls flip the canvas activeMode (outline/plan); mirror that into the tab.
   // 'footage' is no longer a tab — it falls through to the current tab.
   const activeMode = useCanvasStore((s) => s.activeMode);
@@ -54,6 +61,45 @@ export function RightPanel({ projectId, outline, workflowMode }: RightPanelProps
 
   const editingPlans = (projectData?.project?.editingPlans as any[]) || [];
 
+  const saveOutline = useMutation({
+    mutationFn: async ({ contentMd, targetProjectId, expectedVersion }: { contentMd: string; targetProjectId: string; expectedVersion: number | null }) => {
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${targetProjectId}/outline`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contentMd, expectedVersion }),
+      });
+      if (res.status === 409) {
+        const data = await res.json().catch(() => ({}));
+        return { conflict: true, outline: data?.outline };
+      }
+      if (!res.ok) throw new Error('Failed to save outline');
+      return res.json() as Promise<{ version?: number }>;
+    },
+    onSuccess: (data: any, variables) => {
+      const targetProjectId = variables.targetProjectId;
+      if (data?.conflict && typeof data?.outline?.contentMd === 'string') {
+        setOutlineContent(targetProjectId, data.outline.contentMd, 'system');
+        setOutlineVersion(targetProjectId, typeof data.outline.version === 'number' ? data.outline.version : null);
+        clearDirtyState(targetProjectId);
+        queryClient.invalidateQueries({ queryKey: ['project', targetProjectId] });
+        return;
+      }
+      if (typeof data?.version === 'number') setOutlineVersion(targetProjectId, data.version);
+      queryClient.invalidateQueries({ queryKey: ['project', targetProjectId] });
+    },
+    onError: (_error, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['project', variables.targetProjectId] });
+    },
+  });
+
+  useEffect(() => {
+    if (!outlineDirty) return;
+    const timer = window.setTimeout(() => {
+      saveOutline.mutate({ contentMd: outlineContent, targetProjectId: projectId, expectedVersion: outlineVersionRef.current });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [outlineDirty, outlineContent, projectId]);
+
   // Auto-route to plan tab whenever a new plan lands.
   const lastPlansLen = useCanvasStore((s) => s.projects[projectId]?.editingPlans?.length || 0);
   useEffect(() => {
@@ -77,13 +123,18 @@ export function RightPanel({ projectId, outline, workflowMode }: RightPanelProps
 
   useEffect(() => {
     if (!editor) return;
-    const target = outlineContent || outline?.contentMd || "";
+    const target = outlineDirty ? outlineContent : (outline?.contentMd ?? outlineContent ?? "");
     const current = editor.storage.markdown.getMarkdown();
-    if (current !== target && !editor.isFocused) {
+    if (current !== target && (!editor.isFocused || !outlineDirty)) {
       editor.commands.setContent(target);
       if (!outlineContent) setOutlineContent(projectId, target, "system");
+      if (!outlineDirty) setOutlineVersion(projectId, outline?.version ?? null);
     }
-  }, [outline?.contentMd, outlineContent, editor, setOutlineContent, projectId]);
+  }, [outline?.contentMd, outline?.version, outlineContent, outlineDirty, editor, setOutlineContent, setOutlineVersion, projectId]);
+
+  useEffect(() => {
+    if (!outlineDirty) setOutlineVersion(projectId, outline?.version ?? null);
+  }, [outline?.version, outlineDirty, projectId, setOutlineVersion]);
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-zinc-950">
