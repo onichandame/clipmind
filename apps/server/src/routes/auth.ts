@@ -33,7 +33,7 @@ async function issueSession(userId: string, userAgent: string | undefined) {
 }
 
 function setSessionCookie(c: Context, token: string) {
-  const secure = c.req.url.startsWith('https://') || c.req.header('x-forwarded-proto') === 'https';
+  const secure = serverConfig.NODE_ENV === 'production' || c.req.url.startsWith('https://') || c.req.header('x-forwarded-proto') === 'https';
   const sameSite = secure ? 'None' : 'Lax';
   c.header(
     'Set-Cookie',
@@ -43,7 +43,9 @@ function setSessionCookie(c: Context, token: string) {
 }
 
 function clearSessionCookie(c: Context) {
-  c.header('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`, { append: true });
+  const secure = serverConfig.NODE_ENV === 'production' || c.req.url.startsWith('https://') || c.req.header('x-forwarded-proto') === 'https';
+  const sameSite = secure ? 'None' : 'Lax';
+  c.header('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure ? '; Secure' : ''}`, { append: true });
 }
 
 app.post('/signup', async (c) => {
