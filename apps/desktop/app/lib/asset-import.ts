@@ -17,7 +17,6 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRevalidator } from 'react-router';
 import { env } from '../env';
-import { getToken } from './auth';
 import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanvasStore';
 
 const VIDEO_EXTS = ['mp4', 'mov', 'MP4', 'MOV'];
@@ -55,14 +54,12 @@ async function processJob(job: UploadJob): Promise<void> {
   const update = useCanvasStore.getState().updateUploadJob;
   try {
     update(job.id, { status: 'compressing', progress: 0 });
-    const sessionToken = getToken() || '';
     await invoke('process_video_asset', {
       jobId: job.id,
       filename: job.filename,
       localPath: job.sourcePath,
       projectId: job.projectId ?? null,
       serverUrl: env.VITE_API_BASE_URL,
-      sessionToken,
     });
     // After invoke resolves the job may already be `ready` (dedup hit — Rust
     // emitted progress:100 then returned) or `uploading` (a progress event

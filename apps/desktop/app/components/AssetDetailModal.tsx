@@ -91,7 +91,6 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
     setBackupProgress(0);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const { getToken } = await import('../lib/auth');
       const { env } = await import('../env');
       await invoke('backup_video_to_cloud', {
         mediaFileId: asset.mediaFileId,
@@ -100,7 +99,6 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
         expectedSha256: asset.sha256,
         expectedSize: asset.fileSize,
         serverUrl: env.VITE_API_BASE_URL,
-        sessionToken: getToken() || '',
       });
     } catch (e: any) {
       console.error('[Backup] failed:', e);

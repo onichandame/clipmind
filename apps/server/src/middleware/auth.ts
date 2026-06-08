@@ -3,11 +3,15 @@ import { eq, and, isNull, gt } from 'drizzle-orm';
 import { db } from '../db';
 import { users, sessions } from '@clipmind/db/schema';
 import { sha256Hex } from '../utils/auth';
+import { serverConfig } from '../env';
 
 export interface AuthUser {
   id: string;
   email: string;
 }
+
+export const SESSION_COOKIE = 'clipmind_session';
+export const DESKTOP_AUTH_HEADER = 'X-ClipMind-Desktop';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -15,15 +19,36 @@ declare module 'hono' {
   }
 }
 
-// Reads `Authorization: Bearer <session-token>`, validates against sessions table,
+export function getSessionTokenFromCookie(cookieHeader: string | undefined): string | undefined {
+  const value = cookieHeader
+    ?.split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${SESSION_COOKIE}=`))
+    ?.slice(SESSION_COOKIE.length + 1);
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+export function hasAllowedAuthOrigin(origin: string | undefined, desktopHeader: string | undefined) {
+  if (origin) return serverConfig.CORS_ORIGIN.includes(origin);
+  return desktopHeader === '1';
+}
+
+// Reads the HttpOnly session cookie, validates against sessions table,
 // populates c.set('user', ...). Returns 401 on any failure.
 export const requireAuth: MiddlewareHandler = async (c, next) => {
-  const header = c.req.header('Authorization') || '';
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  if (!match) {
+  if (!hasAllowedAuthOrigin(c.req.header('Origin'), c.req.header(DESKTOP_AUTH_HEADER))) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+  const cookieToken = getSessionTokenFromCookie(c.req.header('Cookie'));
+  if (!cookieToken) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
-  const token = match[1].trim();
+  const token = cookieToken;
   if (!token) return c.json({ error: 'Unauthorized' }, 401);
 
   const tokenHash = sha256Hex(token);

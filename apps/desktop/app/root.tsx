@@ -16,7 +16,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ToastHost } from "./components/Toast";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fetchMe, getToken, type AuthUser, getCachedUser } from "./lib/auth";
+import { fetchMe, type AuthUser, getCachedUser } from "./lib/auth";
 import { useGlobalAssetImportListeners } from "./lib/asset-import";
 import { useUpdateCheck } from "./lib/updater";
 
@@ -81,17 +81,10 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!mounted) return;
     let cancelled = false;
-    const token = getToken();
     if (isPublic) {
-      if (token) {
-        fetchMe().then(u => {
-          if (!cancelled && u) navigate('/', { replace: true });
-        });
-      }
-      return;
-    }
-    if (!token) {
-      navigate('/login', { replace: true });
+      fetchMe().then(u => {
+        if (!cancelled && u) navigate('/', { replace: true });
+      });
       return;
     }
     fetchMe().then(u => {

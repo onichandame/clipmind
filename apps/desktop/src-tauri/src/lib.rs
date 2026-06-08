@@ -1,5 +1,5 @@
 use reqwest::{
-    header::{CONTENT_LENGTH, CONTENT_TYPE},
+    header::{CONTENT_LENGTH, CONTENT_TYPE, COOKIE},
     Client,
 };
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::Semaphore;
@@ -19,8 +19,25 @@ use uuid::Uuid;
 mod local_db;
 mod local_file_server;
 
+const SESSION_COOKIE_NAME: &str = "clipmind_session";
+const DESKTOP_AUTH_HEADER: &str = "X-ClipMind-Desktop";
+
 fn env_tag() -> String {
     format!("[{}/{}]", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn session_cookie_header(webview_window: &WebviewWindow, server_url: &str) -> Result<String, String> {
+    let url = tauri::Url::parse(server_url)
+        .map_err(|e| format!("{} 登录态 URL 解析失败: {}", env_tag(), e))?;
+    let cookies = webview_window
+        .cookies_for_url(url)
+        .map_err(|e| format!("{} 读取登录态 Cookie 失败: {}", env_tag(), e))?;
+    let value = cookies
+        .iter()
+        .find(|cookie| cookie.name() == SESSION_COOKIE_NAME && !cookie.value().is_empty())
+        .map(|cookie| cookie.value().to_string())
+        .ok_or_else(|| format!("{} 缺少登录态，无法上传", env_tag()))?;
+    Ok(format!("{}={}", SESSION_COOKIE_NAME, value))
 }
 
 // Streaming SHA-256 of a file. Reused by import (preflight hash) and relink
@@ -96,17 +113,15 @@ fn get_local_file_server_info() -> Result<LocalFileServerInfoFront, String> {
 #[tauri::command]
 async fn backup_video_to_cloud(
     app: AppHandle,
+    webview_window: WebviewWindow,
     media_file_id: String,
     local_path: String,
     filename: String,
     expected_sha256: String,
     expected_size: i64,
     server_url: String,
-    session_token: String,
 ) -> Result<(), String> {
-    if session_token.trim().is_empty() {
-        return Err(format!("{} 缺少登录态，无法备份", env_tag()));
-    }
+    let auth_cookie = session_cookie_header(&webview_window, &server_url)?;
     let client = Client::new();
 
     let actual_hash = compute_sha256(&local_path).await?;
@@ -132,18 +147,18 @@ async fn backup_video_to_cloud(
     }
 
     // 1. 先把 uploading 持久化到服务端，让其它会话/设备立刻看到「正在备份」。
-    notify_backup_status(&client, &server_url, &session_token, &media_file_id, "uploading").await?;
+    notify_backup_status(&client, &server_url, &auth_cookie, &media_file_id, "uploading").await?;
 
     // 2. 上传 + 回调（带进度事件）。
     let upload_result = upload_file_and_notify_with_progress(
-        &app, &client, &server_url, &session_token,
+        &app, &client, &server_url, &auth_cookie,
         &media_file_id, "video-backup", &local_path, &filename,
         Some(&expected_sha256), Some(expected_size),
     ).await;
 
     // 3. 失败时回写 failed（best-effort，吞错以不掩盖原始错误）。成功时由 oss-callback 写 backed_up。
     if upload_result.is_err() {
-        let _ = notify_backup_status(&client, &server_url, &session_token, &media_file_id, "failed").await;
+        let _ = notify_backup_status(&client, &server_url, &auth_cookie, &media_file_id, "failed").await;
     }
     upload_result
 }
@@ -151,13 +166,14 @@ async fn backup_video_to_cloud(
 async fn notify_backup_status(
     client: &Client,
     server_url: &str,
-    session_token: &str,
+    auth_cookie: &str,
     media_file_id: &str,
     status: &str,
 ) -> Result<(), String> {
     let res = client
         .post(format!("{}/api/assets/{}/backup-status", server_url, media_file_id))
-        .bearer_auth(session_token)
+        .header(COOKIE, auth_cookie)
+        .header(DESKTOP_AUTH_HEADER, "1")
         .json(&serde_json::json!({ "status": status }))
         .send()
         .await
@@ -469,7 +485,7 @@ struct OssCallbackPayload<'a> {
 async fn upload_file_and_notify(
     client: &Client,
     server_url: &str,
-    session_token: &str,
+    auth_cookie: &str,
     asset_id: &str,
     kind: &str,
     file_path: &str,
@@ -492,7 +508,8 @@ async fn upload_file_and_notify(
 
     let token_res = client
         .post(format!("{}/api/upload-token", server_url))
-        .bearer_auth(session_token)
+        .header(COOKIE, auth_cookie)
+        .header(DESKTOP_AUTH_HEADER, "1")
         .json(&token_req)
         .send()
         .await
@@ -556,7 +573,8 @@ async fn upload_file_and_notify(
     };
     let cb_res = client
         .post(format!("{}/api/oss-callback", server_url))
-        .bearer_auth(session_token)
+        .header(COOKIE, auth_cookie)
+        .header(DESKTOP_AUTH_HEADER, "1")
         .json(&cb_payload)
         .send()
         .await
@@ -621,7 +639,7 @@ async fn upload_file_and_notify_with_progress(
     app: &AppHandle,
     client: &Client,
     server_url: &str,
-    session_token: &str,
+    auth_cookie: &str,
     media_file_id: &str,
     kind: &str,
     file_path: &str,
@@ -655,7 +673,8 @@ async fn upload_file_and_notify_with_progress(
     };
     let token_res = client
         .post(format!("{}/api/upload-token", server_url))
-        .bearer_auth(session_token)
+        .header(COOKIE, auth_cookie)
+        .header(DESKTOP_AUTH_HEADER, "1")
         .json(&token_req)
         .send()
         .await
@@ -779,7 +798,8 @@ async fn upload_file_and_notify_with_progress(
     };
     let cb_res = client
         .post(format!("{}/api/oss-callback", server_url))
-        .bearer_auth(session_token)
+        .header(COOKIE, auth_cookie)
+        .header(DESKTOP_AUTH_HEADER, "1")
         .json(&cb_payload)
         .send()
         .await
@@ -813,17 +833,15 @@ async fn upload_file_and_notify_with_progress(
 #[tauri::command]
 async fn process_video_asset(
     app: AppHandle,
+    webview_window: WebviewWindow,
     state: State<'_, ProcessingManager>,
     job_id: String,
     filename: String,
     local_path: String,
     project_id: Option<String>,
     server_url: String,
-    session_token: String,
 ) -> Result<String, String> {
-    if session_token.trim().is_empty() {
-        return Err(format!("{} 缺少登录态，无法上传", env_tag()));
-    }
+    let auth_cookie = session_cookie_header(&webview_window, &server_url)?;
 
     // Step 0: Compute SHA-256 of source file (before acquiring CPU semaphore)
     let _ = app.emit("upload-progress", serde_json::json!({ "id": &job_id, "progress": 2 }));
@@ -846,7 +864,8 @@ async fn process_video_asset(
         };
         let preflight_res = preflight_client
             .post(format!("{}/api/assets/preflight", server_url))
-            .bearer_auth(&session_token)
+            .header(COOKIE, auth_cookie.as_str())
+            .header(DESKTOP_AUTH_HEADER, "1")
             .json(&preflight_payload)
             .send()
             .await
@@ -875,7 +894,8 @@ async fn process_video_asset(
             };
             let attach_res = preflight_client
                 .post(format!("{}/api/assets/attach", server_url))
-                .bearer_auth(&session_token)
+                .header(COOKIE, auth_cookie.as_str())
+                .header(DESKTOP_AUTH_HEADER, "1")
                 .json(&attach_payload)
                 .send()
                 .await
@@ -1091,7 +1111,8 @@ async fn process_video_asset(
     };
     let token_res = client
         .post(format!("{}/api/assets/import-token", server_url))
-        .bearer_auth(&session_token)
+        .header(COOKIE, auth_cookie.as_str())
+        .header(DESKTOP_AUTH_HEADER, "1")
         .json(&token_req)
         .send()
         .await
@@ -1155,7 +1176,8 @@ async fn process_video_asset(
     };
     let finalize_res = client
         .post(format!("{}/api/assets/finalize", server_url))
-        .bearer_auth(&session_token)
+        .header(COOKIE, auth_cookie.as_str())
+        .header(DESKTOP_AUTH_HEADER, "1")
         .json(&finalize_payload)
         .send()
         .await

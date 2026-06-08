@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { env } from '../env';
-import { authFetch, authHeaders } from './auth';
-import { parseSseFrames, upsertMessage } from './chat-sse';
+import { authFetch } from './auth';
+import { upsertMessage } from './chat-sse';
 
 type ChatStatus = 'connecting' | 'ready' | 'submitting' | 'streaming' | 'error';
 
@@ -10,7 +10,7 @@ export function useProjectChat(projectId: string) {
   const [status, setStatus] = useState<ChatStatus>('connecting');
   const [error, setError] = useState<string | null>(null);
   const retryRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const applyEvent = useCallback((event: string, raw: string) => {
     if (event === 'heartbeat') return;
@@ -42,7 +42,7 @@ export function useProjectChat(projectId: string) {
       setError(null);
       return;
     }
-    if (event === 'error') {
+    if (event === 'chat-error') {
       setStatus('error');
       setError(typeof payload.message === 'string' ? payload.message : '生成失败，请重试。');
     }
@@ -53,45 +53,50 @@ export function useProjectChat(projectId: string) {
     let retryTimer: number | undefined;
     let connectTimer: number | undefined;
 
-    const connect = async () => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
+    const connect = () => {
+      eventSourceRef.current?.close();
       const startedAt = performance.now();
       console.info(`[chat-sse] connect start project=${projectId}`);
       setStatus((current) => (current === 'streaming' ? current : 'connecting'));
-      try {
-        const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}/chat/events`, {
-          headers: authHeaders(),
-          signal: controller.signal,
-        });
-        console.info(`[chat-sse] response project=${projectId} status=${res.status} ms=${Math.round(performance.now() - startedAt)}`);
-        if (!res.ok || !res.body) throw new Error(`SSE failed (${res.status})`);
+      const source = new EventSource(`${env.VITE_API_BASE_URL}/api/projects/${projectId}/chat/events`, {
+        withCredentials: true,
+      });
+      eventSourceRef.current = source;
+
+      source.onopen = () => {
         retryRef.current = 0;
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (!cancelled) {
-          const { done, value } = await reader.read();
-          if (done) throw new Error('SSE stream closed');
-          buffer += decoder.decode(value, { stream: true });
-          const parsed = parseSseFrames(buffer);
-          buffer = parsed.rest;
-          for (const item of parsed.events) {
-            if (item.event === 'snapshot') {
-              console.info(`[chat-sse] snapshot project=${projectId} ms=${Math.round(performance.now() - startedAt)}`);
-            }
-            applyEvent(item.event, item.data);
-          }
+        console.info(`[chat-sse] response project=${projectId} status=200 ms=${Math.round(performance.now() - startedAt)}`);
+      };
+
+      source.onerror = async () => {
+        source.close();
+        if (cancelled) return;
+        const sessionStatus = await authFetch(`${env.VITE_API_BASE_URL}/api/auth/me`).then((res) => res.status).catch(() => 0);
+        if (cancelled) return;
+        if (sessionStatus === 401) {
+          setStatus('error');
+          setError('登录已过期，请重新登录。');
+          return;
         }
-      } catch (err: any) {
-        if (cancelled || controller.signal.aborted) return;
-        console.info(`[chat-sse] reconnect project=${projectId} ms=${Math.round(performance.now() - startedAt)} reason=${err?.message ?? 'unknown'}`);
+        console.info(`[chat-sse] reconnect project=${projectId} ms=${Math.round(performance.now() - startedAt)} reason=SSE stream closed`);
         setStatus('error');
         setError('连接已断开，正在重连…');
-        const attempt = Math.min(retryRef.current + 1, 5);
+        if (retryRef.current >= 5) {
+          setError('连接失败，请刷新后重试。');
+          return;
+        }
+        const attempt = retryRef.current + 1;
         retryRef.current = attempt;
         retryTimer = window.setTimeout(connect, 500 * attempt);
+      };
+
+      for (const eventName of ['snapshot', 'message', 'stream', 'done', 'chat-error', 'heartbeat']) {
+        source.addEventListener(eventName, (event) => {
+          if (eventName === 'snapshot') {
+            console.info(`[chat-sse] snapshot project=${projectId} ms=${Math.round(performance.now() - startedAt)}`);
+          }
+          applyEvent(eventName, (event as MessageEvent).data ?? '');
+        });
       }
     };
 
@@ -104,7 +109,7 @@ export function useProjectChat(projectId: string) {
       cancelled = true;
       if (connectTimer) window.clearTimeout(connectTimer);
       if (retryTimer) window.clearTimeout(retryTimer);
-      abortRef.current?.abort();
+      eventSourceRef.current?.close();
     };
   }, [projectId, applyEvent]);
 

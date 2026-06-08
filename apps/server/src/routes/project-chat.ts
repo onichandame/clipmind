@@ -141,7 +141,7 @@ function maybeContinueLastUser(run: ChatRun) {
     console.error('[project-chat] auto-continue failed:', error);
     run.liveAssistantMessage = null;
     run.isStreaming = false;
-    broadcast(run, 'error', { message: '生成失败，请重试。', revision: run.revision });
+    broadcast(run, 'chat-error', { message: '生成失败，请重试。', revision: run.revision });
     scheduleCleanup(run);
   });
 }
@@ -261,7 +261,7 @@ app.get('/:id/chat/events', async (c) => {
     const streamStart = Date.now();
     const run = await getOrCreateRun(projectId, user.id);
     if (!run) {
-      await stream.writeSSE({ event: 'error', data: JSON.stringify({ message: '项目不存在' }) });
+      await stream.writeSSE({ event: 'chat-error', data: JSON.stringify({ message: '项目不存在' }) });
       return;
     }
     console.info(`[chat-events] run-ready project=${projectId} ms=${Date.now() - streamStart} total=${Date.now() - t0} messages=${run.uiMessages.length} streaming=${run.isStreaming}`);
@@ -332,7 +332,7 @@ app.post('/:id/chat/messages', async (c) => {
     console.error('[project-chat] run failed:', error);
     run.liveAssistantMessage = null;
     run.isStreaming = false;
-    broadcast(run, 'error', { message: '生成失败，请重试。', revision: run.revision });
+    broadcast(run, 'chat-error', { message: '生成失败，请重试。', revision: run.revision });
     scheduleCleanup(run);
   });
 
