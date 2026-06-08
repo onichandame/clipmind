@@ -157,15 +157,34 @@ export async function buildChatStream({
                 const allInvolvedIds = Array.from(new Set([...retrievedIds, ...selectedIds]));
 
                 if (allInvolvedIds.length > 0) {
-                  // IDs are project_assets.id — join through user_media_files to media_files for summary
                   const involvedAssets = await db.select({
-                    id: projectAssets.id,
+                    id: userMediaFiles.id,
                     filename: userMediaFiles.filename,
                     summary: mediaFiles.summary,
-                  }).from(projectAssets)
-                    .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+                  }).from(userMediaFiles)
                     .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
-                    .where(and(inArray(projectAssets.id, allInvolvedIds), eq(projectAssets.userId, user.id)));
+                    .where(and(inArray(userMediaFiles.id, allInvolvedIds), eq(userMediaFiles.userId, user.id)));
+
+                  // Legacy project state may still contain project_assets.id.
+                  // Resolve those only as a fallback while new reads use user_media_files.id.
+                  const resolvedIds = new Set(involvedAssets.map(a => a.id));
+                  const legacyIds = allInvolvedIds.filter(id => !resolvedIds.has(id));
+                  if (legacyIds.length > 0) {
+                    const legacyAssets = await db.select({
+                      id: projectAssets.id,
+                      filename: userMediaFiles.filename,
+                      summary: mediaFiles.summary,
+                    }).from(projectAssets)
+                      .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+                      .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+                      .where(and(
+                        inArray(projectAssets.id, legacyIds),
+                        eq(projectAssets.projectId, projectId),
+                        eq(projectAssets.userId, user.id),
+                        eq(userMediaFiles.userId, user.id),
+                      ));
+                    involvedAssets.push(...legacyAssets);
+                  }
 
                   if (retrievedIds.length > 0) {
                     const retrievedNames = involvedAssets.filter(a => retrievedIds.includes(a.id)).map(a => `【${a.filename}】(内容: ${a.summary || '暂无摘要'})`);
@@ -287,25 +306,20 @@ export async function buildChatStream({
             const clipIds = Array.from(new Set(
               args.clips.map((c: any) => c.clipId).filter((id: any) => typeof id === 'string' && id.length > 0)
             ));
-            // Join projectAssets to get project_assets.id (the assetId stored in editing plan clips)
             const chunks = clipIds.length > 0
               ? await db.select({
                   id: assetChunks.id,
                   mediaFileId: assetChunks.mediaFileId,
-                  projectAssetId: projectAssets.id,
+                  userMediaFileId: userMediaFiles.id,
                   startTime: assetChunks.startTime,
                   endTime: assetChunks.endTime,
                 })
                 .from(assetChunks)
                 .innerJoin(mediaFiles, eq(mediaFiles.id, assetChunks.mediaFileId))
                 .innerJoin(userMediaFiles, eq(userMediaFiles.mediaFileId, assetChunks.mediaFileId))
-                .innerJoin(projectAssets, and(
-                  eq(projectAssets.userMediaFileId, userMediaFiles.id),
-                  eq(projectAssets.projectId, projectId)
-                ))
                 .where(and(
                   inArray(assetChunks.id, clipIds),
-                  eq(projectAssets.userId, user.id),
+                  eq(userMediaFiles.userId, user.id),
                   eq(mediaFiles.status, 'ready'),
                   eq(assetChunks.asrTaskId, mediaFiles.asrTaskId)
                 ))
@@ -329,7 +343,7 @@ export async function buildChatStream({
                   description: clip.description,
                   clipType: 'footage' as const,
                   clipId: chunk.id,
-                  assetId: chunk.projectAssetId, // project_assets.id for JIT enrichment in projects.ts
+                  assetId: chunk.userMediaFileId,
                   startTime: chunk.startTime,
                   endTime: chunk.endTime,
                 };
@@ -516,7 +530,7 @@ export async function buildChatStream({
       }),
 
       search_assets: tool({
-        description: "【宏观检索】基于用户意图，在大盘视频库中进行鸟瞰式检索。返回的是视频素材的全局ID(assetId)和宏观总结(Summary)。当需要寻找特定主题或题材的视频时，必须优先调用此工具以防Token爆炸。",
+        description: "【宏观检索】基于用户意图，在用户素材库中进行鸟瞰式检索。返回的是用户素材ID(assetId)和宏观总结(Summary)。当需要寻找特定主题或题材的视频时，必须优先调用此工具以防Token爆炸。",
         inputSchema: z.object({
           query: z.string().describe('搜索意图，例如：海滩风景、某人发表演讲'),
           limit: z.number().min(1).max(10).optional().default(5)
@@ -530,16 +544,14 @@ export async function buildChatStream({
             const [vector] = await generateEmbeddings([query]);
 
             const ownedReadyAssets = await db.select({
-              id: projectAssets.id,
+              id: userMediaFiles.id,
               mediaFileId: userMediaFiles.mediaFileId,
               filename: userMediaFiles.filename,
             })
-              .from(projectAssets)
-              .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+              .from(userMediaFiles)
               .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
               .where(and(
-                eq(projectAssets.projectId, projectId),
-                eq(projectAssets.userId, user.id),
+                eq(userMediaFiles.userId, user.id),
                 eq(mediaFiles.status, 'ready')
               ));
 
@@ -560,18 +572,18 @@ export async function buildChatStream({
             }));
 
             const existingIdSet = new Set(ownedReadyAssets.map(a => a.mediaFileId));
-            const mediaFileToPAId = new Map(ownedReadyAssets.map(a => [a.mediaFileId, a.id]));
+            const mediaFileToUserMediaId = new Map(ownedReadyAssets.map(a => [a.mediaFileId, a.id]));
             const filenameMap = new Map(ownedReadyAssets.map(a => [a.mediaFileId, a.filename]));
             const assetsFound = rawAssets
               .filter(a => existingIdSet.has(a.assetId))
               .map(a => ({
                 ...a,
-                assetId: mediaFileToPAId.get(a.assetId) ?? a.assetId, // return project_assets.id
+                assetId: mediaFileToUserMediaId.get(a.assetId) ?? a.assetId,
                 filename: filenameMap.get(a.assetId) ?? '',
               }))
               .slice(0, limit);
 
-            const hitAssetIds = assetsFound.map(a => a.assetId); // project_assets.id values
+            const hitAssetIds = assetsFound.map(a => a.assetId);
             await db.update(projects).set({ retrievedAssetIds: hitAssetIds }).where(and(eq(projects.id, projectId), eq(projects.userId, user.id)));
 
             console.log(`[RAG-Macro] 命中 ${assetsFound.length} 个视频资产（已过滤 ${rawAssets.length - assetsFound.length} 个幽灵向量）并已持久化至 Project。`);
@@ -642,24 +654,40 @@ export async function buildChatStream({
 
             console.log(`[RAG-Micro] LLM 在指定视频中精搜切片: "${query}", assetIds: ${assetIds.length}`);
 
-            // assetIds are project_assets.id — translate to mediaFileId for Qdrant filter
+            // assetIds are user_media_files.id. Fall back to project_assets.id only
+            // for older persisted selections/results.
             const ownedRows = await db
-              .select({ id: projectAssets.id, mediaFileId: userMediaFiles.mediaFileId, filename: userMediaFiles.filename })
-              .from(projectAssets)
-              .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+              .select({ id: userMediaFiles.id, mediaFileId: userMediaFiles.mediaFileId, filename: userMediaFiles.filename })
+              .from(userMediaFiles)
               .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
               .where(and(
-                inArray(projectAssets.id, assetIds),
-                eq(projectAssets.projectId, projectId),
-                eq(projectAssets.userId, user.id),
+                inArray(userMediaFiles.id, assetIds),
+                eq(userMediaFiles.userId, user.id),
                 eq(mediaFiles.status, 'ready')
               ));
+            const resolvedAssetIds = new Set(ownedRows.map(r => r.id));
+            const legacyAssetIds = assetIds.filter(id => !resolvedAssetIds.has(id));
+            if (legacyAssetIds.length > 0) {
+              const legacyRows = await db
+                .select({ id: userMediaFiles.id, mediaFileId: userMediaFiles.mediaFileId, filename: userMediaFiles.filename })
+                .from(projectAssets)
+                .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+                .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+                .where(and(
+                  inArray(projectAssets.id, legacyAssetIds),
+                  eq(projectAssets.projectId, projectId),
+                  eq(projectAssets.userId, user.id),
+                  eq(userMediaFiles.userId, user.id),
+                  eq(mediaFiles.status, 'ready')
+                ));
+              ownedRows.push(...legacyRows.filter(r => !resolvedAssetIds.has(r.id)));
+            }
             if (ownedRows.length === 0) {
               return { success: true, clips: [] };
             }
             const mediaFileIds = ownedRows.map(r => r.mediaFileId);
-            // Reverse map: mediaFileId → project_assets.id (for response) and filename
-            const mediaIdToPAId = new Map(ownedRows.map(r => [r.mediaFileId, r.id]));
+            // Reverse map: mediaFileId → user_media_files.id (for response) and filename
+            const mediaIdToUserMediaId = new Map(ownedRows.map(r => [r.mediaFileId, r.id]));
             const mediaIdToFilename = new Map(ownedRows.map(r => [r.mediaFileId, r.filename]));
 
             const [vector] = await generateEmbeddings([query]);
@@ -672,7 +700,7 @@ export async function buildChatStream({
               return {
                 id: p.payload?.chunkId ?? p.id,
                 score: p.score,
-                assetId: mediaIdToPAId.get(mfId) ?? mfId, // expose project_assets.id to LLM
+                assetId: mediaIdToUserMediaId.get(mfId) ?? mfId,
                 filename: mediaIdToFilename.get(mfId) ?? '',
                 text: p.payload?.text,
                 startTime: p.payload?.startTime,

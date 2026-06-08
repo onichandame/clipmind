@@ -14,7 +14,7 @@ import { useCanvasStore } from '../store/useCanvasStore';
 interface LibraryVariant {
   projectId: string;
   projectTitle: string;
-  projectAssetId: string;
+  projectAssetId?: string;
 }
 
 interface LibraryItem {
@@ -59,7 +59,8 @@ function formatSize(bytes: number): string {
 
 function libraryItemToAsset(item: LibraryItem): Asset {
   return {
-    id: item.variants[0]?.projectAssetId ?? item.userMediaFileId,
+    id: item.userMediaFileId,
+    userMediaFileId: item.userMediaFileId,
     mediaFileId: item.mediaFileId,
     filename: item.filename,
     sha256: item.sha256,
@@ -336,7 +337,7 @@ function LibraryCard({
             )}
             {item.variants.map((v) => (
               <button
-                key={v.projectAssetId}
+                key={v.projectAssetId ?? v.projectId}
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();

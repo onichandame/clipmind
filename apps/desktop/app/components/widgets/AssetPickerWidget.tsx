@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Film, UploadCloud, Check, Loader2, Activity, AlertCircle, ArrowRight, Trash2 } from 'lucide-react';
+import { Film, UploadCloud, Check, Loader2, Activity, AlertCircle, ArrowRight } from 'lucide-react';
 import { env } from '../../env';
 import { authFetch } from '../../lib/auth';
 import { selectAndImportAssets } from '../../lib/asset-import';
@@ -46,7 +46,12 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
     enabled: !!projectId,
   });
 
-  const selectedIds: string[] = projectData?.project?.selectedAssetIds ?? [];
+  const storedSelectedIds: string[] = projectData?.project?.selectedAssetIds ?? [];
+  const legacyIdMap = new Map(assets.flatMap((asset) => {
+    const ids = asset.projectAssetIds ?? (asset.projectAssetId ? [asset.projectAssetId] : []);
+    return ids.map((id) => [id, asset.id] as const);
+  }));
+  const selectedIds = Array.from(new Set(storedSelectedIds.map((id) => legacyIdMap.get(id) ?? id)));
   const selectedSet = new Set(selectedIds);
 
   const toggleSelect = useMutation({
@@ -62,18 +67,6 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
       if (!res.ok) throw new Error('Failed to update selection');
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['project', projectId] });
-    },
-  });
-
-  const deleteAsset = useMutation({
-    mutationFn: async (assetId: string) => {
-      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/assets/${assetId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('移除失败，请稍后重试。');
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['assets-library'] });
-      queryClient.invalidateQueries({ queryKey: ['library'] });
       queryClient.invalidateQueries({ queryKey: ['project', projectId] });
     },
   });
@@ -202,14 +195,6 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
                         <Check className="w-3 h-3" strokeWidth={3} />
                       </div>
                     )}
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); deleteAsset.mutate(asset.id); }}
-                      className="absolute top-1 left-1 w-5 h-5 rounded-full bg-black/50 hover:bg-rose-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                      title="从项目移除"
-                    >
-                      <Trash2 className="w-2.5 h-2.5" />
-                    </button>
                   </div>
                   <div className={`px-2 py-1.5 bg-white dark:bg-zinc-900 ${selectable ? '' : 'opacity-60'}`}>
                     <div className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300 truncate text-left">

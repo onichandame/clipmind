@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { mediaFiles, projectAssets, projects, userMediaFiles } from "@clipmind/db";
+import { editingPlans, mediaFiles, projectAssets, projects, userMediaFiles } from "@clipmind/db";
 import { desc, eq, and, ne, sql } from "drizzle-orm";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { db } from "../db";
@@ -191,6 +191,116 @@ async function markMediaFailed(mediaFileId: string, failureStage: string, error:
   }).where(eq(mediaFiles.id, mediaFileId));
 }
 
+type ProjectUsageVariant = {
+  projectId: string;
+  projectTitle: string;
+  projectAssetId?: string;
+};
+
+function addProjectUsage(
+  usage: Map<string, ProjectUsageVariant[]>,
+  userMediaFileId: string,
+  variant: ProjectUsageVariant,
+) {
+  const variants = usage.get(userMediaFileId) ?? [];
+  if (!variants.some((v) => v.projectId === variant.projectId)) {
+    variants.push(variant);
+    usage.set(userMediaFileId, variants);
+  }
+}
+
+function assetIdReferencesUserMedia(assetId: unknown, userMediaFileId: string, legacyProjectAssetIds: Set<string>) {
+  return assetId === userMediaFileId || (typeof assetId === 'string' && legacyProjectAssetIds.has(assetId));
+}
+
+function projectJsonReferencesUserMedia(
+  project: { selectedAssetIds: any; retrievedAssetIds: any; retrievedClips?: any },
+  userMediaFileId: string,
+  legacyProjectAssetIds = new Set<string>(),
+) {
+  const selectedAssetIds = Array.isArray(project.selectedAssetIds) ? project.selectedAssetIds : [];
+  const retrievedAssetIds = Array.isArray(project.retrievedAssetIds) ? project.retrievedAssetIds : [];
+  const retrievedClipAssetIds = Array.isArray(project.retrievedClips)
+    ? project.retrievedClips.map((clip: any) => clip?.assetId)
+    : [];
+  return [...selectedAssetIds, ...retrievedAssetIds, ...retrievedClipAssetIds]
+    .some((assetId) => assetIdReferencesUserMedia(assetId, userMediaFileId, legacyProjectAssetIds));
+}
+
+function planReferencesUserMedia(plan: { clips: any }, userMediaFileId: string, legacyProjectAssetIds = new Set<string>()) {
+  return Array.isArray(plan.clips)
+    && plan.clips.some((clip: any) => assetIdReferencesUserMedia(clip?.assetId, userMediaFileId, legacyProjectAssetIds));
+}
+
+async function loadUserMediaProjectUsages(userId: string) {
+  const usage = new Map<string, ProjectUsageVariant[]>();
+
+  const legacyRows = await db
+    .select({
+      userMediaFileId: projectAssets.userMediaFileId,
+      projectAssetId: projectAssets.id,
+      projectId: projectAssets.projectId,
+      projectTitle: projects.title,
+    })
+    .from(projectAssets)
+    .innerJoin(projects, eq(projects.id, projectAssets.projectId))
+    .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+    .where(and(eq(projectAssets.userId, userId), eq(userMediaFiles.userId, userId)));
+  const legacyIdToUserMediaId = new Map(legacyRows.map((row) => [row.projectAssetId, row.userMediaFileId]));
+  const legacyRowById = new Map(legacyRows.map((row) => [row.projectAssetId, row]));
+
+  const projectRows = await db
+    .select({
+      id: projects.id,
+      title: projects.title,
+      selectedAssetIds: projects.selectedAssetIds,
+      retrievedAssetIds: projects.retrievedAssetIds,
+      retrievedClips: projects.retrievedClips,
+    })
+    .from(projects)
+    .where(eq(projects.userId, userId));
+  for (const project of projectRows) {
+    const ids = [
+      ...(Array.isArray(project.selectedAssetIds) ? project.selectedAssetIds : []),
+      ...(Array.isArray(project.retrievedAssetIds) ? project.retrievedAssetIds : []),
+      ...(Array.isArray(project.retrievedClips) ? project.retrievedClips.map((clip: any) => clip?.assetId) : []),
+    ];
+    for (const id of ids) {
+      if (typeof id !== 'string') continue;
+      addProjectUsage(usage, legacyIdToUserMediaId.get(id) ?? id, {
+        projectId: project.id,
+        projectTitle: project.title ?? '未命名项目',
+      });
+    }
+  }
+
+  const planRows = await db
+    .select({
+      projectId: editingPlans.projectId,
+      projectTitle: projects.title,
+      clips: editingPlans.clips,
+    })
+    .from(editingPlans)
+    .innerJoin(projects, eq(projects.id, editingPlans.projectId))
+    .where(eq(projects.userId, userId));
+  for (const plan of planRows) {
+    if (!Array.isArray(plan.clips)) continue;
+    for (const clip of plan.clips) {
+      const assetId = clip?.assetId;
+      if (typeof assetId !== 'string') continue;
+      const userMediaFileId = legacyIdToUserMediaId.get(assetId) ?? assetId;
+      const legacyRow = legacyRowById.get(assetId);
+      addProjectUsage(usage, userMediaFileId, {
+        projectId: plan.projectId,
+        projectTitle: plan.projectTitle ?? '未命名项目',
+        projectAssetId: legacyRow?.projectAssetId,
+      });
+    }
+  }
+
+  return usage;
+}
+
 // GET /api/assets/library — list all user-library media rows along with which
 // projects use each one. The underlying media_files row stays global and
 // deduped by file hash.
@@ -202,10 +312,6 @@ app.get("/library", async (c) => {
         userMediaFileId: userMediaFiles.id,
         filename: userMediaFiles.filename,
         userMediaCreatedAt: userMediaFiles.createdAt,
-        // project_assets fields (per-project use)
-        projectAssetId: projectAssets.id,
-        projectId: projectAssets.projectId,
-        projectTitle: projects.title,
         // media_files fields (canonical, per-content)
         mediaFileId: mediaFiles.id,
         fileHash: mediaFiles.fileHash,
@@ -225,18 +331,17 @@ app.get("/library", async (c) => {
       })
       .from(userMediaFiles)
       .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
-      .leftJoin(projectAssets, and(eq(projectAssets.userMediaFileId, userMediaFiles.id), eq(projectAssets.userId, user.id)))
-      .leftJoin(projects, eq(projects.id, projectAssets.projectId))
       .where(eq(userMediaFiles.userId, user.id))
       .orderBy(desc(userMediaFiles.createdAt));
+    const usageByUserMediaFile = await loadUserMediaProjectUsages(user.id);
 
-    // Each media_file may have multiple project_asset variants (one per project
-    // it was imported into). Backup state lives on media_files (per-content,
-    // shared across projects); variants only carry per-project identity.
+    // Each user-library row may be referenced by multiple projects via project
+    // JSON fields or editing plans. Backup state lives on media_files
+    // (per-content, shared across projects); variants only carry project usage.
     type Variant = {
       projectId: string;
       projectTitle: string;
-      projectAssetId: string;
+      projectAssetId?: string;
     };
     type MediaGroup = {
       userMediaFileId: string;
@@ -285,14 +390,7 @@ app.get("/library", async (c) => {
         };
         grouped.set(r.userMediaFileId, g);
       }
-      if (!r.projectAssetId || !r.projectId) {
-        continue;
-      }
-      g.variants.push({
-        projectId: r.projectId,
-        projectTitle: r.projectTitle ?? '未命名项目',
-        projectAssetId: r.projectAssetId,
-      });
+      g.variants = usageByUserMediaFile.get(r.userMediaFileId) ?? [];
     }
 
     return c.json(Array.from(grouped.values()));
@@ -302,53 +400,79 @@ app.get("/library", async (c) => {
   }
 });
 
-// GET /api/assets?projectId=xxx — list project-scoped assets joining media_files for processing state
+// GET /api/assets — list the current user's full material library for project chat.
+// project_assets still exist for legacy project references, but this read path
+// exposes user_media_files as the selectable material identity.
 app.get("/", async (c) => {
   const user = c.get('user');
   const projectId = c.req.query('projectId');
-  if (!projectId) {
-    return c.json({ error: 'projectId query param required' }, 400);
-  }
   try {
-    const rows = await db
-      .select({
-        id: projectAssets.id,
-        userMediaFileId: userMediaFiles.id,
-        mediaFileId: userMediaFiles.mediaFileId,
-        projectId: projectAssets.projectId,
-        filename: userMediaFiles.filename,
-        createdAt: projectAssets.createdAt,
-        // from media_files (canonical per-content state)
-        sha256: mediaFiles.fileHash,
-        fileSize: mediaFiles.fileSize,
-        duration: mediaFiles.duration,
-        status: mediaFiles.status,
-        transcriptKind: mediaFiles.transcriptKind,
-        processingStage: mediaFiles.processingStage,
-        failureStage: mediaFiles.failureStage,
-        failureReason: mediaFiles.failureReason,
-        summary: mediaFiles.summary,
-        audioOssKey: mediaFiles.audioOssKey,
-        thumbnailOssKey: mediaFiles.thumbnailOssKey,
-        videoOssKey: mediaFiles.videoOssKey,
-        backupStatus: mediaFiles.backupStatus,
-      })
-      .from(projectAssets)
-      .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
-      .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
-      .where(and(eq(projectAssets.projectId, projectId), eq(projectAssets.userId, user.id)))
-      .orderBy(desc(projectAssets.createdAt));
+    const selectFields = {
+      id: userMediaFiles.id,
+      userMediaFileId: userMediaFiles.id,
+      mediaFileId: userMediaFiles.mediaFileId,
+      filename: userMediaFiles.filename,
+      createdAt: userMediaFiles.createdAt,
+      // from media_files (canonical per-content state)
+      sha256: mediaFiles.fileHash,
+      fileSize: mediaFiles.fileSize,
+      duration: mediaFiles.duration,
+      status: mediaFiles.status,
+      transcriptKind: mediaFiles.transcriptKind,
+      processingStage: mediaFiles.processingStage,
+      failureStage: mediaFiles.failureStage,
+      failureReason: mediaFiles.failureReason,
+      summary: mediaFiles.summary,
+      audioOssKey: mediaFiles.audioOssKey,
+      thumbnailOssKey: mediaFiles.thumbnailOssKey,
+      videoOssKey: mediaFiles.videoOssKey,
+      backupStatus: mediaFiles.backupStatus,
+    };
+    const rows = projectId
+      ? await db
+        .select({ ...selectFields, projectAssetId: projectAssets.id })
+        .from(userMediaFiles)
+        .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+        .leftJoin(projectAssets, and(
+          eq(projectAssets.userMediaFileId, userMediaFiles.id),
+          eq(projectAssets.userId, user.id),
+          eq(projectAssets.projectId, projectId),
+        ))
+        .where(eq(userMediaFiles.userId, user.id))
+        .orderBy(desc(userMediaFiles.createdAt))
+      : await db
+        .select({ ...selectFields, projectAssetId: sql<string | null>`NULL` })
+        .from(userMediaFiles)
+        .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+        .where(eq(userMediaFiles.userId, user.id))
+        .orderBy(desc(userMediaFiles.createdAt));
 
     const mapped = rows.map(row => ({
       ...row,
+      projectAssetIds: row.projectAssetId ? [row.projectAssetId] : [],
       videoOssUrl: row.backupStatus === 'backed_up' && row.videoOssKey ? signAssetViewUrl(row.videoOssKey) : null,
       audioOssUrl: row.audioOssKey ? signAssetViewUrl(row.audioOssKey) : null,
       thumbnailUrl: row.thumbnailOssKey ? signAssetViewUrl(row.thumbnailOssKey) : null,
     }));
 
-    return c.json(mapped);
+    const deduped = new Map<string, (typeof mapped)[number]>();
+    for (const row of mapped) {
+      const existing = deduped.get(row.userMediaFileId);
+      if (!existing) {
+        deduped.set(row.userMediaFileId, row);
+        continue;
+      }
+      if (row.projectAssetId && !existing.projectAssetIds.includes(row.projectAssetId)) {
+        existing.projectAssetIds.push(row.projectAssetId);
+      }
+      if (!existing.projectAssetId && row.projectAssetId) {
+        existing.projectAssetId = row.projectAssetId;
+      }
+    }
+
+    return c.json(Array.from(deduped.values()));
   } catch (error) {
-    console.error('❌ 获取项目资产列表失败:', error);
+    console.error('❌ 获取用户素材列表失败:', error);
     return c.json({ error: 'Database Error' }, 500);
   }
 });
@@ -657,15 +781,34 @@ app.delete('/library/:id', async (c) => {
         .limit(1);
       if (!umf) return { found: false as const };
 
-      const [projectRef] = await tx
+      const legacyProjectAssetRows = await tx
         .select({ id: projectAssets.id })
         .from(projectAssets)
-        .where(eq(projectAssets.userMediaFileId, id))
-        .limit(1);
-      if (projectRef) {
+        .where(and(eq(projectAssets.userMediaFileId, id), eq(projectAssets.userId, user.id)));
+      const legacyProjectAssetIds = new Set(legacyProjectAssetRows.map((row) => row.id));
+
+      const projectRows = await tx
+        .select({
+          selectedAssetIds: projects.selectedAssetIds,
+          retrievedAssetIds: projects.retrievedAssetIds,
+          retrievedClips: projects.retrievedClips,
+        })
+        .from(projects)
+        .where(eq(projects.userId, user.id));
+      if (projectRows.some((project) => projectJsonReferencesUserMedia(project, id, legacyProjectAssetIds))) {
         return { found: true as const, blocked: true as const };
       }
 
+      const planRows = await tx
+        .select({ clips: editingPlans.clips })
+        .from(editingPlans)
+        .innerJoin(projects, eq(projects.id, editingPlans.projectId))
+        .where(eq(projects.userId, user.id));
+      if (planRows.some((plan) => planReferencesUserMedia(plan, id, legacyProjectAssetIds))) {
+        return { found: true as const, blocked: true as const };
+      }
+
+      await tx.delete(projectAssets).where(and(eq(projectAssets.userMediaFileId, id), eq(projectAssets.userId, user.id)));
       await tx.delete(userMediaFiles).where(and(eq(userMediaFiles.id, id), eq(userMediaFiles.userId, user.id)));
 
       const [remainingUserRef] = await tx
@@ -721,26 +864,44 @@ app.delete("/:id", async (c) => {
 
       if (!pa) return { found: false as const };
 
-      await tx.delete(projectAssets).where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
       const [project] = await tx
-        .select({ selectedAssetIds: projects.selectedAssetIds, retrievedAssetIds: projects.retrievedAssetIds })
+        .select({
+          selectedAssetIds: projects.selectedAssetIds,
+          retrievedAssetIds: projects.retrievedAssetIds,
+          retrievedClips: projects.retrievedClips,
+        })
         .from(projects)
         .where(and(eq(projects.id, pa.projectId), eq(projects.userId, user.id)))
         .limit(1);
       if (project) {
+        const planRows = await tx
+          .select({ id: editingPlans.id, clips: editingPlans.clips })
+          .from(editingPlans)
+          .where(eq(editingPlans.projectId, pa.projectId));
+        if (planRows.some((plan) => planReferencesUserMedia(plan, id))) {
+          return { found: true as const, blocked: true as const };
+        }
+
         const selectedAssetIds = Array.isArray(project.selectedAssetIds)
           ? project.selectedAssetIds.filter((assetId) => assetId !== id)
           : [];
         const retrievedAssetIds = Array.isArray(project.retrievedAssetIds)
           ? project.retrievedAssetIds.filter((assetId) => assetId !== id)
           : [];
-        await tx.update(projects).set({ selectedAssetIds, retrievedAssetIds }).where(eq(projects.id, pa.projectId));
+        const retrievedClips = Array.isArray(project.retrievedClips)
+          ? project.retrievedClips.filter((clip: any) => clip?.assetId !== id)
+          : [];
+        await tx.update(projects).set({ selectedAssetIds, retrievedAssetIds, retrievedClips }).where(eq(projects.id, pa.projectId));
       }
+      await tx.delete(projectAssets).where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
       return { found: true as const };
     });
 
     if (!result.found) {
       return c.json({ error: 'Asset not found' }, 404);
+    }
+    if (result.blocked) {
+      return c.json({ error: 'Asset is still used by editing plans' }, 409);
     }
     return c.json({ success: true });
   } catch (error) {

@@ -35,6 +35,51 @@ function toStoredUiMessage(message: any) {
   return { id: message?.id || crypto.randomUUID(), role, parts: [{ type: 'text', text }] };
 }
 
+async function loadAssetMetadataByIds(assetIds: string[], userId: string, projectId: string) {
+  if (assetIds.length === 0) return new Map<string, any>();
+
+  const userMediaRows = await db
+    .select({
+      id: userMediaFiles.id,
+      filename: userMediaFiles.filename,
+      mediaFileId: userMediaFiles.mediaFileId,
+      videoOssKey: mediaFiles.videoOssKey,
+      backupStatus: mediaFiles.backupStatus,
+      sha256: mediaFiles.fileHash,
+      thumbnailOssKey: mediaFiles.thumbnailOssKey,
+    })
+    .from(userMediaFiles)
+    .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+    .where(and(inArray(userMediaFiles.id, assetIds), eq(userMediaFiles.userId, userId)));
+
+  const assetMap = new Map<string, any>(userMediaRows.map((a: any) => [a.id, a]));
+  const legacyIds = assetIds.filter((id) => !assetMap.has(id));
+  if (legacyIds.length === 0) return assetMap;
+
+  const legacyRows = await db
+    .select({
+      id: projectAssets.id,
+      filename: userMediaFiles.filename,
+      mediaFileId: userMediaFiles.mediaFileId,
+      videoOssKey: mediaFiles.videoOssKey,
+      backupStatus: mediaFiles.backupStatus,
+      sha256: mediaFiles.fileHash,
+      thumbnailOssKey: mediaFiles.thumbnailOssKey,
+    })
+    .from(projectAssets)
+    .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+    .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+    .where(and(
+      inArray(projectAssets.id, legacyIds),
+      eq(projectAssets.projectId, projectId),
+      eq(projectAssets.userId, userId),
+      eq(userMediaFiles.userId, userId),
+    ));
+
+  for (const row of legacyRows) assetMap.set(row.id, row);
+  return assetMap;
+}
+
 // idea 模式首条消息：text followup + 留学热点 carousel widget。
 // 复用 material 模式 request_asset_import 的 seed 套路 —— 用 AI SDK 标准 tool-* part
 // 形状伪造一次"工具已完成调用"，前端 widgetRegistry 按 `tool-show_hotspots` 渲染
@@ -260,24 +305,13 @@ app.get('/:id', async (c) => {
 
         clip.thumbnailUrl = signAssetViewUrl(clip.thumbnailUrl);
 
-        // 本地优先：从 assets 表反查归属信息。仅在 videoOssKey 存在（已云备份）时签发 download URL；
+        // 本地优先：从 user_media_files 反查归属信息。仅在 videoOssKey 存在（已云备份）时签发 download URL；
         // 否则前端通过 useAssetUri(assetId) 走本地 asset:// 协议解析。
         // 注意：videoOssKey / backupStatus 已上提至 media_files（per-content）。
         if (clip.assetId) {
           try {
-            const [paRecord] = await db
-              .select({
-                filename: userMediaFiles.filename,
-                mediaFileId: userMediaFiles.mediaFileId,
-                videoOssKey: mediaFiles.videoOssKey,
-                backupStatus: mediaFiles.backupStatus,
-                sha256: mediaFiles.fileHash,
-                thumbnailOssKey: mediaFiles.thumbnailOssKey,
-              })
-              .from(projectAssets)
-              .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
-              .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
-              .where(and(eq(projectAssets.id, clip.assetId), eq(projectAssets.userId, user.id)));
+            const assetMap = await loadAssetMetadataByIds([clip.assetId], user.id, id);
+            const paRecord = assetMap.get(clip.assetId);
 
             if (paRecord) {
               clip.filename = paRecord.filename;
@@ -307,22 +341,7 @@ app.get('/:id', async (c) => {
           .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
         if (assetIds.length === 0) continue;
 
-        const paRows = await db
-          .select({
-            id: projectAssets.id,
-            filename: userMediaFiles.filename,
-            mediaFileId: userMediaFiles.mediaFileId,
-            videoOssKey: mediaFiles.videoOssKey,
-            backupStatus: mediaFiles.backupStatus,
-            sha256: mediaFiles.fileHash,
-            thumbnailOssKey: mediaFiles.thumbnailOssKey,
-          })
-          .from(projectAssets)
-          .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
-          .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
-          .where(and(inArray(projectAssets.id, assetIds), eq(projectAssets.userId, user.id)));
-
-        const assetMap = new Map(paRows.map((a: any) => [a.id, a]));
+        const assetMap = await loadAssetMetadataByIds(assetIds, user.id, id);
 
         for (const clip of plan.clips) {
           if (!clip.assetId) continue;
@@ -387,7 +406,41 @@ app.patch('/:id', async (c) => {
     if (!Array.isArray(body.selectedAssetIds)) {
       return c.json({ error: 'selectedAssetIds must be an array' }, 400);
     }
-    updatePayload.selectedAssetIds = body.selectedAssetIds;
+    if (body.selectedAssetIds.length > 100 || body.selectedAssetIds.some((assetId: any) => typeof assetId !== 'string')) {
+      return c.json({ error: 'selectedAssetIds must be an array of up to 100 strings' }, 400);
+    }
+    const requestedIds = Array.from(new Set(body.selectedAssetIds)) as string[];
+    if (requestedIds.length === 0) {
+      updatePayload.selectedAssetIds = [];
+    } else {
+      const ownedUserMediaRows = await db
+        .select({ id: userMediaFiles.id })
+        .from(userMediaFiles)
+        .where(and(inArray(userMediaFiles.id, requestedIds), eq(userMediaFiles.userId, user.id)));
+      const normalizedIds = new Set(ownedUserMediaRows.map((row) => row.id));
+      const validRequestedIds = new Set(ownedUserMediaRows.map((row) => row.id));
+      const legacyIds = requestedIds.filter((assetId) => !normalizedIds.has(assetId));
+      if (legacyIds.length > 0) {
+        const legacyRows = await db
+          .select({ projectAssetId: projectAssets.id, userMediaFileId: userMediaFiles.id })
+          .from(projectAssets)
+          .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+          .where(and(
+            inArray(projectAssets.id, legacyIds),
+            eq(projectAssets.projectId, id),
+            eq(projectAssets.userId, user.id),
+            eq(userMediaFiles.userId, user.id),
+          ));
+        for (const row of legacyRows) {
+          validRequestedIds.add(row.projectAssetId);
+          normalizedIds.add(row.userMediaFileId);
+        }
+      }
+      if (validRequestedIds.size !== requestedIds.length) {
+        return c.json({ error: 'selectedAssetIds contains assets that are not in your library' }, 400);
+      }
+      updatePayload.selectedAssetIds = Array.from(normalizedIds);
+    }
   }
 
   if (body.pinned !== undefined) {

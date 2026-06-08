@@ -41,7 +41,8 @@ export const sessions = mysqlTable('sessions', {
 //
 // 两层分离设计：
 //   media_files  — 以文件哈希去重的底层处理单元（ASR/摘要/向量归属于此）
-//   project_assets — 每个项目独立的资产引用（UI/用户看到的 assetId 来自此表）
+//   user_media_files — 用户素材库所有权；新 UI/LLM-facing assetId 优先来自此表
+//   project_assets — 每个项目独立的资产引用（legacy/project-local references）
 // ==========================================
 
 // 底层：全局去重处理单元。同一 SHA-256 原片在全库只处理一次；授权只来自 project_assets。

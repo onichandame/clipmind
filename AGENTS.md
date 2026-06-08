@@ -61,7 +61,7 @@ Do not maintain duplicate env-var lists or line-number-based guidance here; insp
 - Project asset deletion removes only the project reference.
 - Library material deletion removes the `user_media_files` row and is blocked while any project still uses it.
 - A `media_files` row may be deleted only after no `user_media_files` rows reference it.
-- UI/LLM-facing asset ids for project work are `project_assets.id`.
+- UI/LLM-facing asset ids for project chat and material search are `user_media_files.id`; legacy project references may still contain `project_assets.id`.
 - Local desktop file lookup is keyed by SHA-256 in desktop SQLite, not by backend ids.
 
 ## Rust/Tauri Boundaries
