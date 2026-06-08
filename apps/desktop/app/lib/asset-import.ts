@@ -22,7 +22,7 @@ import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanv
 
 const VIDEO_EXTS = ['mp4', 'mov', 'MP4', 'MOV'];
 
-export async function selectAndImportAssets(projectId: string): Promise<void> {
+export async function selectAndImportAssetFiles(projectId?: string): Promise<void> {
   const selected = await open({
     multiple: true,
     filters: [{ name: 'Videos', extensions: VIDEO_EXTS }],
@@ -43,6 +43,14 @@ export async function selectAndImportAssets(projectId: string): Promise<void> {
   newJobs.forEach(processJob);
 }
 
+export async function selectAndImportAssets(projectId: string): Promise<void> {
+  return selectAndImportAssetFiles(projectId);
+}
+
+export async function selectAndImportLibraryAssets(): Promise<void> {
+  return selectAndImportAssetFiles();
+}
+
 async function processJob(job: UploadJob): Promise<void> {
   const update = useCanvasStore.getState().updateUploadJob;
   try {
@@ -52,7 +60,7 @@ async function processJob(job: UploadJob): Promise<void> {
       jobId: job.id,
       filename: job.filename,
       localPath: job.sourcePath,
-      projectId: job.projectId,
+      projectId: job.projectId ?? null,
       serverUrl: env.VITE_API_BASE_URL,
       sessionToken,
     });
@@ -88,6 +96,7 @@ export function useGlobalAssetImportListeners() {
         // Refresh active route loaders + the chat widget's asset-library query.
         revalidator.revalidate();
         queryClient.invalidateQueries({ queryKey: ['assets-library'], exact: false });
+        queryClient.invalidateQueries({ queryKey: ['library'] });
       }
       setJobs((current) =>
         current.map((j) => {

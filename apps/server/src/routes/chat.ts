@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, projects, hotspots, users } from "@clipmind/db";
+import { projectOutlines, editingPlans, mediaFiles, projectAssets, assetChunks, projects, hotspots, users, userMediaFiles } from "@clipmind/db";
 import { createAIModel, SYSTEM_PROMPT } from "../utils/ai";
 import { streamText, tool, convertToModelMessages, UIMessage, stepCountIs, hasToolCall } from "ai";
 import { z } from "zod";
@@ -132,13 +132,14 @@ app.post("/", async (c) => {
                 const allInvolvedIds = Array.from(new Set([...retrievedIds, ...selectedIds]));
 
                 if (allInvolvedIds.length > 0) {
-                  // IDs are project_assets.id — join media_files for summary
+                  // IDs are project_assets.id — join through user_media_files to media_files for summary
                   const involvedAssets = await db.select({
                     id: projectAssets.id,
-                    filename: projectAssets.filename,
+                    filename: userMediaFiles.filename,
                     summary: mediaFiles.summary,
                   }).from(projectAssets)
-                    .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+                    .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+                    .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
                     .where(and(inArray(projectAssets.id, allInvolvedIds), eq(projectAssets.userId, user.id)));
 
                   if (retrievedIds.length > 0) {
@@ -267,8 +268,9 @@ app.post("/", async (c) => {
                 })
                 .from(assetChunks)
                 .innerJoin(mediaFiles, eq(mediaFiles.id, assetChunks.mediaFileId))
+                .innerJoin(userMediaFiles, eq(userMediaFiles.mediaFileId, assetChunks.mediaFileId))
                 .innerJoin(projectAssets, and(
-                  eq(projectAssets.mediaFileId, assetChunks.mediaFileId),
+                  eq(projectAssets.userMediaFileId, userMediaFiles.id),
                   eq(projectAssets.projectId, projectId)
                 ))
                 .where(and(
@@ -486,11 +488,12 @@ app.post("/", async (c) => {
 
             const ownedReadyAssets = await db.select({
               id: projectAssets.id,
-              mediaFileId: projectAssets.mediaFileId,
-              filename: projectAssets.filename,
+              mediaFileId: userMediaFiles.mediaFileId,
+              filename: userMediaFiles.filename,
             })
               .from(projectAssets)
-              .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+              .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+              .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
               .where(and(
                 eq(projectAssets.projectId, projectId),
                 eq(projectAssets.userId, user.id),
@@ -598,9 +601,10 @@ app.post("/", async (c) => {
 
             // assetIds are project_assets.id — translate to mediaFileId for Qdrant filter
             const ownedRows = await db
-              .select({ id: projectAssets.id, mediaFileId: projectAssets.mediaFileId, filename: projectAssets.filename })
+              .select({ id: projectAssets.id, mediaFileId: userMediaFiles.mediaFileId, filename: userMediaFiles.filename })
               .from(projectAssets)
-              .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+              .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+              .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
               .where(and(
                 inArray(projectAssets.id, assetIds),
                 eq(projectAssets.projectId, projectId),

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { mediaFiles, projectAssets, projects } from "@clipmind/db";
+import { mediaFiles, projectAssets, projects, userMediaFiles } from "@clipmind/db";
 import { desc, eq, and, ne, sql } from "drizzle-orm";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { db } from "../db";
@@ -90,7 +90,37 @@ async function ensureProjectOwned(projectId: string, userId: string) {
   return !!project;
 }
 
-async function createProjectAsset(projectId: string, userId: string, mediaFileId: string, filename: string) {
+async function createUserMediaFile(userId: string, mediaFileId: string, filename: string) {
+  const [existing] = await db
+    .select({ id: userMediaFiles.id })
+    .from(userMediaFiles)
+    .where(and(eq(userMediaFiles.userId, userId), eq(userMediaFiles.mediaFileId, mediaFileId)))
+    .limit(1);
+  if (existing) return existing.id;
+
+  const userMediaFileId = crypto.randomUUID();
+  try {
+    await db.insert(userMediaFiles).values({
+      id: userMediaFileId,
+      userId,
+      mediaFileId,
+      filename,
+    });
+  } catch (error: any) {
+    const msg = String(error?.code || error?.message || '');
+    if (!msg.includes('ER_DUP_ENTRY') && !msg.includes('Duplicate')) throw error;
+    const [winner] = await db
+      .select({ id: userMediaFiles.id })
+      .from(userMediaFiles)
+      .where(and(eq(userMediaFiles.userId, userId), eq(userMediaFiles.mediaFileId, mediaFileId)))
+      .limit(1);
+    if (!winner) throw error;
+    return winner.id;
+  }
+  return userMediaFileId;
+}
+
+async function createProjectAsset(projectId: string, userId: string, userMediaFileId: string, filename: string) {
   return db.transaction(async (tx) => {
     // Lock the owning project row until commit; this serializes concurrent
     // project_asset creation for the same project without deleting historical
@@ -103,7 +133,7 @@ async function createProjectAsset(projectId: string, userId: string, mediaFileId
         .where(and(
           eq(projectAssets.projectId, projectId),
           eq(projectAssets.userId, userId),
-          eq(projectAssets.mediaFileId, mediaFileId),
+          eq(projectAssets.userMediaFileId, userMediaFileId),
         ))
         .limit(1);
       if (existing) return existing.id;
@@ -114,7 +144,7 @@ async function createProjectAsset(projectId: string, userId: string, mediaFileId
           id: projectAssetId,
           projectId,
           userId,
-          mediaFileId,
+          userMediaFileId,
           filename,
         });
       } catch (error: any) {
@@ -126,7 +156,7 @@ async function createProjectAsset(projectId: string, userId: string, mediaFileId
           .where(and(
             eq(projectAssets.projectId, projectId),
             eq(projectAssets.userId, userId),
-            eq(projectAssets.mediaFileId, mediaFileId),
+            eq(projectAssets.userMediaFileId, userMediaFileId),
           ))
           .limit(1);
         if (!winner) throw error;
@@ -134,15 +164,6 @@ async function createProjectAsset(projectId: string, userId: string, mediaFileId
       }
       return projectAssetId;
   });
-}
-
-async function userOwnsMedia(userId: string, mediaFileId: string) {
-  const [row] = await db
-    .select({ id: projectAssets.id })
-    .from(projectAssets)
-    .where(and(eq(projectAssets.userId, userId), eq(projectAssets.mediaFileId, mediaFileId)))
-    .limit(1);
-  return !!row;
 }
 
 async function assertTempArtifactsExist(token: ImportFinalizePayload) {
@@ -170,23 +191,21 @@ async function markMediaFailed(mediaFileId: string, failureStage: string, error:
   }).where(eq(mediaFiles.id, mediaFileId));
 }
 
-// GET /api/assets/library — list all of the user's underlying media files
-// (deduped by file hash) along with which projects use each one. Used by the
-// global "素材库" page; preview-only (no upload).
+// GET /api/assets/library — list all user-library media rows along with which
+// projects use each one. The underlying media_files row stays global and
+// deduped by file hash.
 app.get("/library", async (c) => {
   const user = c.get('user');
   try {
-    // Pull every project_assets row for the user joined with media_files and
-    // owning project title. We do client-side grouping by mediaFileId — each
-    // user has bounded asset count so this is fine.
     const rows = await db
       .select({
-        // project_assets fields (per-use)
+        userMediaFileId: userMediaFiles.id,
+        filename: userMediaFiles.filename,
+        userMediaCreatedAt: userMediaFiles.createdAt,
+        // project_assets fields (per-project use)
         projectAssetId: projectAssets.id,
         projectId: projectAssets.projectId,
         projectTitle: projects.title,
-        filename: projectAssets.filename,
-        paCreatedAt: projectAssets.createdAt,
         // media_files fields (canonical, per-content)
         mediaFileId: mediaFiles.id,
         fileHash: mediaFiles.fileHash,
@@ -204,11 +223,12 @@ app.get("/library", async (c) => {
         backupStatus: mediaFiles.backupStatus,
         createdAt: mediaFiles.createdAt,
       })
-      .from(projectAssets)
-      .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
-      .innerJoin(projects, eq(projects.id, projectAssets.projectId))
-      .where(eq(projectAssets.userId, user.id))
-      .orderBy(desc(mediaFiles.createdAt));
+      .from(userMediaFiles)
+      .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+      .leftJoin(projectAssets, and(eq(projectAssets.userMediaFileId, userMediaFiles.id), eq(projectAssets.userId, user.id)))
+      .leftJoin(projects, eq(projects.id, projectAssets.projectId))
+      .where(eq(userMediaFiles.userId, user.id))
+      .orderBy(desc(userMediaFiles.createdAt));
 
     // Each media_file may have multiple project_asset variants (one per project
     // it was imported into). Backup state lives on media_files (per-content,
@@ -219,6 +239,7 @@ app.get("/library", async (c) => {
       projectAssetId: string;
     };
     type MediaGroup = {
+      userMediaFileId: string;
       mediaFileId: string;
       filename: string;
       sha256: string;
@@ -240,9 +261,10 @@ app.get("/library", async (c) => {
 
     const grouped = new Map<string, MediaGroup>();
     for (const r of rows) {
-      let g = grouped.get(r.mediaFileId);
+      let g = grouped.get(r.userMediaFileId);
       if (!g) {
         g = {
+          userMediaFileId: r.userMediaFileId,
           mediaFileId: r.mediaFileId,
           filename: r.filename,
           sha256: r.fileHash,
@@ -258,14 +280,17 @@ app.get("/library", async (c) => {
           failureStage: r.failureStage ?? null,
           failureReason: r.failureReason ?? null,
           summary: r.summary ?? null,
-          createdAt: r.createdAt,
+          createdAt: r.userMediaCreatedAt,
           variants: [],
         };
-        grouped.set(r.mediaFileId, g);
+        grouped.set(r.userMediaFileId, g);
+      }
+      if (!r.projectAssetId || !r.projectId) {
+        continue;
       }
       g.variants.push({
         projectId: r.projectId,
-        projectTitle: r.projectTitle,
+        projectTitle: r.projectTitle ?? '未命名项目',
         projectAssetId: r.projectAssetId,
       });
     }
@@ -288,9 +313,10 @@ app.get("/", async (c) => {
     const rows = await db
       .select({
         id: projectAssets.id,
-        mediaFileId: projectAssets.mediaFileId,
+        userMediaFileId: userMediaFiles.id,
+        mediaFileId: userMediaFiles.mediaFileId,
         projectId: projectAssets.projectId,
-        filename: projectAssets.filename,
+        filename: userMediaFiles.filename,
         createdAt: projectAssets.createdAt,
         // from media_files (canonical per-content state)
         sha256: mediaFiles.fileHash,
@@ -308,7 +334,8 @@ app.get("/", async (c) => {
         backupStatus: mediaFiles.backupStatus,
       })
       .from(projectAssets)
-      .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+      .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+      .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
       .where(and(eq(projectAssets.projectId, projectId), eq(projectAssets.userId, user.id)))
       .orderBy(desc(projectAssets.createdAt));
 
@@ -334,7 +361,7 @@ app.post("/preflight", async (c) => {
   try {
     const body = await c.req.json();
     const parsed = z.object({
-      projectId: z.string().uuid(),
+      projectId: z.string().uuid().optional(),
       fileHash: sha256Schema,
       filename: z.string().min(1).max(255),
     }).safeParse(body);
@@ -342,7 +369,7 @@ app.post("/preflight", async (c) => {
       return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
     }
     const { projectId, fileHash } = parsed.data;
-    if (!(await ensureProjectOwned(projectId, user.id))) {
+    if (projectId && !(await ensureProjectOwned(projectId, user.id))) {
       return c.json({ error: 'Project not found' }, 404);
     }
 
@@ -356,9 +383,14 @@ app.post("/preflight", async (c) => {
       return c.json({ dedupHit: false });
     }
 
-    const alreadyOwned = await userOwnsMedia(user.id, existing.id);
+    const [owned] = await db
+      .select({ id: userMediaFiles.id })
+      .from(userMediaFiles)
+      .where(and(eq(userMediaFiles.userId, user.id), eq(userMediaFiles.mediaFileId, existing.id)))
+      .limit(1);
+
     return c.json({
-      dedupHit: alreadyOwned && isReusableExistingMedia(existing),
+      dedupHit: !!owned && isReusableExistingMedia(existing),
       mediaFileId: existing.id,
       status: existing.status,
       alreadyProcessed: existing.status === 'ready',
@@ -370,12 +402,13 @@ app.post("/preflight", async (c) => {
 });
 
 const attachSchema = z.object({
-  projectId: z.string().uuid(),
+  projectId: z.string().uuid().optional(),
   fileHash: sha256Schema,
   filename: z.string().min(1).max(255),
 });
 
-// POST /api/assets/attach — attach an existing ready/processing global media row to a project.
+// POST /api/assets/attach — attach an existing ready/processing global media row
+// to the user's library, and optionally to a project.
 app.post("/attach", async (c) => {
   const user = c.get('user');
   try {
@@ -383,7 +416,7 @@ app.post("/attach", async (c) => {
     const parsed = attachSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
     const { projectId, fileHash, filename } = parsed.data;
-    if (!(await ensureProjectOwned(projectId, user.id))) {
+    if (projectId && !(await ensureProjectOwned(projectId, user.id))) {
       return c.json({ error: 'Project not found' }, 404);
     }
 
@@ -392,11 +425,22 @@ app.post("/attach", async (c) => {
       .from(mediaFiles)
       .where(eq(mediaFiles.fileHash, fileHash))
       .limit(1);
-    if (!existing || !(await userOwnsMedia(user.id, existing.id)) || !isReusableExistingMedia(existing)) {
+    let owned: { id: string } | null = null;
+    if (existing) {
+      [owned] = await db
+        .select({ id: userMediaFiles.id })
+        .from(userMediaFiles)
+        .where(and(eq(userMediaFiles.userId, user.id), eq(userMediaFiles.mediaFileId, existing.id)))
+        .limit(1);
+    }
+    if (!existing || !owned || !isReusableExistingMedia(existing)) {
       return c.json({ error: 'No attachable media for hash' }, 404);
     }
-    const assetId = await createProjectAsset(projectId, user.id, existing.id, filename);
-    return c.json({ assetId, mediaFileId: existing.id, alreadyProcessed: existing.status === 'ready' });
+    const userMediaFileId = owned.id;
+    const assetId = projectId
+      ? await createProjectAsset(projectId, user.id, userMediaFileId, filename)
+      : null;
+    return c.json({ assetId, userMediaFileId, mediaFileId: existing.id, alreadyProcessed: existing.status === 'ready' });
   } catch (error) {
     console.error('❌ 资产 attach 失败:', error);
     return c.json({ error: 'Database Error' }, 500);
@@ -445,7 +489,7 @@ app.post('/import-token', async (c) => {
 });
 
 const finalizeSchema = z.object({
-  projectId: z.string().uuid(),
+  projectId: z.string().uuid().optional(),
   fileHash: sha256Schema,
   filename: z.string().min(1).max(255),
   fileSize: z.number().int().nonnegative(),
@@ -460,7 +504,7 @@ app.post('/finalize', async (c) => {
   const parsed = finalizeSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: 'Invalid request', issues: parsed.error.issues }, 400);
   const input = parsed.data;
-  if (!(await ensureProjectOwned(input.projectId, user.id))) {
+  if (input.projectId && !(await ensureProjectOwned(input.projectId, user.id))) {
     return c.json({ error: 'Project not found' }, 404);
   }
   const token = verifyImportFinalizeToken(input.finalizeToken);
@@ -473,10 +517,12 @@ app.post('/finalize', async (c) => {
     const result = await withFileHashLock(input.fileHash, async () => {
       const [existing] = await db.select().from(mediaFiles).where(eq(mediaFiles.fileHash, input.fileHash)).limit(1);
       if (existing && isReusableExistingMedia(existing)) {
-        const alreadyOwned = await userOwnsMedia(user.id, existing.id);
-        const assetId = await createProjectAsset(input.projectId, user.id, existing.id, input.filename);
+        const userMediaFileId = await createUserMediaFile(user.id, existing.id, input.filename);
+        const assetId = input.projectId
+          ? await createProjectAsset(input.projectId, user.id, userMediaFileId, input.filename)
+          : null;
         deleteAssets([token.thumbnailTempKey, token.audioTempKey]).catch((e) => console.error('[assets/finalize] temp cleanup failed:', e));
-        return { assetId, mediaFileId: existing.id, alreadyProcessed: existing.status === 'ready' };
+        return { assetId, userMediaFileId, mediaFileId: existing.id, alreadyProcessed: existing.status === 'ready' };
       }
 
       let mediaFileId = existing?.id ?? crypto.randomUUID();
@@ -511,10 +557,12 @@ app.post('/finalize', async (c) => {
           const [winner] = await db.select().from(mediaFiles).where(eq(mediaFiles.fileHash, input.fileHash)).limit(1);
           if (!winner) throw e;
           if (isReusableExistingMedia(winner)) {
-            const alreadyOwned = await userOwnsMedia(user.id, winner.id);
-            const assetId = await createProjectAsset(input.projectId, user.id, winner.id, input.filename);
+            const userMediaFileId = await createUserMediaFile(user.id, winner.id, input.filename);
+            const assetId = input.projectId
+              ? await createProjectAsset(input.projectId, user.id, userMediaFileId, input.filename)
+              : null;
             deleteAssets([token.thumbnailTempKey, token.audioTempKey]).catch((err) => console.error('[assets/finalize] temp cleanup failed:', err));
-            return { assetId, mediaFileId: winner.id, alreadyProcessed: winner.status === 'ready' };
+            return { assetId, userMediaFileId, mediaFileId: winner.id, alreadyProcessed: winner.status === 'ready' };
           }
           mediaFileId = winner.id;
           await db.update(mediaFiles).set({
@@ -533,7 +581,10 @@ app.post('/finalize', async (c) => {
         }
       }
 
-      const assetId = await createProjectAsset(input.projectId, user.id, mediaFileId, input.filename);
+      const userMediaFileId = await createUserMediaFile(user.id, mediaFileId, input.filename);
+      const assetId = input.projectId
+        ? await createProjectAsset(input.projectId, user.id, userMediaFileId, input.filename)
+        : null;
       const thumbnailOssKey = `assets/${mediaFileId}/thumb.jpg`;
       const audioOssKey = `assets/${mediaFileId}/audio.aac`;
 
@@ -566,7 +617,7 @@ app.post('/finalize', async (c) => {
         deleteAssets([token.thumbnailTempKey, token.audioTempKey]).catch((e) => console.error('[assets/finalize] temp cleanup failed:', e));
       }
 
-      return { assetId, mediaFileId, alreadyProcessed: false };
+      return { assetId, userMediaFileId, mediaFileId, alreadyProcessed: false };
     });
 
     return c.json(result);
@@ -585,19 +636,85 @@ app.post('/', async (c) => {
 // (apps/desktop/src-tauri/src/local_db.rs); the desktop calls
 // `local_assets_relink` directly via Tauri IPC.
 
-// DELETE /api/assets/:id — delete project_asset; clean up global media_file only when no refs remain
+// DELETE /api/assets/library/:id — delete a user-library material. It is blocked
+// while any project still references it. If this was the last user-library ref,
+// clean up the global media_files row as well.
+app.delete('/library/:id', async (c) => {
+  const user = c.get('user');
+  try {
+    const id = c.req.param('id');
+    const result = await db.transaction(async (tx) => {
+      const [umf] = await tx
+        .select({
+          mediaFileId: userMediaFiles.mediaFileId,
+          audioOssKey: mediaFiles.audioOssKey,
+          thumbnailOssKey: mediaFiles.thumbnailOssKey,
+          videoOssKey: mediaFiles.videoOssKey,
+        })
+        .from(userMediaFiles)
+        .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+        .where(and(eq(userMediaFiles.id, id), eq(userMediaFiles.userId, user.id)))
+        .limit(1);
+      if (!umf) return { found: false as const };
+
+      const [projectRef] = await tx
+        .select({ id: projectAssets.id })
+        .from(projectAssets)
+        .where(eq(projectAssets.userMediaFileId, id))
+        .limit(1);
+      if (projectRef) {
+        return { found: true as const, blocked: true as const };
+      }
+
+      await tx.delete(userMediaFiles).where(and(eq(userMediaFiles.id, id), eq(userMediaFiles.userId, user.id)));
+
+      const [remainingUserRef] = await tx
+        .select({ id: userMediaFiles.id })
+        .from(userMediaFiles)
+        .where(eq(userMediaFiles.mediaFileId, umf.mediaFileId))
+        .limit(1);
+      if (!remainingUserRef) {
+        await tx.delete(mediaFiles).where(eq(mediaFiles.id, umf.mediaFileId));
+        return {
+          found: true as const,
+          blocked: false as const,
+          deletedMediaFileId: umf.mediaFileId,
+          deletedOssKeys: [umf.audioOssKey, umf.thumbnailOssKey, umf.videoOssKey],
+        };
+      }
+      return { found: true as const, blocked: false as const, deletedMediaFileId: null, deletedOssKeys: [] };
+    });
+
+    if (!result.found) {
+      return c.json({ error: 'Asset not found' }, 404);
+    }
+    if (result.blocked) {
+      return c.json({ error: 'Asset is still used by projects' }, 409);
+    }
+    if (result.deletedMediaFileId) {
+      deleteAssets(result.deletedOssKeys).catch(e =>
+        console.error(`❌ [OSS] 清理 ${result.deletedMediaFileId} 底层对象失败:`, e));
+      deleteVectorsByAssetId(result.deletedMediaFileId).catch(e =>
+        console.error(`❌ [Qdrant] 清理 ${result.deletedMediaFileId} chunks 向量失败:`, e));
+      deleteVectorsByAssetId(result.deletedMediaFileId, QDRANT_SUMMARY_COLLECTION).catch(e =>
+        console.error(`❌ [Qdrant] 清理 ${result.deletedMediaFileId} summary 向量失败:`, e));
+    }
+    return c.json({ success: true, deletedMedia: !!result.deletedMediaFileId });
+  } catch (error) {
+    console.error('❌ 删除素材库资产失败:', error);
+    return c.json({ error: 'Database Delete Error' }, 500);
+  }
+});
+
+// DELETE /api/assets/:id — delete only the project_asset reference. The user's
+// library material and global media_file are intentionally retained.
 app.delete("/:id", async (c) => {
   const user = c.get('user');
   try {
     const id = c.req.param("id");
-
-    // MySQL state changes (project_assets row, possibly media_files row) run in
-    // one transaction so we never end up with project_assets gone but media_files
-    // dangling. Qdrant cleanup is fire-and-forget after commit — cross-system
-    // atomicity isn't possible; cron sweeps OSS orphans and is the safety net.
     const result = await db.transaction(async (tx) => {
       const [pa] = await tx
-        .select({ mediaFileId: projectAssets.mediaFileId })
+        .select({ id: projectAssets.id, projectId: projectAssets.projectId })
         .from(projectAssets)
         .where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)))
         .limit(1);
@@ -605,31 +722,26 @@ app.delete("/:id", async (c) => {
       if (!pa) return { found: false as const };
 
       await tx.delete(projectAssets).where(and(eq(projectAssets.id, id), eq(projectAssets.userId, user.id)));
-
-      const remaining = await tx
-        .select({ id: projectAssets.id })
-        .from(projectAssets)
-        .where(eq(projectAssets.mediaFileId, pa.mediaFileId))
+      const [project] = await tx
+        .select({ selectedAssetIds: projects.selectedAssetIds, retrievedAssetIds: projects.retrievedAssetIds })
+        .from(projects)
+        .where(and(eq(projects.id, pa.projectId), eq(projects.userId, user.id)))
         .limit(1);
-
-      const isLastReference = remaining.length === 0;
-      if (isLastReference) {
-        await tx.delete(mediaFiles).where(eq(mediaFiles.id, pa.mediaFileId));
+      if (project) {
+        const selectedAssetIds = Array.isArray(project.selectedAssetIds)
+          ? project.selectedAssetIds.filter((assetId) => assetId !== id)
+          : [];
+        const retrievedAssetIds = Array.isArray(project.retrievedAssetIds)
+          ? project.retrievedAssetIds.filter((assetId) => assetId !== id)
+          : [];
+        await tx.update(projects).set({ selectedAssetIds, retrievedAssetIds }).where(eq(projects.id, pa.projectId));
       }
-      return { found: true as const, mediaFileId: pa.mediaFileId, isLastReference };
+      return { found: true as const };
     });
 
     if (!result.found) {
       return c.json({ error: 'Asset not found' }, 404);
     }
-
-    if (result.isLastReference) {
-      deleteVectorsByAssetId(result.mediaFileId).catch(e =>
-        console.error(`❌ [Qdrant] 清理 ${result.mediaFileId} chunks 向量失败:`, e));
-      deleteVectorsByAssetId(result.mediaFileId, QDRANT_SUMMARY_COLLECTION).catch(e =>
-        console.error(`❌ [Qdrant] 清理 ${result.mediaFileId} summary 向量失败:`, e));
-    }
-
     return c.json({ success: true });
   } catch (error) {
     console.error('❌ 删除资产失败:', error);
@@ -655,9 +767,9 @@ app.post('/:mediaFileId/backup-status', async (c) => {
 
   const [owned] = await db
     .select({ backupStatus: mediaFiles.backupStatus })
-    .from(projectAssets)
-    .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
-    .where(and(eq(projectAssets.mediaFileId, mediaFileId), eq(projectAssets.userId, user.id)))
+    .from(userMediaFiles)
+    .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+    .where(and(eq(userMediaFiles.mediaFileId, mediaFileId), eq(userMediaFiles.userId, user.id)))
     .limit(1);
   if (!owned) return c.json({ error: 'Not found' }, 404);
   if (owned.backupStatus === 'backed_up') {
@@ -684,9 +796,9 @@ app.post('/:mediaFileId/unbackup', async (c) => {
   const user = c.get('user');
   const mediaFileId = c.req.param('mediaFileId');
   const [owned] = await db
-    .select({ mediaFileId: projectAssets.mediaFileId })
-    .from(projectAssets)
-    .where(and(eq(projectAssets.mediaFileId, mediaFileId), eq(projectAssets.userId, user.id)))
+    .select({ mediaFileId: userMediaFiles.mediaFileId })
+    .from(userMediaFiles)
+    .where(and(eq(userMediaFiles.mediaFileId, mediaFileId), eq(userMediaFiles.userId, user.id)))
     .limit(1);
 
   if (!owned) {

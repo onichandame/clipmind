@@ -69,7 +69,25 @@ export const mediaFiles = mysqlTable('media_files', {
   asrTaskUnique: uniqueIndex('idx_media_files_asr_task_id_unique').on(t.asrTaskId),
 }));
 
-// 项目层：每个项目有独立的资产列表，多个项目可指向同一 media_file。
+// 用户层：某个用户素材库中拥有某个全局 media_file。删除素材库条目只删除这一层；
+// 当全局 media_file 不再被任何 user_media_files 引用时，才允许清理底层处理单元。
+export const userMediaFiles = mysqlTable('user_media_files', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  userId: varchar('user_id', { length: 36 })
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  mediaFileId: varchar('media_file_id', { length: 36 })
+    .notNull()
+    .references(() => mediaFiles.id, { onDelete: 'restrict' }),
+  filename: varchar('filename', { length: 255 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  userIdx: index('idx_user_media_files_user').on(t.userId),
+  mediaFileIdx: index('idx_user_media_files_media_file').on(t.mediaFileId),
+  userMediaUnique: uniqueIndex('idx_user_media_files_user_media_unique').on(t.userId, t.mediaFileId),
+}));
+
+// 项目层：每个项目有独立的资产列表，多个项目可指向同一 user_media_file。
 export const projectAssets = mysqlTable('project_assets', {
   id: varchar('id', { length: 36 }).primaryKey(),
   projectId: varchar('project_id', { length: 36 })
@@ -78,9 +96,9 @@ export const projectAssets = mysqlTable('project_assets', {
   userId: varchar('user_id', { length: 36 })
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
-  mediaFileId: varchar('media_file_id', { length: 36 })
+  userMediaFileId: varchar('user_media_file_id', { length: 36 })
     .notNull()
-    .references(() => mediaFiles.id, { onDelete: 'restrict' }),
+    .references(() => userMediaFiles.id, { onDelete: 'restrict' }),
   filename: varchar('filename', { length: 255 }).notNull(),
   // 注意：localPath / originDeviceId 已迁移至桌面端 SQLite (apps/desktop/src-tauri/src/local_db.rs)。
   // 视频备份 (videoOssKey / backupStatus) 已上提至 media_files —— per-content 一份，跨项目共享。
@@ -88,7 +106,7 @@ export const projectAssets = mysqlTable('project_assets', {
 }, (t) => ({
   projectIdx: index('idx_project_assets_project').on(t.projectId),
   userIdx: index('idx_project_assets_user').on(t.userId),
-  mediaFileIdx: index('idx_project_assets_media_file').on(t.mediaFileId),
+  userMediaFileIdx: index('idx_project_assets_user_media_file').on(t.userMediaFileId),
 }));
 
 // ASR 切片记录，归属底层 media_file（与项目无关）

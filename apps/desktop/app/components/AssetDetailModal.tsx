@@ -111,7 +111,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
       // HMAC oss-callback or to failed by Rust on error). Refetch instead of
       // optimistically setting local state.
       queryClient.invalidateQueries({ queryKey: ['library'] });
-      queryClient.invalidateQueries({ queryKey: ['assets'], exact: false });
+      queryClient.invalidateQueries({ queryKey: ['assets-library'], exact: false });
     }
   };
 

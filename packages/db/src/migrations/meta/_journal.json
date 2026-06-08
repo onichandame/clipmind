@@ -71,6 +71,13 @@
       "when": 1780617600000,
       "tag": "0009_global_media_import",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1780704000000,
+      "tag": "0010_user_media_files",
+      "breakpoints": true
     }
   ]
 }

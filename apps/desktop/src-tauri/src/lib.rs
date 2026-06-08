@@ -359,15 +359,17 @@ impl ProcessingManager {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AssetFinalizeResponse {
-    asset_id: String,       // project_assets.id
-    media_file_id: String,  // media_files.id
+    asset_id: Option<String>,      // project_assets.id when attached to a project
+    user_media_file_id: String,    // user_media_files.id
+    media_file_id: String,         // media_files.id
     already_processed: bool,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AttachPayload<'a> {
-    project_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<&'a str>,
     file_hash: &'a str,
     filename: &'a str,
 }
@@ -375,7 +377,8 @@ struct AttachPayload<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreflightPayload<'a> {
-    project_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<&'a str>,
     file_hash: &'a str,
     filename: &'a str,
 }
@@ -414,7 +417,8 @@ struct ImportTokenResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FinalizePayload<'a> {
-    project_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<&'a str>,
     file_hash: &'a str,
     filename: &'a str,
     file_size: u64,
@@ -813,7 +817,7 @@ async fn process_video_asset(
     job_id: String,
     filename: String,
     local_path: String,
-    project_id: String,
+    project_id: Option<String>,
     server_url: String,
     session_token: String,
 ) -> Result<String, String> {
@@ -828,6 +832,7 @@ async fn process_video_asset(
         .await
         .map_err(|e| format!("{} 读取源文件大小失败: {}", env_tag(), e))?
         .len();
+    let project_id_ref = project_id.as_deref();
 
     // Step 0.5: Preflight — short-circuit FFmpeg if the same hash already exists
     // for this user. On hit, the server creates the project_assets row and we
@@ -835,7 +840,7 @@ async fn process_video_asset(
     {
         let preflight_client = Client::new();
         let preflight_payload = PreflightPayload {
-            project_id: &project_id,
+            project_id: project_id_ref,
             file_hash: &file_hash,
             filename: &filename,
         };
@@ -864,7 +869,7 @@ async fn process_video_asset(
             let media_file_id = preflight_resp.media_file_id.ok_or_else(||
                 format!("{} preflight 命中但缺少 mediaFileId", env_tag()))?;
             let attach_payload = AttachPayload {
-                project_id: &project_id,
+                project_id: project_id_ref,
                 file_hash: &file_hash,
                 filename: &filename,
             };
@@ -906,8 +911,10 @@ async fn process_video_asset(
                 "upload-progress",
                 serde_json::json!({ "id": &job_id, "progress": 100 }),
             );
-            println!("[Job {}] preflight 命中，跳过 FFmpeg 与上传。asset_id={}, media_file_id={}", job_id, attach_resp.asset_id, media_file_id);
-            return Ok(attach_resp.asset_id);
+            let fallback_id = attach_resp.user_media_file_id.clone();
+            let returned_id = attach_resp.asset_id.unwrap_or(fallback_id);
+            println!("[Job {}] preflight 命中，跳过 FFmpeg 与上传。returned_id={}, media_file_id={}", job_id, returned_id, media_file_id);
+            return Ok(returned_id);
         }
     }
 
@@ -1138,7 +1145,7 @@ async fn process_video_asset(
     }
 
     let finalize_payload = FinalizePayload {
-        project_id: &project_id,
+        project_id: project_id_ref,
         file_hash: &file_hash,
         filename: &filename,
         file_size: file_size_bytes,
@@ -1190,8 +1197,10 @@ async fn process_video_asset(
     );
     let _ = fs::remove_file(&temp_audio);
     let _ = fs::remove_file(&temp_thumb);
-    println!("[Job {}] 导入 finalize 完成。asset_id={}, media_file_id={}, already_processed={}", job_id, finalize_resp.asset_id, finalize_resp.media_file_id, finalize_resp.already_processed);
-    Ok(finalize_resp.asset_id)
+    let fallback_id = finalize_resp.user_media_file_id.clone();
+    let returned_id = finalize_resp.asset_id.unwrap_or(fallback_id);
+    println!("[Job {}] 导入 finalize 完成。returned_id={}, media_file_id={}, already_processed={}", job_id, returned_id, finalize_resp.media_file_id, finalize_resp.already_processed);
+    Ok(returned_id)
 }
 
 // ===================================================================

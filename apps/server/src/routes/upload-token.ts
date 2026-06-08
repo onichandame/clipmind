@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq, and, ne } from 'drizzle-orm';
 import { db } from '../db';
-import { mediaFiles, projectAssets } from '@clipmind/db/schema';
+import { mediaFiles, userMediaFiles } from '@clipmind/db/schema';
 import { headAsset, signUploadUrl } from '../utils/oss';
 import { signWebhookPayload, newNonce } from '../utils/auth';
 import { requireAuth } from '../middleware/auth';
@@ -52,7 +52,7 @@ app.post('/', async (c) => {
     return c.json({ error: 'Legacy import upload-token path is closed; use /api/assets/import-token' }, 410);
   }
 
-  // media_files is global; user ownership is proven by at least one project_assets ref.
+  // media_files is global; user ownership is proven by user_media_files.
   const [owned] = await db
     .select({
       id: mediaFiles.id,
@@ -60,9 +60,9 @@ app.post('/', async (c) => {
       videoOssKey: mediaFiles.videoOssKey,
       backupStatus: mediaFiles.backupStatus,
     })
-    .from(projectAssets)
-    .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
-    .where(and(eq(projectAssets.mediaFileId, assetId), eq(projectAssets.userId, user.id)))
+    .from(userMediaFiles)
+    .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+    .where(and(eq(userMediaFiles.mediaFileId, assetId), eq(userMediaFiles.userId, user.id)))
     .limit(1);
   if (!owned) {
     return c.json({ error: 'Asset not found' }, 404);

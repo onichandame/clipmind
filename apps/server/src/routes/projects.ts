@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { db } from '../db';
-import { projects, projectOutlines, editingPlans, mediaFiles, projectAssets, hotspots } from '@clipmind/db/schema';
+import { projects, projectOutlines, editingPlans, mediaFiles, projectAssets, hotspots, userMediaFiles } from '@clipmind/db/schema';
 import { desc, eq, inArray, and, sql } from 'drizzle-orm';
 import { signAssetViewUrl, signAssetDownloadUrl } from '../utils/oss';
 import { INITIAL_GREETING, MATERIAL_MODE_FOLLOWUP, IDEA_MODE_FOLLOWUP } from '../utils/workflow-copy';
@@ -298,15 +298,16 @@ app.get('/:id', async (c) => {
           try {
             const [paRecord] = await db
               .select({
-                filename: projectAssets.filename,
-                mediaFileId: projectAssets.mediaFileId,
+                filename: userMediaFiles.filename,
+                mediaFileId: userMediaFiles.mediaFileId,
                 videoOssKey: mediaFiles.videoOssKey,
                 backupStatus: mediaFiles.backupStatus,
                 sha256: mediaFiles.fileHash,
                 thumbnailOssKey: mediaFiles.thumbnailOssKey,
               })
               .from(projectAssets)
-              .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+              .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+              .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
               .where(and(eq(projectAssets.id, clip.assetId), eq(projectAssets.userId, user.id)));
 
             if (paRecord) {
@@ -340,15 +341,16 @@ app.get('/:id', async (c) => {
         const paRows = await db
           .select({
             id: projectAssets.id,
-            filename: projectAssets.filename,
-            mediaFileId: projectAssets.mediaFileId,
+            filename: userMediaFiles.filename,
+            mediaFileId: userMediaFiles.mediaFileId,
             videoOssKey: mediaFiles.videoOssKey,
             backupStatus: mediaFiles.backupStatus,
             sha256: mediaFiles.fileHash,
             thumbnailOssKey: mediaFiles.thumbnailOssKey,
           })
           .from(projectAssets)
-          .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
+          .innerJoin(userMediaFiles, eq(userMediaFiles.id, projectAssets.userMediaFileId))
+          .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
           .where(and(inArray(projectAssets.id, assetIds), eq(projectAssets.userId, user.id)));
 
         const assetMap = new Map(paRows.map((a: any) => [a.id, a]));

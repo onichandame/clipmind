@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { mediaFiles, projectAssets, webhookNonces } from "@clipmind/db";
+import { mediaFiles, userMediaFiles, webhookNonces } from "@clipmind/db";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db";
 import { verifyWebhookPayload } from "../utils/auth";
@@ -55,10 +55,10 @@ app.post("/", async (c) => {
 
     if (kind === 'video-backup') {
       const [owned] = await db
-        .select({ mediaFileId: projectAssets.mediaFileId, fileHash: mediaFiles.fileHash })
-        .from(projectAssets)
-        .innerJoin(mediaFiles, eq(mediaFiles.id, projectAssets.mediaFileId))
-        .where(and(eq(projectAssets.mediaFileId, assetId), eq(projectAssets.userId, userId)))
+        .select({ mediaFileId: userMediaFiles.mediaFileId, fileHash: mediaFiles.fileHash })
+        .from(userMediaFiles)
+        .innerJoin(mediaFiles, eq(mediaFiles.id, userMediaFiles.mediaFileId))
+        .where(and(eq(userMediaFiles.mediaFileId, assetId), eq(userMediaFiles.userId, userId)))
         .limit(1);
       if (!owned) return c.json({ error: 'Asset not found' }, 404);
 

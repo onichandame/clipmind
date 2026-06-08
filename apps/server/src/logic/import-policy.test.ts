@@ -12,7 +12,7 @@ test('owned ready or processing media can attach without upload', () => {
   assert.equal(canAttachWithoutUpload('processing', true), true);
 });
 
-test('unowned media cannot attach from preflight without temp artifact proof', () => {
+test('unowned reusable media requires temp artifact proof before user-library attach', () => {
   assert.equal(canAttachWithoutUpload('ready', false), false);
   assert.equal(canAttachWithoutUpload('processing', false), false);
   assert.equal(requiresTempArtifactProof('ready', false), true);

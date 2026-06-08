@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
-import { Library, Film, Layers, Activity, CheckCircle2, AlertCircle, Cloud } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Library, Film, Layers, Activity, CheckCircle2, AlertCircle, Cloud, UploadCloud, Trash2, Loader2 } from 'lucide-react';
 import { env } from '../env';
 import { authFetch } from '../lib/auth';
 import { AssetDetailModal } from '../components/AssetDetailModal';
 import { useLocalAssets } from '../lib/asset-uri';
+import { selectAndImportLibraryAssets } from '../lib/asset-import';
 import { getAnalysisStage, type Asset } from '../lib/asset-types';
+import { useCanvasStore } from '../store/useCanvasStore';
 
 interface LibraryVariant {
   projectId: string;
@@ -15,6 +17,7 @@ interface LibraryVariant {
 }
 
 interface LibraryItem {
+  userMediaFileId: string;
   mediaFileId: string;
   filename: string;
   sha256: string;
@@ -53,19 +56,9 @@ function formatSize(bytes: number): string {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-// Backup state and cloud URL are now per-content (on the LibraryItem), so we just
-// need a project_assets variant for the modal's "id" field. Pick the first one.
-function pickVariant(item: LibraryItem): LibraryVariant {
-  if (item.variants.length === 0) {
-    throw new Error('Library item with zero variants — server should never emit this');
-  }
-  return item.variants[0];
-}
-
 function libraryItemToAsset(item: LibraryItem): Asset {
-  const variant = pickVariant(item);
   return {
-    id: variant.projectAssetId,
+    id: item.variants[0]?.projectAssetId ?? item.userMediaFileId,
     mediaFileId: item.mediaFileId,
     filename: item.filename,
     sha256: item.sha256,
@@ -87,6 +80,7 @@ function libraryItemToAsset(item: LibraryItem): Asset {
 
 export default function LibraryPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   // Track the open modal by mediaFileId rather than holding a snapshot of the
   // LibraryItem. After backup/unbackup invalidates ['library'], the refetched
   // items array is fresh; deriving `selected` from items + id ensures the
@@ -113,6 +107,29 @@ export default function LibraryPage() {
   // local copy on this device. Card-level rendering uses this map to flag
   // local availability without per-card IPC chatter.
   const { data: localMap } = useLocalAssets(hashes);
+  const importingCount = useCanvasStore((s) =>
+    s.uploadJobs.filter((j) => j.status === 'queued' || j.status === 'compressing' || j.status === 'uploading').length,
+  );
+
+  const deleteLibraryItem = useMutation({
+    mutationFn: async (item: LibraryItem) => {
+      if (item.variants.length > 0) {
+        throw new Error('素材仍有关联项目，不能删除');
+      }
+      const res = await authFetch(`${env.VITE_API_BASE_URL}/api/assets/library/${item.userMediaFileId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? 'Failed to delete library asset');
+      }
+    },
+    onSuccess: (_data, item) => {
+      if (selectedId === item.mediaFileId) setSelectedId(null);
+      queryClient.invalidateQueries({ queryKey: ['library'] });
+    },
+    onError: (error) => {
+      alert(error instanceof Error ? error.message : '删除失败，请稍后重试');
+    },
+  });
 
   return (
     <div
@@ -121,7 +138,8 @@ export default function LibraryPage() {
     >
       <div className="max-w-6xl mx-auto px-6 py-10">
         {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
+        <div className="flex items-center justify-between gap-4 mb-8">
+          <div className="flex items-center gap-4 min-w-0">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center shadow-md shadow-indigo-500/20 flex-shrink-0">
             <Library className="w-7 h-7 text-white" />
           </div>
@@ -133,6 +151,15 @@ export default function LibraryPage() {
               你导入过的所有底层素材，按文件去重；点击查看预览与所属项目。
             </p>
           </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => selectAndImportLibraryAssets()}
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white px-4 py-2 text-sm font-semibold shadow-sm shadow-indigo-500/20 transition-colors cursor-pointer flex-shrink-0"
+          >
+            {importingCount > 0 ? <Loader2 className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+            {importingCount > 0 ? `导入中 ${importingCount}` : '上传素材'}
+          </button>
         </div>
 
         {isLoading && (
@@ -146,8 +173,16 @@ export default function LibraryPage() {
             <Film className="w-10 h-10 mx-auto text-zinc-300 dark:text-zinc-700 mb-3" />
             <div className="text-sm text-zinc-600 dark:text-zinc-300 mb-1">还没有任何素材</div>
             <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              在项目中导入视频后，会自动出现在这里。
+              上传视频后，会自动出现在这里；也可以在项目中导入并使用。
             </div>
+            <button
+              type="button"
+              onClick={() => selectAndImportLibraryAssets()}
+              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white px-4 py-2 text-sm font-semibold transition-colors cursor-pointer"
+            >
+              <UploadCloud className="w-4 h-4" />
+              上传素材
+            </button>
           </div>
         )}
 
@@ -160,6 +195,11 @@ export default function LibraryPage() {
                 hasLocal={!!localMap?.[item.sha256]}
                 onOpen={() => setSelectedId(item.mediaFileId)}
                 onProjectClick={(projectId) => navigate(`/projects/${projectId}`)}
+                onDelete={() => {
+                  if (!confirm(`确认从素材库删除「${item.filename}」？此操作不可撤销。`)) return;
+                  deleteLibraryItem.mutate(item);
+                }}
+                isDeleting={deleteLibraryItem.isPending && deleteLibraryItem.variables?.userMediaFileId === item.userMediaFileId}
               />
             ))}
           </div>
@@ -181,11 +221,15 @@ function LibraryCard({
   hasLocal,
   onOpen,
   onProjectClick,
+  onDelete,
+  isDeleting,
 }: {
   item: LibraryItem;
   hasLocal: boolean;
   onOpen: () => void;
   onProjectClick: (projectId: string) => void;
+  onDelete: () => void;
+  isDeleting: boolean;
 }) {
   const stage = getAnalysisStage({
     status: item.status,
@@ -226,6 +270,20 @@ function LibraryCard({
         <div className="absolute top-2 left-2">
           <StageBadge stage={stage} />
         </div>
+        {item.variants.length === 0 && (
+          <button
+            type="button"
+            disabled={isDeleting}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/50 hover:bg-rose-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed z-10"
+            title="从素材库删除"
+          >
+            {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+          </button>
+        )}
       </div>
 
       {/* Body */}

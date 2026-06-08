@@ -1,7 +1,7 @@
 // Shared asset type definitions used across AssetPickerWidget, AssetDetailModal, and asset-uri.
 
 export interface Asset {
-  id: string;               // project_assets.id
+  id: string;               // project_assets.id; library-only previews may use user_media_files.id
   mediaFileId: string;      // media_files.id; local identity is sha256
   filename: string;
   sha256: string;           // mirror of media_files.fileHash; used for strict relink verification

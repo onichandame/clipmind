@@ -73,6 +73,7 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['assets-library'] });
+      queryClient.invalidateQueries({ queryKey: ['library'] });
       queryClient.invalidateQueries({ queryKey: ['project', projectId] });
     },
   });
@@ -205,7 +206,7 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
                       type="button"
                       onClick={(e) => { e.stopPropagation(); deleteAsset.mutate(asset.id); }}
                       className="absolute top-1 left-1 w-5 h-5 rounded-full bg-black/50 hover:bg-rose-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                      title="删除素材"
+                      title="从项目移除"
                     >
                       <Trash2 className="w-2.5 h-2.5" />
                     </button>
