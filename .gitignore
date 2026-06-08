@@ -6,7 +6,6 @@ build
 .sisyphus/
 plan/
 *.docx
-AGENTS.md
 .architect/
 apps/desktop/src-tauri/bin/ffmpeg-*
 apps/desktop/src-tauri/ffmpeg-*
