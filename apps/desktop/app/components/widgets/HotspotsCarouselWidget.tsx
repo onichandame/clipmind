@@ -67,7 +67,7 @@ export function HotspotsCarouselWidget({ part, onSubmit, answer }: WidgetProps) 
             <TrendingUp className="w-8 h-8 text-zinc-300 dark:text-zinc-700" />
             <div className="text-sm font-medium text-zinc-600 dark:text-zinc-400">热点采集中</div>
             <div className="text-xs text-zinc-400 dark:text-zinc-500 max-w-xs">
-              留学行业热点每天 5 点更新；如果是首次启动服务，几分钟后再来看看。
+              留学行业热点每天 5 点更新；首次打开时，可能需要几分钟出现。
             </div>
           </div>
         ) : (

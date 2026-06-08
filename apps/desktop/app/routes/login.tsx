@@ -16,8 +16,8 @@ export default function LoginPage() {
     try {
       await login(email, password);
       navigate('/', { replace: true });
-    } catch (err: any) {
-      setError(err?.message || 'Login failed');
+    } catch {
+      setError('登录失败，请检查邮箱和密码。');
     } finally {
       setSubmitting(false);
     }

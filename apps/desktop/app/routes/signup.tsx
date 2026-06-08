@@ -25,8 +25,8 @@ export default function SignupPage() {
     try {
       await signup(email, password);
       navigate('/', { replace: true });
-    } catch (err: any) {
-      setError(err?.message || 'Signup failed');
+    } catch {
+      setError('注册失败，请稍后再试。');
     } finally {
       setSubmitting(false);
     }

@@ -69,7 +69,7 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
   const deleteAsset = useMutation({
     mutationFn: async (assetId: string) => {
       const res = await authFetch(`${env.VITE_API_BASE_URL}/api/assets/${assetId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete asset');
+      if (!res.ok) throw new Error('移除失败，请稍后重试。');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['assets-library'] });
@@ -97,7 +97,7 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
         </div>
         <div className="flex items-center gap-3">
           {analyzingCount > 0 && (
-            <div className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1.5" title="AI 内容分析（ASR + 摘要）尚未完成的素材，完成前不可被检索">
+            <div className="text-[11px] text-amber-600 dark:text-amber-400 flex items-center gap-1.5" title="素材还在准备中，完成后即可使用。">
               <Activity className="w-3 h-3 animate-pulse" />
               AI 分析中 {analyzingCount} 个
             </div>
@@ -136,12 +136,12 @@ export function AssetPickerWidget({ projectId, onSubmit }: WidgetProps) {
               const tooltip = selectable
                 ? asset.filename
                 : stage === 'analyzing'
-                  ? `${asset.filename}\n\nAI 内容分析中，完成前无法被选入素材篮`
+                  ? `${asset.filename}\n\n素材还在准备中，完成后即可使用。`
                   : stage === 'uploading'
-                    ? `${asset.filename}\n\n素材处理中，完成前无法被选入素材篮`
-                    : stage === 'upload_failed'
-                      ? `${asset.filename}\n\n素材处理失败，可以重新导入同一文件重试`
-                      : `${asset.filename}\n\n内容分析失败，此素材不可用于检索`;
+                    ? `${asset.filename}\n\n素材还在导入中，完成后即可使用。`
+                  : stage === 'upload_failed'
+                    ? `${asset.filename}\n\n素材处理失败，可以重新导入同一文件重试`
+                    : `${asset.filename}\n\nAI 暂时无法使用此素材，请重新导入再试。`;
               return (
                 <div
                   key={asset.id}
@@ -242,7 +242,7 @@ function EmptyLibrary({ onImport }: { onImport: () => void }) {
         <UploadCloud className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
       </div>
       <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">素材库还是空的</div>
-      <div className="text-xs text-zinc-500 dark:text-zinc-400 max-w-xs">导入第一段视频，AI 就能开始为你检索、分析并生成剪辑方案。</div>
+      <div className="text-xs text-zinc-500 dark:text-zinc-400 max-w-xs">导入第一段视频，AI 就能开始帮你整理和创作。</div>
       <button
         type="button"
         onClick={onImport}

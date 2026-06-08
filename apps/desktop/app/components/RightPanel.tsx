@@ -7,6 +7,7 @@ import { Layers, ListChecks, Trash2, ChevronUp, ChevronDown } from "lucide-react
 import { env } from "../env";
 import { authFetch } from "../lib/auth";
 import { useCanvasStore } from "../store/useCanvasStore";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { EditingPlanCard } from "./EditingPlanCard";
 
 interface OutlineData { contentMd: string; version: number; }
@@ -137,13 +138,15 @@ function EmptyState({ title, hint }: { title: string; hint: string }) {
 
 function PlanTab({ projectId, plans }: { projectId: string; plans: any[] }) {
   const queryClient = useQueryClient();
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
 
   const deletePlan = useMutation({
     mutationFn: async (planId: string) => {
       const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}/plans/${planId}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete plan');
+      if (!res.ok) throw new Error('删除失败，请稍后重试。');
     },
     onSuccess: () => {
+      setDeleteTarget(null);
       queryClient.invalidateQueries({ queryKey: ['project', projectId] });
     },
   });
@@ -175,45 +178,54 @@ function PlanTab({ projectId, plans }: { projectId: string; plans: any[] }) {
   };
 
   return (
-    <div className="flex flex-col gap-8">
-      {plans.map((plan: any, idx: number) => (
-        <div key={plan.id || idx} className="flex flex-col gap-2">
-          <div className="flex items-center justify-end gap-1">
-            <button
-              type="button"
-              disabled={idx === 0 || reorderPlans.isPending}
-              onClick={() => move(idx, -1)}
-              className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
-              title="上移"
-            >
-              <ChevronUp className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              disabled={idx === plans.length - 1 || reorderPlans.isPending}
-              onClick={() => move(idx, 1)}
-              className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
-              title="下移"
-            >
-              <ChevronDown className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              disabled={deletePlan.isPending}
-              onClick={() => {
-                if (confirm(`确认删除剪辑方案【${plan.title || '未命名方案'}】？此操作不可撤销。`)) {
-                  deletePlan.mutate(plan.id);
-                }
-              }}
-              className="p-1.5 rounded-md text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 disabled:opacity-30 transition-colors cursor-pointer"
-              title="删除剪辑方案"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+    <>
+      <div className="flex flex-col gap-8">
+        {plans.map((plan: any, idx: number) => (
+          <div key={plan.id || idx} className="flex flex-col gap-2">
+            <div className="flex items-center justify-end gap-1">
+              <button
+                type="button"
+                disabled={idx === 0 || reorderPlans.isPending}
+                onClick={() => move(idx, -1)}
+                className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                title="上移"
+              >
+                <ChevronUp className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                disabled={idx === plans.length - 1 || reorderPlans.isPending}
+                onClick={() => move(idx, 1)}
+                className="p-1.5 rounded-md text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                title="下移"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                disabled={deletePlan.isPending}
+                onClick={() => setDeleteTarget(plan)}
+                className="p-1.5 rounded-md text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 disabled:opacity-30 transition-colors cursor-pointer"
+                title="删除剪辑方案"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+            <EditingPlanCard plan={plan} />
           </div>
-          <EditingPlanCard plan={plan} />
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+      {deleteTarget && (
+        <ConfirmDialog
+          title="确认删除剪辑方案？"
+          description={`将删除「${deleteTarget.title || '未命名方案'}」。此操作不可撤销。`}
+          confirmLabel="确认删除"
+          variant="danger"
+          isPending={deletePlan.isPending}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => deletePlan.mutate(deleteTarget.id)}
+        />
+      )}
+    </>
   );
 }

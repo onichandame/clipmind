@@ -104,7 +104,7 @@ const MessageBubble = memo(function MessageBubble({
               if (toolPart.output && toolPart.output.success === false) {
                 return (
                   <div key={index} className="mt-3 mb-1 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-lg">
-                    ⚠️ 方案解析失败: {toolPart.output.error || '未知错误'}
+                    ⚠️ 剪辑方案生成失败，请再试一次。
                   </div>
                 );
               }
@@ -134,13 +134,13 @@ const MessageBubble = memo(function MessageBubble({
             : isPlan ? "正在生成剪辑方案…"
             : isWebSearch ? "正在网络搜索…"
             : isFetchPage ? "正在读取网页…"
-            : "正在检索素材…";
+            : "正在查找素材…";
 
           const doneLabel = isOutline ? "大纲已同步"
             : isPlan ? "剪辑方案生成完毕"
             : isWebSearch ? "网络搜索完成"
             : isFetchPage ? "网页读取完成"
-            : "素材检索完成";
+            : "已找到相关素材";
 
           return (
             <div key={index} className="inline-flex items-center gap-2 text-indigo-500 dark:text-indigo-400 bg-indigo-500/5 px-3 py-1.5 rounded-full border border-indigo-500/20 mt-3 mr-2 text-xs font-medium">
@@ -553,7 +553,7 @@ function ProjectMenu({ projectId, pinned }: { projectId: string; pinned: boolean
       const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}`, {
         method: 'DELETE',
       });
-      if (!res.ok) throw new Error('Failed to delete');
+      if (!res.ok) throw new Error('删除失败，请稍后重试。');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -599,6 +599,7 @@ function ProjectMenu({ projectId, pinned }: { projectId: string; pinned: boolean
       )}
       {confirmDelete && (
         <DeleteConfirmModal
+          isPending={deleteMutation.isPending}
           onCancel={() => setConfirmDelete(false)}
           onConfirm={() => {
             setConfirmDelete(false);

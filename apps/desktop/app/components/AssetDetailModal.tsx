@@ -10,7 +10,7 @@ const BACKUP_LABEL: Record<string, { text: string; tone: string }> = {
   local_only: { text: '仅本地保存', tone: 'text-zinc-500 dark:text-zinc-400' },
   uploading: { text: '正在备份至云端…', tone: 'text-amber-500' },
   backed_up: { text: '已备份至云端', tone: 'text-emerald-600 dark:text-emerald-400' },
-  stale: { text: '本地有改动，云端备份已过期', tone: 'text-amber-600 dark:text-amber-400' },
+  stale: { text: '本机版本较新', tone: 'text-amber-600 dark:text-amber-400' },
   failed: { text: '上次备份失败', tone: 'text-rose-500' },
 };
 
@@ -120,7 +120,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
     if (downloadBusy) return;
     setDownloadError(null);
     if (!asset.videoOssUrl) {
-      setDownloadError('云端 URL 暂时不可用，请刷新后重试。');
+      setDownloadError('暂时无法下载，请刷新后重试。');
       return;
     }
     const user = getCachedUser();
@@ -146,7 +146,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
       console.error('[Download] failed:', msg);
       setDownloadError(
         msg.includes('hash_mismatch')
-          ? '下载内容与服务端校验不一致，已丢弃。'
+          ? '下载的文件与原片不一致，已取消保存。'
           : '下载失败，请稍后重试。',
       );
     } finally {
@@ -356,11 +356,11 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
               </p>
             ) : getAnalysisStage(asset) === 'analysis_failed' ? (
               <p className="text-sm text-rose-500 dark:text-rose-400">
-                ASR 转录失败，此素材无法被 AI 检索。可以删除后重新导入再试一次。
+                AI 暂时无法使用此素材。请删除后重新导入再试。
               </p>
             ) : getAnalysisStage(asset) === 'analyzing' ? (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                AI 正在转录与归纳此素材。完成前不会被 chat 检索到，通常需要几分钟。
+                AI 正在准备此素材，通常需要几分钟。完成后即可使用。
               </p>
             ) : (
               <p className="text-sm text-zinc-400 dark:text-zinc-500 italic">AI 总结尚未生成</p>
@@ -376,7 +376,7 @@ function AnalysisStageBadge({ stage }: { stage: ReturnType<typeof getAnalysisSta
   if (stage === 'analyzed') {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-        <CheckCircle2 className="w-3 h-3" /> 可被 AI 检索
+        <CheckCircle2 className="w-3 h-3" /> 可用
       </span>
     );
   }

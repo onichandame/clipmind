@@ -376,7 +376,7 @@ function ProjectRow({
       const res = await authFetch(`${env.VITE_API_BASE_URL}/api/projects/${project.id}`, {
         method: 'DELETE',
       });
-      if (!res.ok) throw new Error('Failed to delete');
+      if (!res.ok) throw new Error('删除失败，请稍后重试。');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -476,6 +476,7 @@ function ProjectRow({
       </div>
       {confirmingDelete && (
         <DeleteConfirmModal
+          isPending={deleteMutation.isPending}
           onCancel={() => setConfirmingDelete(false)}
           onConfirm={() => {
             setConfirmingDelete(false);

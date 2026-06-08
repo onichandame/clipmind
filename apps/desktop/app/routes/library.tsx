@@ -5,6 +5,7 @@ import { Library, Film, Layers, Activity, CheckCircle2, AlertCircle, Cloud, Uplo
 import { env } from '../env';
 import { authFetch } from '../lib/auth';
 import { AssetDetailModal } from '../components/AssetDetailModal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useLocalAssets } from '../lib/asset-uri';
 import { selectAndImportLibraryAssets } from '../lib/asset-import';
 import { getAnalysisStage, type Asset } from '../lib/asset-types';
@@ -87,6 +88,7 @@ export default function LibraryPage() {
   // modal's asset prop (and thus button visibility) reflects the new state
   // immediately. Snapshot would stay stale.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<LibraryItem | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['library'],
@@ -114,16 +116,20 @@ export default function LibraryPage() {
   const deleteLibraryItem = useMutation({
     mutationFn: async (item: LibraryItem) => {
       if (item.variants.length > 0) {
-        throw new Error('素材仍有关联项目，不能删除');
+        throw new Error('这个素材还在项目中使用，无法删除。请先从项目中移除。');
       }
       const res = await authFetch(`${env.VITE_API_BASE_URL}/api/assets/library/${item.userMediaFileId}`, { method: 'DELETE' });
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? 'Failed to delete library asset');
+        throw new Error(
+          res.status === 409
+            ? '这个素材还在项目中使用，无法删除。请先从项目中移除。'
+            : '删除失败，请稍后重试。',
+        );
       }
     },
     onSuccess: (_data, item) => {
       if (selectedId === item.mediaFileId) setSelectedId(null);
+      setDeleteTarget(null);
       queryClient.invalidateQueries({ queryKey: ['library'] });
     },
     onError: (error) => {
@@ -148,7 +154,7 @@ export default function LibraryPage() {
               素材库
             </h1>
             <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-              你导入过的所有底层素材，按文件去重；点击查看预览与所属项目。
+              查看你导入过的素材，以及它们在哪些项目中使用。
             </p>
           </div>
           </div>
@@ -195,10 +201,7 @@ export default function LibraryPage() {
                 hasLocal={!!localMap?.[item.sha256]}
                 onOpen={() => setSelectedId(item.mediaFileId)}
                 onProjectClick={(projectId) => navigate(`/projects/${projectId}`)}
-                onDelete={() => {
-                  if (!confirm(`确认从素材库删除「${item.filename}」？此操作不可撤销。`)) return;
-                  deleteLibraryItem.mutate(item);
-                }}
+                onDelete={() => setDeleteTarget(item)}
                 isDeleting={deleteLibraryItem.isPending && deleteLibraryItem.variables?.userMediaFileId === item.userMediaFileId}
               />
             ))}
@@ -210,6 +213,17 @@ export default function LibraryPage() {
         <AssetDetailModal
           asset={libraryItemToAsset(selected)}
           onClose={() => setSelectedId(null)}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmDialog
+          title="确认删除素材？"
+          description={`将从素材库删除「${deleteTarget.filename}」。此操作不可撤销。`}
+          confirmLabel="确认删除"
+          variant="danger"
+          isPending={deleteLibraryItem.isPending}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => deleteLibraryItem.mutate(deleteTarget)}
         />
       )}
     </div>
@@ -345,7 +359,7 @@ function StageBadge({ stage }: { stage: ReturnType<typeof getAnalysisStage> }) {
   if (stage === 'analyzed') {
     return (
       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/90 text-white backdrop-blur-sm">
-        <CheckCircle2 className="w-2.5 h-2.5" /> 可检索
+        <CheckCircle2 className="w-2.5 h-2.5" /> 可用
       </span>
     );
   }

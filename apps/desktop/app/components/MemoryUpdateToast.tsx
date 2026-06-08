@@ -9,7 +9,7 @@ const AUTO_DISMISS_MS = 5000;
 export function MemoryUpdateToast({ nonce }: { nonce: number }) {
   useEffect(() => {
     if (nonce === 0) return;
-    toast('✏️ 已更新长期记忆', AUTO_DISMISS_MS);
+    toast('✏️ 已记住你的偏好', AUTO_DISMISS_MS);
   }, [nonce]);
   return null;
 }
