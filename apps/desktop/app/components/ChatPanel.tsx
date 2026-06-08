@@ -357,6 +357,11 @@ export function ChatPanel({ projectId }: ChatPanelProps) {
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-8">
+        {visibleMessages.length === 0 && status === 'connecting' && (
+          <div className="flex items-center justify-center h-full text-sm text-zinc-400 dark:text-zinc-500">
+            正在加载对话…
+          </div>
+        )}
         {visibleMessages.map((message, idx) => {
           const isLast = idx === visibleMessages.length - 1;
           // Precompute the next user message text so MessageBubble doesn't have

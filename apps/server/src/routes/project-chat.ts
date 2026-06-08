@@ -251,15 +251,20 @@ app.use('*', requireAuth);
 app.get('/:id/chat/events', async (c) => {
   const user = c.get('user');
   const projectId = c.req.param('id');
+  const t0 = Date.now();
+  console.info(`[chat-events] start project=${projectId} user=${user.id}`);
   const project = await loadOwnedProject(projectId, user.id);
+  console.info(`[chat-events] owner-check project=${projectId} ms=${Date.now() - t0} found=${!!project}`);
   if (!project) return c.json({ error: 'Not found' }, 404);
 
   return streamSSE(c, async (stream) => {
+    const streamStart = Date.now();
     const run = await getOrCreateRun(projectId, user.id);
     if (!run) {
       await stream.writeSSE({ event: 'error', data: JSON.stringify({ message: '项目不存在' }) });
       return;
     }
+    console.info(`[chat-events] run-ready project=${projectId} ms=${Date.now() - streamStart} total=${Date.now() - t0} messages=${run.uiMessages.length} streaming=${run.isStreaming}`);
 
     let chain = Promise.resolve();
     const subscriber: Subscriber = {
@@ -272,6 +277,7 @@ app.get('/:id/chat/events', async (c) => {
     run.subscribers.add(subscriber);
 
     const snapshotMessages = visibleChatMessages(run.uiMessages);
+    const snapshotStart = Date.now();
     await stream.writeSSE({
       event: 'snapshot',
       data: JSON.stringify({
@@ -280,11 +286,13 @@ app.get('/:id/chat/events', async (c) => {
         revision: run.revision,
       }),
     });
+    console.info(`[chat-events] snapshot-written project=${projectId} ms=${Date.now() - snapshotStart} total=${Date.now() - t0} visible=${snapshotMessages.length}`);
 
     maybeContinueLastUser(run);
 
     stream.onAbort(() => {
       run.subscribers.delete(subscriber);
+      console.info(`[chat-events] abort project=${projectId} total=${Date.now() - t0} subscribers=${run.subscribers.size}`);
       scheduleCleanup(run);
     });
 
@@ -298,11 +306,14 @@ app.get('/:id/chat/events', async (c) => {
 app.post('/:id/chat/messages', async (c) => {
   const user = c.get('user');
   const projectId = c.req.param('id');
+  const t0 = Date.now();
+  console.info(`[chat-post] start project=${projectId} user=${user.id}`);
   const body = await c.req.json().catch(() => ({}));
   const text = typeof body?.text === 'string' ? body.text.trim() : '';
   if (!text) return c.json({ error: 'text is required' }, 400);
 
   const run = await getOrCreateRun(projectId, user.id);
+  console.info(`[chat-post] run-ready project=${projectId} ms=${Date.now() - t0} found=${!!run}`);
   if (!run) return c.json({ error: 'Not found' }, 404);
 
   const outlineEdited = body?.outlineEditedSinceLastChat === true;
@@ -325,6 +336,7 @@ app.post('/:id/chat/messages', async (c) => {
     scheduleCleanup(run);
   });
 
+  console.info(`[chat-post] accepted project=${projectId} ms=${Date.now() - t0} pending=${run.pendingTurns.length}`);
   return c.json({ ok: true, userMessageId: userMessage.id }, 202);
 });
 

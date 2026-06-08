@@ -224,6 +224,8 @@ app.delete('/:id', async (c) => {
 app.get('/:id', async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
+  const t0 = Date.now();
+  console.info(`[project-detail] start project=${id} user=${user.id}`);
   try {
     const projectRes = await db
       .select({
@@ -241,10 +243,13 @@ app.get('/:id', async (c) => {
       })
       .from(projects)
       .where(and(eq(projects.id, id), eq(projects.userId, user.id)));
+    console.info(`[project-detail] project-select project=${id} ms=${Date.now() - t0} found=${projectRes.length > 0}`);
     if (projectRes.length === 0) return c.json({ error: 'Not found' }, 404);
 
     const outlineRes = await db.select().from(projectOutlines).where(eq(projectOutlines.projectId, id));
+    console.info(`[project-detail] outline-select project=${id} ms=${Date.now() - t0} count=${outlineRes.length}`);
     const planRes = await db.select().from(editingPlans).where(eq(editingPlans.projectId, id)).orderBy(desc(editingPlans.displayOrder), desc(editingPlans.createdAt));
+    console.info(`[project-detail] plans-select project=${id} ms=${Date.now() - t0} count=${planRes.length}`);
 
     const projectData = projectRes[0] as any;
     projectData.editingPlans = planRes;
@@ -340,6 +345,7 @@ app.get('/:id', async (c) => {
       outline: outlineRes.length > 0 ? outlineRes[0] : null,
     });
   } catch (error) {
+    console.error(`[project-detail] failed project=${id} ms=${Date.now() - t0}`, error);
     console.error("Failed to fetch project details:", error);
     return c.json({ error: "Server error" }, 500);
   }

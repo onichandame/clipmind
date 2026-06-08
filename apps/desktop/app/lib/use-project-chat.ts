@@ -51,17 +51,21 @@ export function useProjectChat(projectId: string) {
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | undefined;
+    let connectTimer: number | undefined;
 
     const connect = async () => {
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
+      const startedAt = performance.now();
+      console.info(`[chat-sse] connect start project=${projectId}`);
       setStatus((current) => (current === 'streaming' ? current : 'connecting'));
       try {
         const res = await fetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}/chat/events`, {
           headers: authHeaders(),
           signal: controller.signal,
         });
+        console.info(`[chat-sse] response project=${projectId} status=${res.status} ms=${Math.round(performance.now() - startedAt)}`);
         if (!res.ok || !res.body) throw new Error(`SSE failed (${res.status})`);
         retryRef.current = 0;
         const reader = res.body.getReader();
@@ -73,10 +77,16 @@ export function useProjectChat(projectId: string) {
           buffer += decoder.decode(value, { stream: true });
           const parsed = parseSseFrames(buffer);
           buffer = parsed.rest;
-          for (const item of parsed.events) applyEvent(item.event, item.data);
+          for (const item of parsed.events) {
+            if (item.event === 'snapshot') {
+              console.info(`[chat-sse] snapshot project=${projectId} ms=${Math.round(performance.now() - startedAt)}`);
+            }
+            applyEvent(item.event, item.data);
+          }
         }
       } catch (err: any) {
         if (cancelled || controller.signal.aborted) return;
+        console.info(`[chat-sse] reconnect project=${projectId} ms=${Math.round(performance.now() - startedAt)} reason=${err?.message ?? 'unknown'}`);
         setStatus('error');
         setError('连接已断开，正在重连…');
         const attempt = Math.min(retryRef.current + 1, 5);
@@ -85,9 +95,14 @@ export function useProjectChat(projectId: string) {
       }
     };
 
-    connect();
+    // React dev/StrictMode mounts effects twice. Deferring the actual network
+    // request lets the first throwaway mount clean up before it opens a long
+    // lived SSE connection that can block the real one behind browser/proxy
+    // connection limits.
+    connectTimer = window.setTimeout(connect, 0);
     return () => {
       cancelled = true;
+      if (connectTimer) window.clearTimeout(connectTimer);
       if (retryTimer) window.clearTimeout(retryTimer);
       abortRef.current?.abort();
     };
