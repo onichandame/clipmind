@@ -24,6 +24,23 @@ const sanitizeSchema = {
   attributes: { ...defaultSchema.attributes, code: [...(defaultSchema.attributes?.code || []), "className"] },
 };
 
+function isWidgetRenderable(part: any) {
+  if (part?.type === 'tool-ask_user_question') {
+    return Array.isArray(part?.input?.questions) && part.input.questions.length > 0;
+  }
+  if (part?.type === 'tool-show_hotspots') {
+    return part?.state === 'output-available';
+  }
+  return true;
+}
+
+function widgetLoadingLabel(part: any) {
+  if (part?.type === 'tool-ask_user_question') return '正在准备提问…';
+  if (part?.type === 'tool-show_hotspots') return '正在整理热点卡片…';
+  if (part?.type === 'tool-request_asset_import') return '正在打开素材库…';
+  return '正在准备交互卡片…';
+}
+
 interface MessageBubbleProps {
   message: any;
   isLast: boolean;
@@ -89,7 +106,21 @@ const MessageBubble = memo(function MessageBubble({
         {message?.parts?.filter((p: any) => isToolPart(p) && WIDGET_TOOL_NAMES.has(p.type)).map((widgetPart: any, idx: number) => {
           const Widget = widgetRegistry[widgetPart.type];
           if (!Widget) return null;
-          return <Widget key={`widget-${idx}`} part={widgetPart} projectId={projectId} answer={nextUserText} onSubmit={onWidgetSubmit} />;
+          const renderable = isWidgetRenderable(widgetPart);
+          const showPreparing = widgetPart.state !== 'output-available' || (showInlineThinking && !renderable);
+          return (
+            <div key={`widget-${idx}`}>
+              {showPreparing && (
+                <div className="inline-flex items-center gap-2 text-indigo-500 dark:text-indigo-400 bg-indigo-500/5 px-3 py-1.5 rounded-full border border-indigo-500/20 mt-3 text-xs font-medium">
+                  <div className="animate-spin h-3 w-3 border-2 border-indigo-500 border-t-transparent rounded-full" />
+                  <span>{widgetLoadingLabel(widgetPart)}</span>
+                </div>
+              )}
+              {renderable && (
+                <Widget part={widgetPart} projectId={projectId} answer={nextUserText} onSubmit={onWidgetSubmit} />
+              )}
+            </div>
+          );
         })}
 
         {/* Tool Invocations 状态渲染 — 保留至最近一条 AI 消息上，loop 结束后仍作为历史展示。Widget / 静默工具不在此处渲染。 */}
@@ -331,13 +362,6 @@ export function ChatPanel({ projectId }: ChatPanelProps) {
 
   const lastMessage = visibleMessages[visibleMessages.length - 1];
   const lastIsUser = lastMessage?.role === "user";
-  const lastAssistantParts = (lastMessage?.role === "assistant" ? lastMessage.parts ?? [] : []) as any[];
-  // An active tool call (still receiving input) shows its own spinner — no extra bubble needed.
-  const hasActiveToolCall = lastAssistantParts.some(
-    (p: any) => isToolPart(p) && !SILENT_TOOL_NAMES.has(p.type) && (p.state === 'input-streaming' || p.state === 'input-available')
-  );
-  // Streaming text is self-evidencing — no extra bubble needed.
-  const hasAssistantText = lastAssistantParts.some((p: any) => p.type === 'text' && p.text?.length > 0);
   // Standalone "thinking" bubble — only when there is no assistant message yet in the current turn.
   const showThinking = isLoading && lastIsUser;
 
@@ -374,8 +398,7 @@ export function ChatPanel({ projectId }: ChatPanelProps) {
           // showInlineThinking only matters for the last assistant message
           // during streaming. For older messages it's always false, so passing
           // a constant `false` keeps their props stable as isLoading flips.
-          const showInlineThinking =
-            isLast && isLoading && !lastIsUser && !hasActiveToolCall && !hasAssistantText && message?.role !== 'user';
+          const showInlineThinking = isLast && isLoading && !lastIsUser && message?.role !== 'user';
           return (
             <MessageBubble
               key={message.id}

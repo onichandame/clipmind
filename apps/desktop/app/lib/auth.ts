@@ -6,6 +6,10 @@ const LEGACY_TOKEN_KEY = 'clipmind:auth:token';
 const USER_KEY = 'clipmind:auth:user';
 const DESKTOP_AUTH_HEADER = 'X-ClipMind-Desktop';
 
+let cachedAuthToken: string | null | undefined;
+let inflightAuthToken: Promise<string | null> | null = null;
+let authTokenVersion = 0;
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -18,7 +22,18 @@ function clearCachedUser() {
 }
 
 export async function getAuthToken(): Promise<string | null> {
-  return await invoke<string | null>('get_auth_token');
+  if (cachedAuthToken !== undefined) return cachedAuthToken;
+  if (inflightAuthToken) return inflightAuthToken;
+  const version = authTokenVersion;
+  inflightAuthToken = invoke<string | null>('get_auth_token')
+    .then((token) => {
+      if (version === authTokenVersion) cachedAuthToken = token;
+      return token;
+    })
+    .finally(() => {
+      if (version === authTokenVersion) inflightAuthToken = null;
+    });
+  return inflightAuthToken;
 }
 
 export async function requireAuthToken(): Promise<string> {
@@ -29,10 +44,19 @@ export async function requireAuthToken(): Promise<string> {
 
 async function setAuthToken(token: string) {
   await invoke('set_auth_token', { token });
+  authTokenVersion += 1;
+  cachedAuthToken = token;
+  inflightAuthToken = null;
 }
 
 async function clearAuthToken() {
-  await invoke('clear_auth_token');
+  try {
+    await invoke('clear_auth_token');
+  } finally {
+    authTokenVersion += 1;
+    cachedAuthToken = null;
+    inflightAuthToken = null;
+  }
 }
 
 export async function clearAuthStorage() {

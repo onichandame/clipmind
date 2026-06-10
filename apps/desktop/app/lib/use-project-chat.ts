@@ -63,7 +63,6 @@ export function useProjectChat(projectId: string) {
         setError('登录已过期，请重新登录。');
         return;
       }
-      console.info(`[chat-sse] reconnect project=${projectId} ms=${Math.round(performance.now() - startedAt)} reason=SSE stream closed`);
       setStatus('error');
       setError('连接已断开，正在重连…');
       if (retryRef.current >= 5) {
@@ -83,9 +82,6 @@ export function useProjectChat(projectId: string) {
         if (!line || line.startsWith(':')) continue;
         if (line.startsWith('event:')) event = line.slice(6).trimStart();
         if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
-      }
-      if (event === 'snapshot') {
-        console.info(`[chat-sse] snapshot project=${projectId} ms=${Math.round(performance.now() - startedAt)}`);
       }
       applyEvent(event, data.join('\n'));
     };
@@ -120,7 +116,6 @@ export function useProjectChat(projectId: string) {
       const controller = new AbortController();
       abortRef.current = controller;
       const startedAt = performance.now();
-      console.info(`[chat-sse] connect start project=${projectId}`);
       setStatus((current) => (current === 'streaming' ? current : 'connecting'));
       authFetch(`${env.VITE_API_BASE_URL}/api/projects/${projectId}/chat/events`, {
         headers: { Accept: 'text/event-stream' },
@@ -145,7 +140,6 @@ export function useProjectChat(projectId: string) {
           throw new Error(`SSE failed (${response.status})`);
         }
         retryRef.current = 0;
-        console.info(`[chat-sse] response project=${projectId} status=${response.status} ms=${Math.round(performance.now() - startedAt)}`);
         return readStream(response, controller, startedAt);
       }).catch((error) => {
         if (cancelled || controller.signal.aborted || error?.name === 'AbortError') return;
