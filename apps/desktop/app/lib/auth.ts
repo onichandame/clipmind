@@ -1,18 +1,43 @@
 import { useEffect, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { env } from '../env';
 
-const TOKEN_KEY = 'clipmind:auth:token';
+const LEGACY_TOKEN_KEY = 'clipmind:auth:token';
 const USER_KEY = 'clipmind:auth:user';
+const DESKTOP_AUTH_HEADER = 'X-ClipMind-Desktop';
 
 export interface AuthUser {
   id: string;
   email: string;
 }
 
-export function clearAuthStorage() {
+function clearCachedUser() {
   if (typeof window === 'undefined') return;
-  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(LEGACY_TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
+}
+
+export async function getAuthToken(): Promise<string | null> {
+  return await invoke<string | null>('get_auth_token');
+}
+
+export async function requireAuthToken(): Promise<string> {
+  const token = await getAuthToken();
+  if (!token) throw new Error('登录态丢失，请重新登录。');
+  return token;
+}
+
+async function setAuthToken(token: string) {
+  await invoke('set_auth_token', { token });
+}
+
+async function clearAuthToken() {
+  await invoke('clear_auth_token');
+}
+
+export async function clearAuthStorage() {
+  clearCachedUser();
+  await clearAuthToken().catch(() => undefined);
 }
 
 export function getCachedUser(): AuthUser | null {
@@ -27,17 +52,18 @@ export function setCachedUser(user: AuthUser) {
   window.localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
-// Drop-in fetch wrapper that sends the HttpOnly session cookie.
 export async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers || {});
-  return fetch(input, { ...init, headers, credentials: init.credentials ?? 'include' });
+  headers.set(DESKTOP_AUTH_HEADER, '1');
+  const token = await getAuthToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
 }
 
 export async function login(email: string, password: string): Promise<AuthUser> {
   const res = await fetch(`${env.VITE_API_BASE_URL}/api/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', [DESKTOP_AUTH_HEADER]: '1' },
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
@@ -45,6 +71,8 @@ export async function login(email: string, password: string): Promise<AuthUser> 
     throw new Error(body?.error || `Login failed (${res.status})`);
   }
   const data = await res.json();
+  if (typeof data?.token !== 'string') throw new Error('Login failed: missing token');
+  await setAuthToken(data.token);
   setCachedUser(data.user);
   return data.user;
 }
@@ -52,8 +80,7 @@ export async function login(email: string, password: string): Promise<AuthUser> 
 export async function signup(email: string, password: string): Promise<AuthUser> {
   const res = await fetch(`${env.VITE_API_BASE_URL}/api/auth/signup`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', [DESKTOP_AUTH_HEADER]: '1' },
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
@@ -61,6 +88,8 @@ export async function signup(email: string, password: string): Promise<AuthUser>
     throw new Error(body?.error || `Signup failed (${res.status})`);
   }
   const data = await res.json();
+  if (typeof data?.token !== 'string') throw new Error('Signup failed: missing token');
+  await setAuthToken(data.token);
   setCachedUser(data.user);
   return data.user;
 }
@@ -69,14 +98,21 @@ export async function logout(): Promise<void> {
   try {
     await authFetch(`${env.VITE_API_BASE_URL}/api/auth/logout`, { method: 'POST' });
   } catch { /* swallow */ }
-  clearAuthStorage();
+  await clearAuthStorage();
 }
 
 export async function fetchMe(): Promise<AuthUser | null> {
   try {
-    const res = await authFetch(`${env.VITE_API_BASE_URL}/api/auth/me`);
+    const token = await getAuthToken();
+    if (!token) return null;
+    const res = await fetch(`${env.VITE_API_BASE_URL}/api/auth/me`, {
+      headers: {
+        [DESKTOP_AUTH_HEADER]: '1',
+        Authorization: `Bearer ${token}`,
+      },
+    });
     if (res.status === 401) {
-      clearAuthStorage();
+      if ((await getAuthToken()) === token) await clearAuthStorage();
       return null;
     }
     if (!res.ok) return null;

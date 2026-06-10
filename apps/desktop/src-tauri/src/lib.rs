@@ -1,5 +1,5 @@
 use reqwest::{
-    header::{CONTENT_LENGTH, CONTENT_TYPE, COOKIE},
+    header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE},
     Client,
 };
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::Semaphore;
@@ -19,25 +19,73 @@ use uuid::Uuid;
 mod local_db;
 mod local_file_server;
 
-const SESSION_COOKIE_NAME: &str = "clipmind_session";
 const DESKTOP_AUTH_HEADER: &str = "X-ClipMind-Desktop";
+const KEYRING_SERVICE: &str = "com.clipmind.app";
+const AUTH_TOKEN_ACCOUNT: &str = "auth-token";
 
 fn env_tag() -> String {
     format!("[{}/{}]", std::env::consts::OS, std::env::consts::ARCH)
 }
 
-fn session_cookie_header(webview_window: &WebviewWindow, server_url: &str) -> Result<String, String> {
-    let url = tauri::Url::parse(server_url)
-        .map_err(|e| format!("{} 登录态 URL 解析失败: {}", env_tag(), e))?;
-    let cookies = webview_window
-        .cookies_for_url(url)
-        .map_err(|e| format!("{} 读取登录态 Cookie 失败: {}", env_tag(), e))?;
-    let value = cookies
-        .iter()
-        .find(|cookie| cookie.name() == SESSION_COOKIE_NAME && !cookie.value().is_empty())
-        .map(|cookie| cookie.value().to_string())
-        .ok_or_else(|| format!("{} 缺少登录态，无法上传", env_tag()))?;
-    Ok(format!("{}={}", SESSION_COOKIE_NAME, value))
+fn bearer_auth_header(auth_token: &str) -> Result<String, String> {
+    let token = auth_token.trim();
+    if token.is_empty() {
+        return Err(format!("{} 缺少登录态，无法上传", env_tag()));
+    }
+    Ok(format!("Bearer {}", token))
+}
+
+struct TempFileGuard {
+    paths: Vec<std::path::PathBuf>,
+}
+
+impl TempFileGuard {
+    fn new(paths: Vec<std::path::PathBuf>) -> Self {
+        Self { paths }
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        for path in &self.paths {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn auth_token_entry() -> Result<keyring::Entry, String> {
+    keyring::Entry::new(KEYRING_SERVICE, AUTH_TOKEN_ACCOUNT)
+        .map_err(|e| format!("无法访问系统钥匙串: {e}"))
+}
+
+#[tauri::command]
+fn get_auth_token() -> Result<Option<String>, String> {
+    let entry = auth_token_entry()?;
+    match entry.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("无法读取系统钥匙串: {e}")),
+    }
+}
+
+#[tauri::command]
+fn set_auth_token(token: String) -> Result<(), String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("登录态为空".to_string());
+    }
+    auth_token_entry()?
+        .set_password(token)
+        .map_err(|e| format!("无法写入系统钥匙串: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_auth_token() -> Result<(), String> {
+    match auth_token_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("无法清理系统钥匙串: {e}")),
+    }
 }
 
 // Streaming SHA-256 of a file. Reused by import (preflight hash) and relink
@@ -113,15 +161,15 @@ fn get_local_file_server_info() -> Result<LocalFileServerInfoFront, String> {
 #[tauri::command]
 async fn backup_video_to_cloud(
     app: AppHandle,
-    webview_window: WebviewWindow,
     media_file_id: String,
     local_path: String,
     filename: String,
     expected_sha256: String,
     expected_size: i64,
     server_url: String,
+    auth_token: String,
 ) -> Result<(), String> {
-    let auth_cookie = session_cookie_header(&webview_window, &server_url)?;
+    let auth_header = bearer_auth_header(&auth_token)?;
     let client = Client::new();
 
     let actual_hash = compute_sha256(&local_path).await?;
@@ -147,18 +195,34 @@ async fn backup_video_to_cloud(
     }
 
     // 1. 先把 uploading 持久化到服务端，让其它会话/设备立刻看到「正在备份」。
-    notify_backup_status(&client, &server_url, &auth_cookie, &media_file_id, "uploading").await?;
+    notify_backup_status(
+        &client,
+        &server_url,
+        &auth_header,
+        &media_file_id,
+        "uploading",
+    )
+    .await?;
 
     // 2. 上传 + 回调（带进度事件）。
     let upload_result = upload_file_and_notify_with_progress(
-        &app, &client, &server_url, &auth_cookie,
-        &media_file_id, "video-backup", &local_path, &filename,
-        Some(&expected_sha256), Some(expected_size),
-    ).await;
+        &app,
+        &client,
+        &server_url,
+        &auth_header,
+        &media_file_id,
+        "video-backup",
+        &local_path,
+        &filename,
+        Some(&expected_sha256),
+        Some(expected_size),
+    )
+    .await;
 
     // 3. 失败时回写 failed（best-effort，吞错以不掩盖原始错误）。成功时由 oss-callback 写 backed_up。
     if upload_result.is_err() {
-        let _ = notify_backup_status(&client, &server_url, &auth_cookie, &media_file_id, "failed").await;
+        let _ = notify_backup_status(&client, &server_url, &auth_header, &media_file_id, "failed")
+            .await;
     }
     upload_result
 }
@@ -166,13 +230,16 @@ async fn backup_video_to_cloud(
 async fn notify_backup_status(
     client: &Client,
     server_url: &str,
-    auth_cookie: &str,
+    auth_header: &str,
     media_file_id: &str,
     status: &str,
 ) -> Result<(), String> {
     let res = client
-        .post(format!("{}/api/assets/{}/backup-status", server_url, media_file_id))
-        .header(COOKIE, auth_cookie)
+        .post(format!(
+            "{}/api/assets/{}/backup-status",
+            server_url, media_file_id
+        ))
+        .header(AUTHORIZATION, auth_header)
         .header(DESKTOP_AUTH_HEADER, "1")
         .json(&serde_json::json!({ "status": status }))
         .send()
@@ -225,6 +292,7 @@ async fn download_asset_to_local(
         .unwrap_or("mp4");
     let target = asset_dir.join(format!("{}.{}", media_file_id, ext));
     let tmp = asset_dir.join(format!("{}.{}.partial", media_file_id, ext));
+    let _tmp_guard = TempFileGuard::new(vec![tmp.clone()]);
 
     let client = Client::new();
     let mut res = client
@@ -375,9 +443,9 @@ impl ProcessingManager {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AssetFinalizeResponse {
-    asset_id: Option<String>,      // project_assets.id when attached to a project
-    user_media_file_id: String,    // user_media_files.id
-    media_file_id: String,         // media_files.id
+    asset_id: Option<String>,   // project_assets.id when attached to a project
+    user_media_file_id: String, // user_media_files.id
+    media_file_id: String,      // media_files.id
     already_processed: bool,
 }
 
@@ -485,7 +553,7 @@ struct OssCallbackPayload<'a> {
 async fn upload_file_and_notify(
     client: &Client,
     server_url: &str,
-    auth_cookie: &str,
+    auth_header: &str,
     asset_id: &str,
     kind: &str,
     file_path: &str,
@@ -508,7 +576,7 @@ async fn upload_file_and_notify(
 
     let token_res = client
         .post(format!("{}/api/upload-token", server_url))
-        .header(COOKIE, auth_cookie)
+        .header(AUTHORIZATION, auth_header)
         .header(DESKTOP_AUTH_HEADER, "1")
         .json(&token_req)
         .send()
@@ -532,15 +600,15 @@ async fn upload_file_and_notify(
 
     // alreadyUploaded only fires for kind=video-backup; audio/thumbnail always
     // get a real upload URL. Defensive unwraps below match the server contract.
-    let upload_url = token_res.upload_url.ok_or_else(|| {
-        format!("{} upload-token 缺少 uploadUrl ({})", env_tag(), kind)
-    })?;
-    let content_type = token_res.content_type.ok_or_else(|| {
-        format!("{} upload-token 缺少 contentType ({})", env_tag(), kind)
-    })?;
-    let callback_token = token_res.callback_token.ok_or_else(|| {
-        format!("{} upload-token 缺少 callbackToken ({})", env_tag(), kind)
-    })?;
+    let upload_url = token_res
+        .upload_url
+        .ok_or_else(|| format!("{} upload-token 缺少 uploadUrl ({})", env_tag(), kind))?;
+    let content_type = token_res
+        .content_type
+        .ok_or_else(|| format!("{} upload-token 缺少 contentType ({})", env_tag(), kind))?;
+    let callback_token = token_res
+        .callback_token
+        .ok_or_else(|| format!("{} upload-token 缺少 callbackToken ({})", env_tag(), kind))?;
 
     let stream = FramedRead::new(file, BytesCodec::new());
     let body = reqwest::Body::wrap_stream(stream);
@@ -573,7 +641,7 @@ async fn upload_file_and_notify(
     };
     let cb_res = client
         .post(format!("{}/api/oss-callback", server_url))
-        .header(COOKIE, auth_cookie)
+        .header(AUTHORIZATION, auth_header)
         .header(DESKTOP_AUTH_HEADER, "1")
         .json(&cb_payload)
         .send()
@@ -639,7 +707,7 @@ async fn upload_file_and_notify_with_progress(
     app: &AppHandle,
     client: &Client,
     server_url: &str,
-    auth_cookie: &str,
+    auth_header: &str,
     media_file_id: &str,
     kind: &str,
     file_path: &str,
@@ -661,7 +729,10 @@ async fn upload_file_and_notify_with_progress(
         if expected >= 0 && size as i64 != expected {
             return Err(format!(
                 "{} {} size_mismatch before upload: expected {} got {}",
-                env_tag(), kind, expected, size
+                env_tag(),
+                kind,
+                expected,
+                size
             ));
         }
     }
@@ -673,7 +744,7 @@ async fn upload_file_and_notify_with_progress(
     };
     let token_res = client
         .post(format!("{}/api/upload-token", server_url))
-        .header(COOKIE, auth_cookie)
+        .header(AUTHORIZATION, auth_header)
         .header(DESKTOP_AUTH_HEADER, "1")
         .json(&token_req)
         .send()
@@ -711,15 +782,15 @@ async fn upload_file_and_notify_with_progress(
         return Ok(());
     }
 
-    let upload_url = token_res.upload_url.ok_or_else(|| {
-        format!("{} upload-token 缺少 uploadUrl ({})", env_tag(), kind)
-    })?;
-    let content_type = token_res.content_type.ok_or_else(|| {
-        format!("{} upload-token 缺少 contentType ({})", env_tag(), kind)
-    })?;
-    let callback_token = token_res.callback_token.ok_or_else(|| {
-        format!("{} upload-token 缺少 callbackToken ({})", env_tag(), kind)
-    })?;
+    let upload_url = token_res
+        .upload_url
+        .ok_or_else(|| format!("{} upload-token 缺少 uploadUrl ({})", env_tag(), kind))?;
+    let content_type = token_res
+        .content_type
+        .ok_or_else(|| format!("{} upload-token 缺少 contentType ({})", env_tag(), kind))?;
+    let callback_token = token_res
+        .callback_token
+        .ok_or_else(|| format!("{} upload-token 缺少 callbackToken ({})", env_tag(), kind))?;
 
     // Wrap FramedRead so each chunk increments a counter; throttle emit to ≥500ms,
     // plus one final 100% emit when the stream finishes.
@@ -788,7 +859,10 @@ async fn upload_file_and_notify_with_progress(
         if actual_hex != expected {
             return Err(format!(
                 "{} {} hash_mismatch after upload: expected {} got {}",
-                env_tag(), kind, expected, actual_hex
+                env_tag(),
+                kind,
+                expected,
+                actual_hex
             ));
         }
     }
@@ -798,7 +872,7 @@ async fn upload_file_and_notify_with_progress(
     };
     let cb_res = client
         .post(format!("{}/api/oss-callback", server_url))
-        .header(COOKIE, auth_cookie)
+        .header(AUTHORIZATION, auth_header)
         .header(DESKTOP_AUTH_HEADER, "1")
         .json(&cb_payload)
         .send()
@@ -833,18 +907,21 @@ async fn upload_file_and_notify_with_progress(
 #[tauri::command]
 async fn process_video_asset(
     app: AppHandle,
-    webview_window: WebviewWindow,
     state: State<'_, ProcessingManager>,
     job_id: String,
     filename: String,
     local_path: String,
     project_id: Option<String>,
     server_url: String,
+    auth_token: String,
 ) -> Result<String, String> {
-    let auth_cookie = session_cookie_header(&webview_window, &server_url)?;
+    let auth_header = bearer_auth_header(&auth_token)?;
 
     // Step 0: Compute SHA-256 of source file (before acquiring CPU semaphore)
-    let _ = app.emit("upload-progress", serde_json::json!({ "id": &job_id, "progress": 2 }));
+    let _ = app.emit(
+        "upload-progress",
+        serde_json::json!({ "id": &job_id, "progress": 2 }),
+    );
     let file_hash = compute_sha256(&local_path).await?;
     let file_size_bytes = tokio::fs::metadata(&local_path)
         .await
@@ -864,7 +941,7 @@ async fn process_video_asset(
         };
         let preflight_res = preflight_client
             .post(format!("{}/api/assets/preflight", server_url))
-            .header(COOKIE, auth_cookie.as_str())
+            .header(AUTHORIZATION, auth_header.as_str())
             .header(DESKTOP_AUTH_HEADER, "1")
             .json(&preflight_payload)
             .send()
@@ -885,8 +962,9 @@ async fn process_video_asset(
             .await
             .map_err(|e| format!("{} preflight 响应解析失败: {}", env_tag(), e))?;
         if preflight_resp.dedup_hit {
-            let media_file_id = preflight_resp.media_file_id.ok_or_else(||
-                format!("{} preflight 命中但缺少 mediaFileId", env_tag()))?;
+            let media_file_id = preflight_resp
+                .media_file_id
+                .ok_or_else(|| format!("{} preflight 命中但缺少 mediaFileId", env_tag()))?;
             let attach_payload = AttachPayload {
                 project_id: project_id_ref,
                 file_hash: &file_hash,
@@ -894,7 +972,7 @@ async fn process_video_asset(
             };
             let attach_res = preflight_client
                 .post(format!("{}/api/assets/attach", server_url))
-                .header(COOKIE, auth_cookie.as_str())
+                .header(AUTHORIZATION, auth_header.as_str())
                 .header(DESKTOP_AUTH_HEADER, "1")
                 .json(&attach_payload)
                 .send()
@@ -933,7 +1011,10 @@ async fn process_video_asset(
             );
             let fallback_id = attach_resp.user_media_file_id.clone();
             let returned_id = attach_resp.asset_id.unwrap_or(fallback_id);
-            println!("[Job {}] preflight 命中，跳过 FFmpeg 与上传。returned_id={}, media_file_id={}", job_id, returned_id, media_file_id);
+            println!(
+                "[Job {}] preflight 命中，跳过 FFmpeg 与上传。returned_id={}, media_file_id={}",
+                job_id, returned_id, media_file_id
+            );
             return Ok(returned_id);
         }
     }
@@ -951,6 +1032,8 @@ async fn process_video_asset(
         .join(format!("clipmind_{}_thumb.jpg", job_id))
         .to_string_lossy()
         .into_owned();
+    let _temp_guard =
+        TempFileGuard::new(vec![temp_audio.clone().into(), temp_thumb.clone().into()]);
 
     let app_clone = app.clone();
     let app_ffmpeg = app.clone();
@@ -1082,10 +1165,7 @@ async fn process_video_asset(
         );
     }
 
-    println!(
-        "[Job {}] FFmpeg 双轨分离完毕，准备进入直传队列...",
-        job_id
-    );
+    println!("[Job {}] FFmpeg 双轨分离完毕，准备进入直传队列...", job_id);
     drop(_permit);
 
     // ===== 上传临时音频/缩略图，再由服务端 finalize 原子创建/复用 global media_files =====
@@ -1111,7 +1191,7 @@ async fn process_video_asset(
     };
     let token_res = client
         .post(format!("{}/api/assets/import-token", server_url))
-        .header(COOKIE, auth_cookie.as_str())
+        .header(AUTHORIZATION, auth_header.as_str())
         .header(DESKTOP_AUTH_HEADER, "1")
         .json(&token_req)
         .send()
@@ -1152,9 +1232,10 @@ async fn process_video_asset(
     );
 
     if has_audio {
-        let audio = token_resp.audio.as_ref().ok_or_else(|| {
-            format!("{} import-token 缺少 audio 上传信息", env_tag())
-        })?;
+        let audio = token_resp
+            .audio
+            .as_ref()
+            .ok_or_else(|| format!("{} import-token 缺少 audio 上传信息", env_tag()))?;
         upload_file_to_signed_url(
             &client,
             "audio",
@@ -1176,7 +1257,7 @@ async fn process_video_asset(
     };
     let finalize_res = client
         .post(format!("{}/api/assets/finalize", server_url))
-        .header(COOKIE, auth_cookie.as_str())
+        .header(AUTHORIZATION, auth_header.as_str())
         .header(DESKTOP_AUTH_HEADER, "1")
         .json(&finalize_payload)
         .send()
@@ -1221,7 +1302,10 @@ async fn process_video_asset(
     let _ = fs::remove_file(&temp_thumb);
     let fallback_id = finalize_resp.user_media_file_id.clone();
     let returned_id = finalize_resp.asset_id.unwrap_or(fallback_id);
-    println!("[Job {}] 导入 finalize 完成。returned_id={}, media_file_id={}, already_processed={}", job_id, returned_id, finalize_resp.media_file_id, finalize_resp.already_processed);
+    println!(
+        "[Job {}] 导入 finalize 完成。returned_id={}, media_file_id={}, already_processed={}",
+        job_id, returned_id, finalize_resp.media_file_id, finalize_resp.already_processed
+    );
     Ok(returned_id)
 }
 
@@ -1267,10 +1351,7 @@ async fn local_assets_set(
 }
 
 #[tauri::command]
-async fn local_assets_delete(
-    pool: State<'_, SqlitePool>,
-    sha256: String,
-) -> Result<(), String> {
+async fn local_assets_delete(pool: State<'_, SqlitePool>, sha256: String) -> Result<(), String> {
     local_db::delete(pool.inner(), &sha256)
         .await
         .map_err(|e| format!("local_assets_delete failed: {e}"))
@@ -1314,6 +1395,9 @@ pub fn run() {
             local_assets_set,
             local_assets_delete,
             local_assets_relink,
+            get_auth_token,
+            set_auth_token,
+            clear_auth_token,
         ])
         .setup(|app| {
             // 自更新插件：仅 desktop 目标，必须在 release 中也运行

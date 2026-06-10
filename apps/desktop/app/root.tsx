@@ -52,7 +52,7 @@ const PUBLIC_ROUTES = new Set(['/login', '/signup']);
 function AuthGate({ children }: { children: React.ReactNode }) {
   // Wire Tauri asset-import progress events at the app root so any entry
   // point (chat widget, library page, future ones) sees the same store state.
-  useGlobalAssetImportListeners();
+  useGlobalAssetImportListeners(queryClient);
   const update = useUpdateCheck();
   const location = useLocation();
   const navigate = useNavigate();
@@ -85,7 +85,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       fetchMe().then(u => {
         if (!cancelled && u) navigate('/', { replace: true });
       });
-      return;
+      return () => { cancelled = true; };
     }
     fetchMe().then(u => {
       if (cancelled) return;

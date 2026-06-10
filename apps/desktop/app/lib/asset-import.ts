@@ -14,9 +14,10 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { useRevalidator } from 'react-router';
 import { env } from '../env';
+import { requireAuthToken } from './auth';
 import { useCanvasStore, type UploadJob, type JobStatus } from '../store/useCanvasStore';
 
 const VIDEO_EXTS = ['mp4', 'mov', 'MP4', 'MOV'];
@@ -54,12 +55,14 @@ async function processJob(job: UploadJob): Promise<void> {
   const update = useCanvasStore.getState().updateUploadJob;
   try {
     update(job.id, { status: 'compressing', progress: 0 });
+    const authToken = await requireAuthToken();
     await invoke('process_video_asset', {
       jobId: job.id,
       filename: job.filename,
       localPath: job.sourcePath,
       projectId: job.projectId ?? null,
       serverUrl: env.VITE_API_BASE_URL,
+      authToken,
     });
     // After invoke resolves the job may already be `ready` (dedup hit — Rust
     // emitted progress:100 then returned) or `uploading` (a progress event
@@ -76,16 +79,20 @@ async function processJob(job: UploadJob): Promise<void> {
 }
 
 // Wire Tauri progress events globally. Mount once near the app root.
-export function useGlobalAssetImportListeners() {
-  const queryClient = useQueryClient();
+export function useGlobalAssetImportListeners(queryClient: QueryClient) {
   const revalidator = useRevalidator();
   const setJobs = useCanvasStore((s) => s.setUploadJobs);
   const updateJob = useCanvasStore((s) => s.updateUploadJob);
 
   useEffect(() => {
+    let cancelled = false;
     let unlistenUpload: undefined | (() => void);
     let unlistenFFmpeg: undefined | (() => void);
     let unlistenError: undefined | (() => void);
+    const setUnlisten = (setter: (fn: () => void) => void) => (fn: () => void) => {
+      if (cancelled) fn();
+      else setter(fn);
+    };
 
     listen<{ id: string; progress: number }>('upload-progress', (event) => {
       const isComplete = event.payload.progress >= 100;
@@ -104,7 +111,7 @@ export function useGlobalAssetImportListeners() {
           return { ...j, progress: event.payload.progress, status: nextStatus };
         }),
       );
-    }).then((fn) => { unlistenUpload = fn; });
+    }).then(setUnlisten((fn) => { unlistenUpload = fn; }));
 
     listen<{ log: string }>('ffmpeg-progress', () => {
       // Visual compensation: bump compressing jobs slightly so the bar moves.
@@ -113,13 +120,14 @@ export function useGlobalAssetImportListeners() {
           j.status === 'compressing' && j.progress < 90 ? { ...j, progress: j.progress + 2 } : j,
         ),
       );
-    }).then((fn) => { unlistenFFmpeg = fn; });
+    }).then(setUnlisten((fn) => { unlistenFFmpeg = fn; }));
 
     listen<{ id: string; message: string }>('upload-error', (event) => {
       updateJob(event.payload.id, { status: 'error', errorMessage: event.payload.message });
-    }).then((fn) => { unlistenError = fn; });
+    }).then(setUnlisten((fn) => { unlistenError = fn; }));
 
     return () => {
+      cancelled = true;
       unlistenUpload?.();
       unlistenFFmpeg?.();
       unlistenError?.();

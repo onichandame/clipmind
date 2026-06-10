@@ -10,7 +10,13 @@
     "shell:allow-spawn",
     {
       "identifier": "shell:allow-execute",
-      "allow": [{ "cmd": "ffmpeg", "sidecar": true, "args": true }]
+      "allow": [
+        {
+          "cmd": "ffmpeg",
+          "sidecar": true,
+          "args": true
+        }
+      ]
     },
     "dialog:default",
     "updater:default"

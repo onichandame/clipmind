@@ -48,10 +48,11 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
   // user has multiple backup operations queued.
   useEffect(() => {
     if (!busy) return;
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      unlisten = await listen<{ mediaFileId: string; sent: number; total: number }>(
+      const off = await listen<{ mediaFileId: string; sent: number; total: number }>(
         'backup-progress',
         (e) => {
           if (e.payload.mediaFileId !== asset.mediaFileId) return;
@@ -59,17 +60,20 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
           setBackupProgress(Math.floor((e.payload.sent / e.payload.total) * 100));
         },
       );
+      if (cancelled) off();
+      else unlisten = off;
     })();
-    return () => { unlisten?.(); };
+    return () => { cancelled = true; unlisten?.(); };
   }, [busy, asset.mediaFileId]);
 
   // Same pattern for cloud download progress.
   useEffect(() => {
     if (!downloadBusy) return;
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
-      unlisten = await listen<{ mediaFileId: string; sent: number; total: number }>(
+      const off = await listen<{ mediaFileId: string; sent: number; total: number }>(
         'download-progress',
         (e) => {
           if (e.payload.mediaFileId !== asset.mediaFileId) return;
@@ -77,8 +81,10 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
           setDownloadProgress(Math.floor((e.payload.sent / e.payload.total) * 100));
         },
       );
+      if (cancelled) off();
+      else unlisten = off;
     })();
-    return () => { unlisten?.(); };
+    return () => { cancelled = true; unlisten?.(); };
   }, [downloadBusy, asset.mediaFileId]);
 
   const hasLocalCopy = !!localAsset;
@@ -92,6 +98,8 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const { env } = await import('../env');
+      const { requireAuthToken } = await import('../lib/auth');
+      const authToken = await requireAuthToken();
       await invoke('backup_video_to_cloud', {
         mediaFileId: asset.mediaFileId,
         localPath: localAsset.localPath,
@@ -99,6 +107,7 @@ export function AssetDetailModal({ asset, onClose }: { asset: Asset; onClose: ()
         expectedSha256: asset.sha256,
         expectedSize: asset.fileSize,
         serverUrl: env.VITE_API_BASE_URL,
+        authToken,
       });
     } catch (e: any) {
       console.error('[Backup] failed:', e);

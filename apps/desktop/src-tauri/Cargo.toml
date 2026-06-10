@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.2"
+version = "0.1.3"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -36,6 +36,7 @@ sha2 = "0.10"
 tiny_http = "0.12"
 urlencoding = "2.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"

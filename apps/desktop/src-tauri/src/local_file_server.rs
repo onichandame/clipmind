@@ -128,15 +128,12 @@ fn handle_request(request: tiny_http::Request, expected_token: &str) {
     // coming. We don't know transcoded length, so omit Content-Length and don't
     // advertise Accept-Ranges (transcoding can't honor byte ranges).
     if matches!(method, Method::Head) {
-        let response: Response<std::io::Empty> = Response::new(
-            StatusCode(200),
-            vec![],
-            std::io::empty(),
-            None,
-            None,
-        )
-        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"video/mp4"[..]).unwrap())
-        .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+        let response: Response<std::io::Empty> =
+            Response::new(StatusCode(200), vec![], std::io::empty(), None, None)
+                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"video/mp4"[..]).unwrap())
+                .with_header(
+                    Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+                );
         eprintln!("[local_file_server] <<< 200 HEAD (transcode pending)");
         let _ = request.respond(response);
         return;
