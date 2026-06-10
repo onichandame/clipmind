@@ -39,7 +39,13 @@ export async function buildChatStream({
 
   // [Arch] SSOT: 在请求起点先行获取项目实体（owner-scoped），作为后续 Prompt 注入与写链路的单一真理源
   const [currProject] = await db
-    .select()
+    .select({
+      id: projects.id,
+      workflowMode: projects.workflowMode,
+      retrievedAssetIds: projects.retrievedAssetIds,
+      selectedAssetIds: projects.selectedAssetIds,
+      chatHistory: projects.chatHistory,
+    })
     .from(projects)
     .where(and(eq(projects.id, projectId), eq(projects.userId, user.id)))
     .limit(1);

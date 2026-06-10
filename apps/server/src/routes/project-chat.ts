@@ -82,7 +82,7 @@ async function loadOwnedProject(projectId: string, userId: string) {
   return project;
 }
 
-async function getOrCreateRun(projectId: string, userId: string) {
+async function getOrCreateRun(projectId: string, userId: string, initialProject?: Awaited<ReturnType<typeof loadOwnedProject>>) {
   const key = runKey(userId, projectId);
   const existing = runs.get(key);
   if (existing) {
@@ -93,7 +93,7 @@ async function getOrCreateRun(projectId: string, userId: string) {
     return existing;
   }
 
-  const project = await loadOwnedProject(projectId, userId);
+  const project = initialProject ?? await loadOwnedProject(projectId, userId);
   if (!project) return null;
   const history = normalizeChatHistory(project.chatHistory);
   const run: ChatRun = {
@@ -259,7 +259,7 @@ app.get('/:id/chat/events', async (c) => {
 
   return streamSSE(c, async (stream) => {
     const streamStart = Date.now();
-    const run = await getOrCreateRun(projectId, user.id);
+    const run = await getOrCreateRun(projectId, user.id, project);
     if (!run) {
       await stream.writeSSE({ event: 'chat-error', data: JSON.stringify({ message: '项目不存在' }) });
       return;

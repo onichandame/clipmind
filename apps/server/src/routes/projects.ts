@@ -300,6 +300,13 @@ app.get('/:id', async (c) => {
     projectData.editingPlans = planRes;
 
     if (Array.isArray(projectData.retrievedClips)) {
+      const retrievedAssetIds = Array.from(new Set(
+        projectData.retrievedClips
+          .map((clip: any) => clip?.assetId)
+          .filter((assetId: any): assetId is string => typeof assetId === 'string' && assetId.length > 0),
+      ));
+      const retrievedAssetMap = await loadAssetMetadataByIds(retrievedAssetIds, user.id, id);
+
       for (let i = 0; i < projectData.retrievedClips.length; i++) {
         const clip = projectData.retrievedClips[i];
 
@@ -309,22 +316,17 @@ app.get('/:id', async (c) => {
         // 否则前端通过 useAssetUri(assetId) 走本地 asset:// 协议解析。
         // 注意：videoOssKey / backupStatus 已上提至 media_files（per-content）。
         if (clip.assetId) {
-          try {
-            const assetMap = await loadAssetMetadataByIds([clip.assetId], user.id, id);
-            const paRecord = assetMap.get(clip.assetId);
+          const paRecord = retrievedAssetMap.get(clip.assetId);
 
-            if (paRecord) {
-              clip.filename = paRecord.filename;
-              clip.backupStatus = paRecord.backupStatus;
-              clip.mediaFileId = paRecord.mediaFileId;
-              clip.sha256 = paRecord.sha256;
-              clip.thumbnailUrl = signAssetViewUrl(paRecord.thumbnailOssKey);
-              if (paRecord.backupStatus === 'backed_up' && paRecord.videoOssKey) {
-                clip.videoUrl = signAssetDownloadUrl(paRecord.videoOssKey, paRecord.filename);
-              }
+          if (paRecord) {
+            clip.filename = paRecord.filename;
+            clip.backupStatus = paRecord.backupStatus;
+            clip.mediaFileId = paRecord.mediaFileId;
+            clip.sha256 = paRecord.sha256;
+            clip.thumbnailUrl = signAssetViewUrl(paRecord.thumbnailOssKey);
+            if (paRecord.backupStatus === 'backed_up' && paRecord.videoOssKey) {
+              clip.videoUrl = signAssetDownloadUrl(paRecord.videoOssKey, paRecord.filename);
             }
-          } catch (e) {
-            console.error(`🚨 无法为素材切片注入元数据 (AssetID: ${clip.assetId})`, e);
           }
         }
       }
@@ -334,18 +336,21 @@ app.get('/:id', async (c) => {
     // 仅在已云备份时附带可签发的 videoUrl，本地优先方案由前端通过 useAssetUri 解析
     // (前端用 mediaFileId 反查桌面端 SQLite 里的 local_path)。
     if (projectData.editingPlans && Array.isArray(projectData.editingPlans)) {
+      const planAssetIds = Array.from(new Set(
+        projectData.editingPlans.flatMap((plan: any) => Array.isArray(plan.clips)
+          ? plan.clips
+            .map((clip: any) => clip?.assetId)
+            .filter((assetId: any): assetId is string => typeof assetId === 'string' && assetId.length > 0)
+          : []),
+      ));
+      const planAssetMap = await loadAssetMetadataByIds(planAssetIds, user.id, id);
+
       for (const plan of projectData.editingPlans) {
         if (!plan.clips || !Array.isArray(plan.clips)) continue;
-        const assetIds = plan.clips
-          .map((clip: any) => clip.assetId)
-          .filter((id: any): id is string => typeof id === 'string' && id.length > 0);
-        if (assetIds.length === 0) continue;
-
-        const assetMap = await loadAssetMetadataByIds(assetIds, user.id, id);
 
         for (const clip of plan.clips) {
           if (!clip.assetId) continue;
-          const asset = assetMap.get(clip.assetId);
+          const asset = planAssetMap.get(clip.assetId);
           if (!asset) continue;
           clip.fileName = asset.filename;
           clip.thumbnailUrl = signAssetViewUrl(asset.thumbnailOssKey);
