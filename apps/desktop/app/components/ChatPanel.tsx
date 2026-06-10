@@ -44,7 +44,7 @@ function widgetLoadingLabel(part: any) {
 interface MessageBubbleProps {
   message: any;
   isLast: boolean;
-  showInlineThinking: boolean;
+  showThinkingText: boolean;
   projectId: string;
   onWidgetSubmit: (msg: string) => void;
   // Text of the user message immediately following this one, if any. Widgets
@@ -55,7 +55,7 @@ interface MessageBubbleProps {
 const MessageBubble = memo(function MessageBubble({
   message,
   isLast,
-  showInlineThinking,
+  showThinkingText,
   projectId,
   onWidgetSubmit,
   nextUserText,
@@ -70,7 +70,7 @@ const MessageBubble = memo(function MessageBubble({
   // HITL widgets render unconditionally (not gated by isLoading), so a message
   // carrying only a widget part (no text, no streaming pill) is still visible.
   const hasWidget = !isUser && !!message?.parts?.some((p: any) => isToolPart(p) && WIDGET_TOOL_NAMES.has(p.type));
-  if (!isUser && !hasCleanText && !hasVisibleTools && !hasWidget && !showInlineThinking) return null;
+  if (!isUser && !hasCleanText && !hasVisibleTools && !hasWidget && !showThinkingText) return null;
 
   if (isUser) {
     const userText = message?.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || '';
@@ -101,13 +101,19 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         )}
 
+        {showThinkingText && (
+          <div className="text-sm text-zinc-400 dark:text-zinc-500 mt-1">
+            思考中…
+          </div>
+        )}
+
         {/* HITL Widgets — persistent in-chat UI cards (asset picker, future confirm buttons, etc.).
             Always render (independent of streaming state) once the tool part is in the message. */}
         {message?.parts?.filter((p: any) => isToolPart(p) && WIDGET_TOOL_NAMES.has(p.type)).map((widgetPart: any, idx: number) => {
           const Widget = widgetRegistry[widgetPart.type];
           if (!Widget) return null;
           const renderable = isWidgetRenderable(widgetPart);
-          const showPreparing = widgetPart.state !== 'output-available' || (showInlineThinking && !renderable);
+          const showPreparing = widgetPart.state !== 'output-available';
           return (
             <div key={`widget-${idx}`}>
               {showPreparing && (
@@ -182,12 +188,6 @@ const MessageBubble = memo(function MessageBubble({
             </div>
           );
         })}
-        {showInlineThinking && (
-          <div className="flex items-center gap-2 text-zinc-400 dark:text-zinc-500 mt-1">
-            <div className="animate-spin h-3.5 w-3.5 border-2 border-zinc-400 border-t-transparent rounded-full" />
-            <span className="text-sm">思考中…</span>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -362,8 +362,7 @@ export function ChatPanel({ projectId }: ChatPanelProps) {
 
   const lastMessage = visibleMessages[visibleMessages.length - 1];
   const lastIsUser = lastMessage?.role === "user";
-  // Standalone "thinking" bubble — only when there is no assistant message yet in the current turn.
-  const showThinking = isLoading && lastIsUser;
+  const showStandaloneThinking = isLoading && lastIsUser;
 
               const workflowMode = projectData?.project?.workflowMode;
               const isPinned = !!projectData?.project?.pinnedAt;
@@ -395,23 +394,20 @@ export function ChatPanel({ projectId }: ChatPanelProps) {
           const nextUserText = next?.role === 'user'
             ? (next.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || undefined)
             : undefined;
-          // showInlineThinking only matters for the last assistant message
-          // during streaming. For older messages it's always false, so passing
-          // a constant `false` keeps their props stable as isLoading flips.
-          const showInlineThinking = isLast && isLoading && !lastIsUser && message?.role !== 'user';
+          const showThinkingText = isLast && isLoading && !lastIsUser && message?.role !== 'user';
           return (
             <MessageBubble
               key={message.id}
               message={message}
               isLast={isLast}
-              showInlineThinking={showInlineThinking}
+              showThinkingText={showThinkingText}
               projectId={projectId}
               onWidgetSubmit={handleWidgetSubmit}
               nextUserText={nextUserText}
             />
           );
         })}
-        {showThinking && (
+        {showStandaloneThinking && (
           <div className="flex items-start gap-3">
             <div
               className="w-7 h-7 mt-0.5 rounded-lg flex items-center justify-center text-white text-xs font-bold shadow-[0_0_12px_rgba(109,93,251,0.3)] flex-shrink-0"
@@ -419,9 +415,8 @@ export function ChatPanel({ projectId }: ChatPanelProps) {
             >
               C
             </div>
-            <div className="flex items-center gap-2 text-zinc-400 dark:text-zinc-500 mt-1">
-              <div className="animate-spin h-3.5 w-3.5 border-2 border-zinc-400 border-t-transparent rounded-full" />
-              <span className="text-sm">思考中…</span>
+            <div className="text-sm text-zinc-400 dark:text-zinc-500 mt-1">
+              思考中…
             </div>
           </div>
         )}

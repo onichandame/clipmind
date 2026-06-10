@@ -73,6 +73,23 @@ function toolTypesFrom(message: any) {
     .map((part: any) => part.type);
 }
 
+function unfinishedToolPartsFrom(message: any) {
+  return (message?.parts ?? [])
+    .filter((part: any) => (
+      typeof part?.type === 'string' &&
+      part.type.startsWith('tool-') &&
+      (part.state === 'input-streaming' || part.state === 'input-available')
+    ));
+}
+
+function interruptedToolMessage(parts: any[]) {
+  const hasPlanTool = parts.some((part: any) => part.type === 'tool-generateEditingPlan');
+  return uiTextMessage(
+    'assistant',
+    hasPlanTool ? '剪辑方案生成中断，请再试一次。' : '生成中断，请再试一次。',
+  );
+}
+
 async function loadOwnedProject(projectId: string, userId: string) {
   const [project] = await db
     .select({ id: projects.id, chatHistory: projects.chatHistory })
@@ -217,6 +234,16 @@ async function drainTurns(run: ChatRun) {
       } catch (error) {
         console.error('[project-chat] stream failed:', error);
         latestAssistant = uiTextMessage('assistant', '生成失败，请重试。');
+      }
+
+      const unfinishedTools = unfinishedToolPartsFrom(latestAssistant);
+      if (unfinishedTools.length > 0) {
+        console.warn('[project-chat] stream ended with unfinished tool parts:', unfinishedTools.map((part: any) => ({
+          type: part.type,
+          state: part.state,
+          toolCallId: part.toolCallId,
+        })));
+        latestAssistant = interruptedToolMessage(unfinishedTools);
       }
 
       latestAssistant = { ...latestAssistant, id: assistantMessageId, role: 'assistant' };
