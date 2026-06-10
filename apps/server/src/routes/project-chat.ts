@@ -253,6 +253,8 @@ app.get('/:id/chat/events', async (c) => {
   const projectId = c.req.param('id');
   const t0 = Date.now();
   console.info(`[chat-events] start project=${projectId} user=${user.id}`);
+  c.header('Cache-Control', 'no-cache, no-transform');
+  c.header('X-Accel-Buffering', 'no');
   const project = await loadOwnedProject(projectId, user.id);
   console.info(`[chat-events] owner-check project=${projectId} ms=${Date.now() - t0} found=${!!project}`);
   if (!project) return c.json({ error: 'Not found' }, 404);
