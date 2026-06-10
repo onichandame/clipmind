@@ -1,9 +1,8 @@
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { db } from '../db';
 import { users, sessions } from '@clipmind/db/schema';
-import { serverConfig } from '../env';
 import {
   hashPassword,
   verifyPassword,
@@ -11,7 +10,7 @@ import {
   sessionExpiresAt,
   sha256Hex,
 } from '../utils/auth';
-import { DESKTOP_AUTH_HEADER, getSessionTokenFromCookie, hasAllowedAuthOrigin, requireAuth, SESSION_COOKIE } from '../middleware/auth';
+import { DESKTOP_AUTH_HEADER, getSessionTokenFromAuthorization, hasAllowedAuthOrigin, requireAuth } from '../middleware/auth';
 
 const app = new Hono();
 
@@ -30,22 +29,6 @@ async function issueSession(userId: string, userAgent: string | undefined) {
     expiresAt: sessionExpiresAt(),
   });
   return token;
-}
-
-function setSessionCookie(c: Context, token: string) {
-  const secure = serverConfig.NODE_ENV === 'production' || c.req.url.startsWith('https://') || c.req.header('x-forwarded-proto') === 'https';
-  const sameSite = secure ? 'None' : 'Lax';
-  c.header(
-    'Set-Cookie',
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${serverConfig.AUTH_SESSION_TTL_DAYS * 24 * 60 * 60}${secure ? '; Secure' : ''}`,
-    { append: true },
-  );
-}
-
-function clearSessionCookie(c: Context) {
-  const secure = serverConfig.NODE_ENV === 'production' || c.req.url.startsWith('https://') || c.req.header('x-forwarded-proto') === 'https';
-  const sameSite = secure ? 'None' : 'Lax';
-  c.header('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secure ? '; Secure' : ''}`, { append: true });
 }
 
 app.post('/signup', async (c) => {
@@ -75,8 +58,7 @@ app.post('/signup', async (c) => {
   });
 
   const token = await issueSession(userId, c.req.header('User-Agent'));
-  setSessionCookie(c, token);
-  return c.json({ user: { id: userId, email } }, 201);
+  return c.json({ user: { id: userId, email }, token }, 201);
 });
 
 app.post('/login', async (c) => {
@@ -104,15 +86,14 @@ app.post('/login', async (c) => {
   }
 
   const token = await issueSession(rows[0].id, c.req.header('User-Agent'));
-  setSessionCookie(c, token);
-  return c.json({ user: { id: rows[0].id, email } });
+  return c.json({ user: { id: rows[0].id, email }, token });
 });
 
 app.post('/logout', async (c) => {
   if (!hasAllowedAuthOrigin(c.req.header('Origin'), c.req.header(DESKTOP_AUTH_HEADER))) {
     return c.json({ error: 'Forbidden' }, 403);
   }
-  const token = getSessionTokenFromCookie(c.req.header('Cookie'));
+  const token = getSessionTokenFromAuthorization(c.req.header('Authorization'));
   if (token) {
     await db
       .update(sessions)
@@ -122,7 +103,6 @@ app.post('/logout', async (c) => {
         console.warn('[auth] session revoke failed during logout:', error);
       });
   }
-  clearSessionCookie(c);
   return c.json({ success: true });
 });
 

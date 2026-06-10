@@ -271,34 +271,42 @@ app.get('/:id/chat/events', async (c) => {
       send: (event, data) => {
         chain = chain
           .then(() => stream.writeSSE({ event, data: JSON.stringify(data) }))
-          .catch(() => undefined);
+          .catch(() => {
+            run.subscribers.delete(subscriber);
+            scheduleCleanup(run);
+          });
       },
     };
     run.subscribers.add(subscriber);
 
-    const snapshotMessages = visibleChatMessages(run.uiMessages);
-    const snapshotStart = Date.now();
-    await stream.writeSSE({
-      event: 'snapshot',
-      data: JSON.stringify({
-        messages: snapshotMessages,
-        status: run.isStreaming ? 'streaming' : 'ready',
-        revision: run.revision,
-      }),
-    });
-    console.info(`[chat-events] snapshot-written project=${projectId} ms=${Date.now() - snapshotStart} total=${Date.now() - t0} visible=${snapshotMessages.length}`);
+    try {
+      const snapshotMessages = visibleChatMessages(run.uiMessages);
+      const snapshotStart = Date.now();
+      await stream.writeSSE({
+        event: 'snapshot',
+        data: JSON.stringify({
+          messages: snapshotMessages,
+          status: run.isStreaming ? 'streaming' : 'ready',
+          revision: run.revision,
+        }),
+      });
+      console.info(`[chat-events] snapshot-written project=${projectId} ms=${Date.now() - snapshotStart} total=${Date.now() - t0} visible=${snapshotMessages.length}`);
 
-    maybeContinueLastUser(run);
+      maybeContinueLastUser(run);
 
-    stream.onAbort(() => {
+      stream.onAbort(() => {
+        run.subscribers.delete(subscriber);
+        console.info(`[chat-events] abort project=${projectId} total=${Date.now() - t0} subscribers=${run.subscribers.size}`);
+        scheduleCleanup(run);
+      });
+
+      while (!stream.aborted) {
+        await stream.sleep(15_000);
+        if (!stream.aborted) await stream.writeSSE({ event: 'heartbeat', data: '{}' });
+      }
+    } finally {
       run.subscribers.delete(subscriber);
-      console.info(`[chat-events] abort project=${projectId} total=${Date.now() - t0} subscribers=${run.subscribers.size}`);
       scheduleCleanup(run);
-    });
-
-    while (!stream.aborted) {
-      await stream.sleep(15_000);
-      if (!stream.aborted) await stream.writeSSE({ event: 'heartbeat', data: '{}' });
     }
   });
 });

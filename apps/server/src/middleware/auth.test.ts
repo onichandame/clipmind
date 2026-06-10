@@ -22,6 +22,9 @@ async function loadAuthMiddleware() {
 test('auth origin allows configured browser origins', async () => {
   const { hasAllowedAuthOrigin } = await loadAuthMiddleware();
   assert.equal(hasAllowedAuthOrigin('http://localhost:5173', undefined), true);
+  assert.equal(hasAllowedAuthOrigin('http://tauri.localhost', undefined), true);
+  assert.equal(hasAllowedAuthOrigin('https://tauri.localhost', undefined), true);
+  assert.equal(hasAllowedAuthOrigin('tauri://localhost', undefined), true);
 });
 
 test('auth origin rejects unconfigured and missing browser origins', async () => {
@@ -36,30 +39,29 @@ test('auth origin allows no-Origin desktop requests with desktop header only', a
   assert.equal(hasAllowedAuthOrigin(undefined, '0'), false);
 });
 
-test('session cookie parser extracts and decodes only the session cookie', async () => {
-  const { getSessionTokenFromCookie, SESSION_COOKIE } = await loadAuthMiddleware();
-  assert.equal(getSessionTokenFromCookie(`other=1; ${SESSION_COOKIE}=abc-123; theme=dark`), 'abc-123');
-  assert.equal(getSessionTokenFromCookie(`${SESSION_COOKIE}=abc%20123`), 'abc 123');
-  assert.equal(getSessionTokenFromCookie('other=1'), undefined);
-  assert.equal(getSessionTokenFromCookie(`${SESSION_COOKIE}=%E0%A4%A`), undefined);
+test('authorization parser extracts bearer token only', async () => {
+  const { getSessionTokenFromAuthorization } = await loadAuthMiddleware();
+  assert.equal(getSessionTokenFromAuthorization('Bearer abc-123'), 'abc-123');
+  assert.equal(getSessionTokenFromAuthorization('bearer abc-123'), 'abc-123');
+  assert.equal(getSessionTokenFromAuthorization('Basic abc-123'), undefined);
+  assert.equal(getSessionTokenFromAuthorization('Bearer'), undefined);
+  assert.equal(getSessionTokenFromAuthorization('Bearer abc extra'), undefined);
 });
 
-test('logout rejects disallowed origin without clearing cookie', async () => {
+test('logout rejects disallowed origin', async () => {
   const { default: authRoute } = await import('../routes/auth');
   const res = await authRoute.request('/logout', {
     method: 'POST',
-    headers: { Origin: 'https://evil.example', Cookie: 'clipmind_session=abc' },
+    headers: { Origin: 'https://evil.example', Authorization: 'Bearer abc' },
   });
   assert.equal(res.status, 403);
-  assert.equal(res.headers.get('Set-Cookie'), null);
 });
 
-test('logout clears cookie for allowed origin even without active session', async () => {
+test('logout succeeds for allowed origin even without active session', async () => {
   const { default: authRoute } = await import('../routes/auth');
   const res = await authRoute.request('/logout', {
     method: 'POST',
     headers: { Origin: 'http://localhost:5173' },
   });
   assert.equal(res.status, 200);
-  assert.match(res.headers.get('Set-Cookie') ?? '', /clipmind_session=.*Max-Age=0/);
 });

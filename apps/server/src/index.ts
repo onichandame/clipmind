@@ -13,13 +13,15 @@ import uploadTokenRoute from './routes/upload-token';
 import projectChatRoute from './routes/project-chat';
 import projectsRoute from './routes/projects';
 import authRoute from './routes/auth';
+import { DESKTOP_AUTH_HEADER, getAllowedAuthOrigins } from './middleware/auth';
 
 const app = new Hono();
+const corsOrigins = getAllowedAuthOrigins();
 
 // 全局 CORS 策略
 app.use('/api/*', cors({
-  origin: serverConfig.CORS_ORIGIN,
-  credentials: true,
+  origin: corsOrigins,
+  allowHeaders: ['Content-Type', 'Authorization', DESKTOP_AUTH_HEADER],
 }));
 
 app.get('/api/health', (c) => c.json({ status: 'ok', engine: 'ClipMind Hono API' }));
@@ -55,7 +57,7 @@ const startServer = async () => {
     startMemoryCompactionJob();
 
     serve({ fetch: app.fetch, port: serverConfig.PORT }, (info) => {
-      console.log(`🚀 Server listening on port ${info.port} [CORS Allowed: ${serverConfig.CORS_ORIGIN.join(', ')}]`);
+      console.log(`🚀 Server listening on port ${info.port} [CORS Allowed: ${corsOrigins.join(', ')}]`);
     });
   } catch (error) {
     console.error('❌ [Critical] Failed to run database migrations:', error);

@@ -10,8 +10,8 @@ export interface AuthUser {
   email: string;
 }
 
-export const SESSION_COOKIE = 'clipmind_session';
 export const DESKTOP_AUTH_HEADER = 'X-ClipMind-Desktop';
+export const DESKTOP_AUTH_ORIGINS = ['http://tauri.localhost', 'https://tauri.localhost', 'tauri://localhost'];
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -19,37 +19,32 @@ declare module 'hono' {
   }
 }
 
-export function getSessionTokenFromCookie(cookieHeader: string | undefined): string | undefined {
-  const value = cookieHeader
-    ?.split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${SESSION_COOKIE}=`))
-    ?.slice(SESSION_COOKIE.length + 1);
-  if (!value) return undefined;
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return undefined;
-  }
+export function getSessionTokenFromAuthorization(authorizationHeader: string | undefined): string | undefined {
+  const [scheme, token, extra] = authorizationHeader?.trim().split(/\s+/) ?? [];
+  if (extra || scheme?.toLowerCase() !== 'bearer' || !token) return undefined;
+  return token;
+}
+
+export function getAllowedAuthOrigins() {
+  return Array.from(new Set([...serverConfig.CORS_ORIGIN, ...DESKTOP_AUTH_ORIGINS]));
 }
 
 export function hasAllowedAuthOrigin(origin: string | undefined, desktopHeader: string | undefined) {
-  if (origin) return serverConfig.CORS_ORIGIN.includes(origin);
-  return desktopHeader === '1';
+  if (desktopHeader === '1') return true;
+  if (origin) return getAllowedAuthOrigins().includes(origin);
+  return false;
 }
 
-// Reads the HttpOnly session cookie, validates against sessions table,
+// Reads the bearer session token, validates against sessions table,
 // populates c.set('user', ...). Returns 401 on any failure.
 export const requireAuth: MiddlewareHandler = async (c, next) => {
   if (!hasAllowedAuthOrigin(c.req.header('Origin'), c.req.header(DESKTOP_AUTH_HEADER))) {
     return c.json({ error: 'Forbidden' }, 403);
   }
-  const cookieToken = getSessionTokenFromCookie(c.req.header('Cookie'));
-  if (!cookieToken) {
+  const token = getSessionTokenFromAuthorization(c.req.header('Authorization'));
+  if (!token) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
-  const token = cookieToken;
-  if (!token) return c.json({ error: 'Unauthorized' }, 401);
 
   const tokenHash = sha256Hex(token);
   const now = new Date();
