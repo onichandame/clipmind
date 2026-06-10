@@ -255,12 +255,14 @@ app.get('/:id/chat/events', async (c) => {
   console.info(`[chat-events] start project=${projectId} user=${user.id}`);
   c.header('Cache-Control', 'no-cache, no-transform');
   c.header('X-Accel-Buffering', 'no');
+  c.header('Content-Encoding', 'none');
   const project = await loadOwnedProject(projectId, user.id);
   console.info(`[chat-events] owner-check project=${projectId} ms=${Date.now() - t0} found=${!!project}`);
   if (!project) return c.json({ error: 'Not found' }, 404);
 
   return streamSSE(c, async (stream) => {
     const streamStart = Date.now();
+    console.info(`[chat-events] stream-open project=${projectId} total=${Date.now() - t0}`);
     const run = await getOrCreateRun(projectId, user.id, project);
     if (!run) {
       await stream.writeSSE({ event: 'chat-error', data: JSON.stringify({ message: '项目不存在' }) });
@@ -284,13 +286,15 @@ app.get('/:id/chat/events', async (c) => {
     try {
       const snapshotMessages = visibleChatMessages(run.uiMessages);
       const snapshotStart = Date.now();
+      const snapshotPayload = JSON.stringify({
+        messages: snapshotMessages,
+        status: run.isStreaming ? 'streaming' : 'ready',
+        revision: run.revision,
+      });
+      console.info(`[chat-events] snapshot-write-start project=${projectId} total=${Date.now() - t0} bytes=${Buffer.byteLength(snapshotPayload, 'utf8')} visible=${snapshotMessages.length}`);
       await stream.writeSSE({
         event: 'snapshot',
-        data: JSON.stringify({
-          messages: snapshotMessages,
-          status: run.isStreaming ? 'streaming' : 'ready',
-          revision: run.revision,
-        }),
+        data: snapshotPayload,
       });
       console.info(`[chat-events] snapshot-written project=${projectId} ms=${Date.now() - snapshotStart} total=${Date.now() - t0} visible=${snapshotMessages.length}`);
 
@@ -304,10 +308,15 @@ app.get('/:id/chat/events', async (c) => {
 
       while (!stream.aborted) {
         await stream.sleep(15_000);
-        if (!stream.aborted) await stream.writeSSE({ event: 'heartbeat', data: '{}' });
+        if (!stream.aborted) {
+          const heartbeatStart = Date.now();
+          await stream.writeSSE({ event: 'heartbeat', data: '{}' });
+          console.info(`[chat-events] heartbeat-written project=${projectId} ms=${Date.now() - heartbeatStart} total=${Date.now() - t0}`);
+        }
       }
     } finally {
       run.subscribers.delete(subscriber);
+      console.info(`[chat-events] stream-finally project=${projectId} total=${Date.now() - t0} aborted=${stream.aborted} subscribers=${run.subscribers.size}`);
       scheduleCleanup(run);
     }
   });
