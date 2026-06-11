@@ -285,6 +285,7 @@ export async function buildChatStream({
     },
 
     tools: {
+      ...(isIdeaMode ? {} : {
       generateEditingPlan: tool({
         description: "基于素材检索结果，生成结构化的剪辑方案（Editing Plan）并持久化到数据库。禁止在对话中输出大段方案，必须调用此工具。",
         inputSchema: z.object({
@@ -383,6 +384,7 @@ export async function buildChatStream({
             return { success: false, error: "Database error during editing plan insertion" };
           }
         }
+      }),
       }),
       updateOutline: tool({
         description: "生成、覆盖或修改当前的视频 Markdown 大纲。注意：你必须提供 contentMd 参数。大纲格式规范：使用 `##` 作为主章节、`###` 作为子章节，禁止使用 `#`（项目标题已在 UI 层单独展示）。",
@@ -521,6 +523,7 @@ export async function buildChatStream({
           }
         },
       }),
+      ...(isIdeaMode ? {} : {
       // [HITL Widget] 无副作用工具：仅向前端发出"请展示素材选择/上传 UI"的请求。
       request_asset_import: tool({
         description: "当用户表达【需要导入/上传/挑选/查看自己的素材库】意图时调用。例如：用户说\"我想用我之前拍的视频\"、\"怎么上传素材\"、\"看看我的素材库里都有什么\"，或在素材驱动工作流里尚未指明素材线索时。调用后，前端会在 **当前 tool-call 的位置** 渲染一个【素材库轮播 + 上传按钮】卡片，让用户直接挑选或上传。**注意**：此工具只是发出 UI 请求，不做任何数据写入。**输出顺序**：先用一句简短的中文文本铺垫（例如\"好的，帮你打开素材库\"），再调用此工具；**不要在调用之后再追加任何文本**——卡片渲染在工具位置，调用后的文字会出现在卡片下方，使用\"下方\"/\"上方\"这类空间措辞会与实际位置不符。",
@@ -600,6 +603,7 @@ export async function buildChatStream({
           }
         }
       }),
+      }),
 
       ...(serverConfig.SEARCHAPI_KEY ? {
         search_web: tool({
@@ -642,6 +646,7 @@ export async function buildChatStream({
         }),
       } : {}),
 
+      ...(isIdeaMode ? {} : {
       search_clips: tool({
         description: "【微观检索】在指定的视频资产（assetIds）范围内，深入检索符合条件的台词/画面切片。用于支撑剪辑方案(Editing Plan)的精确排期。注意：必须传入 assetIds 数组进行定向狙击。",
         inputSchema: z.object({
@@ -725,6 +730,7 @@ export async function buildChatStream({
             return { success: false, error: error.message };
           }
         }
+      })
       })
     },
     onStepFinish: async ({ toolResults }) => {

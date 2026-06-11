@@ -141,9 +141,9 @@ app.get('/', async (c) => {
       orderBy = [desc(projects.pinnedAt)];
     } else if (pinnedParam === 'false') {
       conds.push(sql`${projects.pinnedAt} IS NULL`);
-      orderBy = [desc(projects.updatedAt)];
+      orderBy = [desc(projects.createdAt)];
     } else {
-      orderBy = [desc(sql`${projects.pinnedAt} IS NOT NULL`), desc(projects.pinnedAt), desc(projects.updatedAt)];
+      orderBy = [desc(sql`${projects.pinnedAt} IS NOT NULL`), desc(projects.pinnedAt), desc(projects.createdAt)];
     }
 
     const baseQuery = db
