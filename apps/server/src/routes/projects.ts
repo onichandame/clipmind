@@ -150,6 +150,7 @@ app.get('/', async (c) => {
       .select({
         id: projects.id,
         title: projects.title,
+        titleInitialized: projects.titleInitialized,
         createdAt: projects.createdAt,
         updatedAt: projects.updatedAt,
         workflowMode: projects.workflowMode,
@@ -234,13 +235,17 @@ app.post('/', async (c) => {
       freechat: '未命名对话',
     };
     const fallbackTitle = workflowMode ? defaultTitleByMode[workflowMode] : '未命名大纲';
+    const explicitTitle = typeof body?.title === 'string' && body.title.trim().length > 0
+      ? body.title.trim()
+      : null;
 
     const storedInitialMessages = initialMessages.map(toStoredUiMessage);
 
     await db.insert(projects).values({
       id: newId,
       userId: user.id,
-      title: body?.title?.trim() || (seedMessage ? seedMessage.slice(0, 40) : fallbackTitle),
+      title: explicitTitle || (seedMessage ? seedMessage.slice(0, 40) : fallbackTitle),
+      titleInitialized: explicitTitle !== null,
       workflowMode,
       chatHistory: createChatHistory(storedInitialMessages, storedInitialMessages.map(toInitialModelMessage).filter(Boolean)),
     });
@@ -277,6 +282,7 @@ app.get('/:id', async (c) => {
         id: projects.id,
         userId: projects.userId,
         title: projects.title,
+        titleInitialized: projects.titleInitialized,
         createdAt: projects.createdAt,
         updatedAt: projects.updatedAt,
         workflowMode: projects.workflowMode,
@@ -392,6 +398,7 @@ app.patch('/:id', async (c) => {
       return c.json({ error: 'title must be a non-empty string' }, 400);
     }
     updatePayload.title = body.title.trim();
+    updatePayload.titleInitialized = true;
   }
 
   if (body.workflowMode !== undefined) {

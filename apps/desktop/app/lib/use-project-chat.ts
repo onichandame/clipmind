@@ -1,16 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { env } from '../env';
 import { authFetch, clearAuthStorage } from './auth';
 import { upsertMessage } from './chat-sse';
 
 type ChatStatus = 'connecting' | 'ready' | 'submitting' | 'streaming' | 'error';
 
+function isProjectUpdate(projectId: string, project: any) {
+  return project?.id === projectId && typeof project.title === 'string';
+}
+
 export function useProjectChat(projectId: string) {
+  const queryClient = useQueryClient();
   const [messages, setMessages] = useState<any[]>([]);
   const [status, setStatus] = useState<ChatStatus>('connecting');
   const [error, setError] = useState<string | null>(null);
   const retryRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+
+  const applyProjectUpdate = useCallback((project: any) => {
+    if (!isProjectUpdate(projectId, project)) return;
+    queryClient.setQueryData(['project', projectId], (current: any) => {
+      if (!current?.project) return current;
+      return { ...current, project: { ...current.project, ...project } };
+    });
+    queryClient.invalidateQueries({ queryKey: ['projects'] });
+  }, [projectId, queryClient]);
 
   const applyEvent = useCallback((event: string, raw: string) => {
     if (event === 'heartbeat') return;
@@ -22,8 +37,13 @@ export function useProjectChat(projectId: string) {
     }
     if (event === 'snapshot') {
       setMessages(Array.isArray(payload.messages) ? payload.messages : []);
+      applyProjectUpdate(payload.project);
       setStatus(payload.status === 'streaming' ? 'streaming' : 'ready');
       setError(null);
+      return;
+    }
+    if (event === 'project-updated') {
+      applyProjectUpdate(payload.project);
       return;
     }
     if (event === 'message') {
@@ -46,7 +66,7 @@ export function useProjectChat(projectId: string) {
       setStatus('error');
       setError(typeof payload.message === 'string' ? payload.message : '生成失败，请重试。');
     }
-  }, []);
+  }, [applyProjectUpdate]);
 
   useEffect(() => {
     let cancelled = false;

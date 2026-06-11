@@ -135,6 +135,7 @@ export const projects = mysqlTable('projects', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
   title: varchar('title', { length: 255 }).notNull(),
+  titleInitialized: boolean('title_initialized').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().onUpdateNow().notNull(),
   workflowMode: varchar('workflow_mode', { length: 20 }), // material | idea | freechat | null

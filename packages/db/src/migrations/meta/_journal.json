@@ -85,6 +85,13 @@
       "when": 1780790400000,
       "tag": "0011_project_chat_history",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1780876800000,
+      "tag": "0012_project_title_initialized",
+      "breakpoints": true
     }
   ]
 }

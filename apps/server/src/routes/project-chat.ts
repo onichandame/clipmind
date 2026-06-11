@@ -7,6 +7,7 @@ import { projects } from '@clipmind/db/schema';
 import { requireAuth } from '../middleware/auth';
 import { buildChatStream } from './chat';
 import { insertOrReplaceAfterMessage, normalizeChatHistory, visibleChatMessages, type ChatHistory } from '../chat/history';
+import { generateProjectTitleFromFirstMessage } from '../projects/title';
 
 const OUTLINE_EDITED_REMINDER = '<system-reminder>用户刚刚手动修改了右侧大纲。你必须以数据库中的最新大纲为准，不要沿用旧对话里的大纲内容。</system-reminder>';
 const RUN_IDLE_TTL_MS = 60_000;
@@ -26,6 +27,12 @@ type ChatRun = {
   key: string;
   projectId: string;
   userId: string;
+  project: {
+    id: string;
+    title: string;
+    titleInitialized: boolean;
+    workflowMode: string | null;
+  };
   uiMessages: any[];
   modelMessages: any[];
   liveAssistantMessage: any | null;
@@ -92,7 +99,13 @@ function interruptedToolMessage(parts: any[]) {
 
 async function loadOwnedProject(projectId: string, userId: string) {
   const [project] = await db
-    .select({ id: projects.id, chatHistory: projects.chatHistory })
+    .select({
+      id: projects.id,
+      title: projects.title,
+      titleInitialized: projects.titleInitialized,
+      workflowMode: projects.workflowMode,
+      chatHistory: projects.chatHistory,
+    })
     .from(projects)
     .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
     .limit(1);
@@ -103,6 +116,14 @@ async function getOrCreateRun(projectId: string, userId: string, initialProject?
   const key = runKey(userId, projectId);
   const existing = runs.get(key);
   if (existing) {
+    if (initialProject) {
+      existing.project = {
+        id: initialProject.id,
+        title: initialProject.title,
+        titleInitialized: initialProject.titleInitialized,
+        workflowMode: initialProject.workflowMode,
+      };
+    }
     if (existing.cleanupTimer) {
       clearTimeout(existing.cleanupTimer);
       existing.cleanupTimer = null;
@@ -117,6 +138,12 @@ async function getOrCreateRun(projectId: string, userId: string, initialProject?
     key,
     projectId,
     userId,
+    project: {
+      id: project.id,
+      title: project.title,
+      titleInitialized: project.titleInitialized,
+      workflowMode: project.workflowMode,
+    },
     uiMessages: [...history.uiMessages],
     modelMessages: [...history.modelMessages],
     liveAssistantMessage: null,
@@ -148,11 +175,63 @@ function broadcast(run: ChatRun, event: string, data: unknown) {
   }
 }
 
+function affectedRowsFrom(result: any) {
+  return result?.[0]?.affectedRows ?? result?.rowsAffected ?? 0;
+}
+
+async function maybeStartProjectTitleInitialization(run: ChatRun, firstUserMessage: string) {
+  const claimedTitle = run.project.title;
+  const result: any = await db
+    .update(projects)
+    .set({ titleInitialized: true })
+    .where(and(
+      eq(projects.id, run.projectId),
+      eq(projects.userId, run.userId),
+      eq(projects.titleInitialized, false),
+    ));
+
+  if (affectedRowsFrom(result) === 0) return;
+
+  run.project.titleInitialized = true;
+  broadcast(run, 'project-updated', { project: { ...run.project } });
+
+  void (async () => {
+    try {
+      const title = await generateProjectTitleFromFirstMessage({
+        firstUserMessage,
+        workflowMode: run.project.workflowMode,
+      });
+      if (!title) return;
+
+      const updateResult: any = await db
+        .update(projects)
+        .set({ title })
+        .where(and(
+          eq(projects.id, run.projectId),
+          eq(projects.userId, run.userId),
+          eq(projects.title, claimedTitle),
+        ));
+
+      if (affectedRowsFrom(updateResult) === 0) return;
+      run.project.title = title;
+      broadcast(run, 'project-updated', { project: { ...run.project } });
+    } catch (error) {
+      console.error('[project-chat] failed to initialize project title:', error);
+    }
+  })();
+}
+
 function maybeContinueLastUser(run: ChatRun) {
   if (run.isStreaming || run.pendingTurns.length > 0) return;
   const last = run.uiMessages[run.uiMessages.length - 1];
   if (last?.role !== 'user' || !last.id || run.autoContinuedLastUserId === last.id) return;
   run.autoContinuedLastUserId = last.id;
+  const text = textFromMessage(last);
+  if (text.trim()) {
+    void maybeStartProjectTitleInitialization(run, text).catch((error) => {
+      console.error('[project-chat] failed to start seed title initialization:', error);
+    });
+  }
   run.pendingTurns.push({ userMessageId: last.id, outlineEdited: false, modelAlreadyAppended: true });
   void drainTurns(run).catch((error) => {
     console.error('[project-chat] auto-continue failed:', error);
@@ -316,6 +395,7 @@ app.get('/:id/chat/events', async (c) => {
         messages: snapshotMessages,
         status: run.isStreaming ? 'streaming' : 'ready',
         revision: run.revision,
+        project: run.project,
       });
       await stream.writeSSE({
         event: 'snapshot',
@@ -356,6 +436,8 @@ app.post('/:id/chat/messages', async (c) => {
   const run = await getOrCreateRun(projectId, user.id);
   console.info(`[chat-post] run-ready project=${projectId} ms=${Date.now() - t0} found=${!!run}`);
   if (!run) return c.json({ error: 'Not found' }, 404);
+
+  await maybeStartProjectTitleInitialization(run, text);
 
   const outlineEdited = body?.outlineEditedSinceLastChat === true;
   if (outlineEdited) {
